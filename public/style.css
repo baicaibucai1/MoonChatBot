@@ -1349,56 +1349,52 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .bot-settings-modal { width: min(920px, 94vw); }
 
 /* =========================================================
-   对话页（多线程）
-   线程选取器：C8 前是 250px 固定左栏 —— 只有一条对话时也白占掉
-   约四分之一宽度。现在收成角色卡下沿的一条横排标签带：
-   默认展开、可折叠、展开状态记在 localStorage。
+   对话页 · 线程标签带 —— Fluent 风
+   灰白中性槽 + 实心色块 + 阴影分层。
+   刻意不用：胶囊圆角 / 1px 细边框 / 左侧彩色竖条 / 辉光 / 虚线 —— 
+   这些「装饰」叠在一起会碎掉，正是这一版要消掉的东西。
    角色配置项一律不在这里，对话视线里只有对话。
    ========================================================= */
-.chat-page { display: flex; flex-direction: column; gap: 10px; }
+.chat-page { display: flex; flex-direction: column; gap: 12px; }
 
-/* 标签带：一行高度，视觉上是角色卡下挂的第二层「页签」 */
+/* 槽：浅色用中性灰把槽「压深」，深色反过来用微亮白（深色层级越靠前越亮） */
 .thread-bar {
-  display: flex; align-items: center; gap: 6px;
-  min-height: 36px; padding: 4px 8px 4px 6px;
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 12px; box-shadow: var(--shadow);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  display: flex; align-items: center; gap: 4px;
+  min-height: 44px; padding: 6px;
+  background: color-mix(in srgb, var(--text) 6.5%, transparent);
+  border-radius: 8px;
 }
+[data-theme="dark"] .thread-bar { background: color-mix(in srgb, #fff 6%, transparent); }
 .tb-toggle {
-  width: 22px; height: 22px; flex-shrink: 0; padding: 0;
-  border: none; background: transparent; border-radius: 6px;
+  width: 26px; height: 26px; flex-shrink: 0; padding: 0;
+  border: none; border-radius: 6px; background: transparent;
   color: var(--text-faint); cursor: pointer; font-size: 10px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
   transition: background .14s, color .14s;
 }
-.tb-toggle:hover { background: var(--hover); color: var(--text); }
+.tb-toggle:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+[data-theme="dark"] .tb-toggle:hover { background: color-mix(in srgb, #fff 9%, transparent); }
 .tb-count {
-  flex-shrink: 0;
-  font-family: var(--font); font-size: 10.5px;
-  padding: 1px 6px; border-radius: 8px;
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-  color: var(--text-faint);
+  flex-shrink: 0; padding: 0 4px 0 2px;
+  font-family: var(--font); font-size: 11px; color: var(--text-faint);
 }
 /* 收起态才有意义：用当前对话标题替掉整排标签 */
 .tb-current {
-  display: none; min-width: 0;
+  display: none; min-width: 0; padding: 0 4px;
   font-size: 12.5px; font-weight: 600; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tb-add {
-  width: 22px; height: 22px; flex-shrink: 0; padding: 0;
-  border: 1px dashed var(--line-2); background: transparent; border-radius: 999px;
-  color: var(--text-faint); cursor: pointer; font-size: 12px; line-height: 1;
+  width: 28px; height: 28px; flex-shrink: 0; padding: 0;
+  border: none; border-radius: 6px; background: transparent;
+  color: var(--text-dim); cursor: pointer; font-size: 13px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
-  transition: background .14s, color .14s, border-color .14s;
+  transition: background .14s, color .14s;
 }
-.tb-add:hover {
-  background: var(--accent-soft); color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-}
+.tb-add:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+[data-theme="dark"] .tb-add:hover { background: color-mix(in srgb, #fff 9%, transparent); }
 
-/* 收起：标签排整体隐去，只留「▸ 对话 <当前标题> ＋」 */
+/* 收起：标签排整体隐去，只留「▸ <当前对话> ＋」 */
 .thread-bar.collapsed .thread-tabs { display: none; }
 .thread-bar.collapsed .tb-count { display: none; }
 .thread-bar.collapsed .tb-current { display: block; }
@@ -1408,43 +1404,40 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   flex: 1; min-width: 0;
   display: flex; align-items: center; gap: 4px;
   overflow-x: auto; overflow-y: hidden;
-  padding: 2px 4px;
   scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
 }
 .thread-tabs::-webkit-scrollbar { height: 5px; }
 .thread-tabs::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
 
-/* 单个对话标签 */
+/* 单个对话标签：未选中是「槽里的一块空白」，选中浮成实心白块 */
 .thread-tab {
   position: relative; flex-shrink: 0;
-  display: inline-flex; align-items: center; gap: 5px;
-  max-width: 190px; padding: 4px 10px;
-  border: 1px solid var(--line-2); border-radius: 999px;
-  cursor: pointer; font-size: 12px; color: var(--text-dim);
-  transition: background .16s var(--ease), border-color .16s var(--ease), color .16s;
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 200px; padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer; font-size: 12.5px; color: var(--text-dim);
+  transition: background .14s, color .14s, box-shadow .14s;
 }
-.thread-tab:hover { background: var(--hover); color: var(--text); }
+.thread-tab:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
+[data-theme="dark"] .thread-tab:hover { background: color-mix(in srgb, #fff 9%, transparent); }
 .thread-tab.active {
-  font-weight: 600; color: var(--text);
-  padding-right: 46px;
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  padding-right: 48px;
+  color: var(--text); font-weight: 600;
+  background: var(--panel-solid);                 /* 浅色：实心纯白块 */
+  box-shadow: 0 1px 2px rgba(0,0,0,.14), 0 2px 6px -1px rgba(0,0,0,.10);
 }
-/* 当前对话的左侧小竖条：比只靠底色更容易扫到 */
-.thread-tab.active::before {
-  content: '';
-  position: absolute; left: -1px; top: 50%;
-  width: 3px; height: 13px; transform: translateY(-50%);
-  border-radius: 2px; background: var(--accent);
-  box-shadow: 0 0 6px var(--accent-glow);
+[data-theme="dark"] .thread-tab.active {
+  background: color-mix(in srgb, #fff 13%, transparent);   /* 深色：更亮的块 */
+  box-shadow: 0 1px 3px rgba(0,0,0,.45);
 }
 .tt-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tt-count { flex-shrink: 0; font-family: var(--font); font-size: 10px; color: var(--text-faint); }
+.tt-count { flex-shrink: 0; font-family: var(--font); font-size: 10.5px; color: var(--text-faint); }
+.thread-tab.active .tt-count { color: var(--text-dim); }
 
 /* 当前标签上的 ✎ / ✕：绝对定位在预留区里，不占位也不挤动相邻标签。
    只渲染在当前标签上 —— 非当前标签没有按钮，点它的任何位置都只是切换。 */
 .tt-ops {
-  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
   display: flex; gap: 1px;
 }
 .tt-ops button {
@@ -1454,11 +1447,12 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   display: flex; align-items: center; justify-content: center;
   transition: background .14s, color .14s;
 }
-.tt-ops button:hover { background: var(--hover); color: var(--text); }
+.tt-ops button:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+.thread-tab.active .tt-ops button { color: var(--text-dim); }
 .tt-ops button.del:hover { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
 
 /* 对话主体：标签带之下的消息流与输入框，沿用原会话卡内部样式 */
-.chat-main { height: calc(100vh - 308px); min-height: 420px; }
+.chat-main { height: calc(100vh - 318px); min-height: 420px; }
 .chat-main .card-title { gap: 8px; }
 .chat-title-text {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
