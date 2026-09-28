@@ -1022,8 +1022,8 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .toast.ok { border-color: color-mix(in srgb, var(--ok) 55%, transparent); color: var(--ok); }
 .toast.err { border-color: color-mix(in srgb, var(--err) 55%, transparent); color: var(--err); }
 
-/* 机器人信息卡（展示 / 编辑） */
-.profile-card {
+/* 角色信息卡（角色工作区顶部常驻）／机器人信息卡 */
+.profile-card, .bot-card {
   position: relative; overflow: hidden;
   /* 毛玻璃：半透明雾面 + 强 backdrop 模糊，背景光晕透进来被磨砂 */
   background: linear-gradient(135deg,
@@ -1039,12 +1039,12 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   padding: 13px 15px;
   transition: box-shadow .3s var(--ease), transform .3s var(--ease-spring), border-color .2s ease;
 }
-.profile-card:hover {
+.profile-card:hover, .bot-card:hover {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
   box-shadow: var(--shadow), 0 10px 30px -12px var(--accent-glow), inset 0 1px 0 color-mix(in srgb, var(--panel-solid) 80%, transparent);
   transform: translateY(-2px);
 }
-[data-theme="dark"] .profile-card {
+[data-theme="dark"] .profile-card, [data-theme="dark"] .bot-card {
   background: linear-gradient(135deg, rgba(38,37,34,.5) 0%, color-mix(in srgb, var(--accent) 6%, rgba(38,37,34,.42)) 50%, rgba(38,37,34,.5) 100%);
   border-color: rgba(255,255,255,.1);
   box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,.08), inset 0 0 26px -16px var(--accent-glow);
@@ -1054,7 +1054,7 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   50% { background-position: 100% 100%; }
 }
 /* 像素波浪画布：铺满整卡作为背景流光层 */
-.profile-card .pixel-wave {
+.profile-card .pixel-wave, .bot-card .pixel-wave {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   border-radius: inherit;
@@ -1062,7 +1062,7 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   z-index: 0;
 }
 /* 卡面内容浮在像素流光之上 */
-.profile-card > *:not(.pixel-wave) { position: relative; z-index: 1; }
+.profile-card > *:not(.pixel-wave), .bot-card > *:not(.pixel-wave) { position: relative; z-index: 1; }
 
 /* 左侧大头像栏 + 右侧信息区 */
 .profile-wrap { display: flex; align-items: stretch; gap: 18px; }
@@ -1239,6 +1239,78 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 @media (max-width: 1100px) { .cards-2 { grid-template-columns: 1fr; } }
 
 /* =========================================================
+   角色卡 + 标签页（C2 第二版）
+   左侧只有角色列表；点进角色后主区顶部常驻这张卡，
+   标签页挂在卡片下沿，设置是卡片右侧的按钮。
+   ========================================================= */
+.bot-card { padding: 15px 18px; }
+.bc-wrap { display: flex; align-items: center; gap: 16px; }
+/* 角色卡头像：压过 .avatar.avatar-lg 的 156px（同特异性下靠后者胜出） */
+.avatar.bc-avatar {
+  flex: none; width: 66px; height: 66px; border-radius: 16px;
+  font-size: 27px; line-height: 1; overflow: hidden;
+}
+.avatar.bc-avatar img { border-radius: 16px; }
+.bc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 9px; }
+.bc-titles { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.bc-name {
+  font-size: 19px; font-weight: 700; color: var(--text); letter-spacing: .01em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bc-sub {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-family: var(--font); font-size: 11px; color: var(--text-faint);
+}
+.bc-id { color: var(--text-dim); font-weight: 600; }
+.bc-sep { opacity: .5; }
+.bc-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bc-actions { flex: none; display: flex; align-items: center; gap: 6px; }
+
+/* 标签页：贴着角色卡下沿，像卡片自带的一排页签 */
+.bot-tabs {
+  display: flex; align-items: flex-end; gap: 2px;
+  margin: -6px 0 14px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--line-2);
+}
+.bt-tab {
+  position: relative;
+  padding: 8px 15px;
+  border-radius: 10px 10px 0 0;
+  border: 1px solid transparent; border-bottom: none;
+  margin-bottom: -1px;
+  font-family: var(--font-ui); font-size: 12.5px; font-weight: 600;
+  color: var(--text-dim);
+  cursor: pointer; user-select: none;
+  transition: color .16s, background .16s, border-color .16s;
+}
+.bt-tab:hover { color: var(--text); background: var(--hover); }
+.bt-tab.active {
+  color: var(--text);
+  background: var(--panel-solid);
+  border-color: var(--line-2);
+}
+.bt-tab.active::after {
+  content: '';
+  position: absolute; left: 0; right: 0; top: -1px; height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px 1px var(--accent-glow);
+}
+.bot-tab-body { min-height: 0; }
+
+/* 线程条上的对话条数角标 */
+.ct-count {
+  font-family: var(--font); font-size: 10.5px;
+  padding: 1px 6px; border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text-faint);
+}
+
+/* 设置弹窗（角色卡旁的「⚙ 设置」） */
+.bot-settings-modal { width: min(920px, 94vw); }
+
+/* =========================================================
    对话页（多线程 C2）—— 对话与角色设置分离
    左列 = 线程条（该角色的多条对话），右列 = 消息流与输入框。
    角色配置项一律不在这里，避免对话视线被 AppID / 密钥 之类的设置挤占。
@@ -1248,7 +1320,8 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 
 .chat-threads {
   display: flex; flex-direction: column;
-  height: min(88vh, 800px);
+  height: min(58vh, 580px);
+  min-height: 380px;
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--radius); box-shadow: var(--shadow);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -1307,7 +1380,7 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .ti-ops button.del:hover { color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
 
 /* 右侧对话主体：沿用原会话卡内部样式，仅补标题栏细节 */
-.chat-main { height: min(88vh, 800px); }
+.chat-main { height: min(58vh, 580px); min-height: 380px; }
 .chat-main .card-title { gap: 8px; }
 .chat-title-text {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

@@ -2,17 +2,28 @@
 'use strict';
 
 let state = null;            // { bots, models }
-// 默认落在「对话」而不是角色设置：对话是日常主界面，设置是次要入口
-let view = { type: 'chat', id: null };   // 当前视图
+// 角色工作区是唯一主视图：进角色后顶部常驻角色卡，标签页默认停在「对话」
+let view = { type: 'bot', id: null };   // 当前视图
 let lastSender = '';         // 最近一次消息发送者（方便主动回复）
 let masterSender = '';       // 主 ID：第一个对话者（主动发消息默认目标）
 
-// ---- 对话线程（多线程改造 C2：对话与角色设置分离） ----
+// ---- 对话线程（多线程改造 C2） ----
 // _threadsCache: botId -> { threads:[meta...], defaultThreadId }
-// 由 loadThreads() 填充；侧栏「对话」组与对话页的线程条都读它。
+// 由 loadThreads() 填充；角色卡「对话」标签页的线程条读它。
 const _threadsCache = {};
-// 当前对话页正在看的线程 id（发消息、刷新单线程记录都按它定位）
+// 当前对话正在看的线程 id（发消息、刷新单线程记录都按它定位）
 let _chatTid = null;
+
+// ---- 角色卡上的标签页（多线程改造 C2 第二版） ----
+// 左侧只有角色列表；点进一个角色后，主区顶部常驻角色卡，
+// 标签页挂在角色卡上，「设置」是角色卡旁的按钮（弹窗里改配置）。
+const BOT_TABS = [
+  { id: 'chat', n: '💬 对话' },
+  { id: 'memory', n: '🧠 记忆' },
+  { id: 'channel', n: '📡 渠道' },
+  { id: 'heart', n: '💓 心跳' },
+];
+let _botTab = 'chat';   // 切角色时保留当前标签页，避免每次点角色都跳回对话
 
 const $ = (s) => document.querySelector(s);
 const main = $('#main');
@@ -140,10 +151,10 @@ async function loadState(keepView = true) {
     showOffline(state.err);
     return;
   }
-  // 校验当前选中项仍存在（对话与角色共用同一份 bot 列表）
-  if ((view.type === 'bot' || view.type === 'chat') && view.id && !(state.bots || []).some(b => b.id === view.id)) view = { type: view.type, id: null };
+  // 校验当前选中项仍存在
+  if (view.type === 'bot' && view.id && !(state.bots || []).some(b => b.id === view.id)) view = { type: 'bot', id: null };
   if (view.type === 'model' && view.id && !(state.models || []).some(m => m.id === view.id)) view = { type: 'models' };
-  if (!view.id && (view.type === 'bot' || view.type === 'chat') && (state.bots || []).length) view = { type: view.type, id: state.bots[0].id };
+  if (!view.id && view.type === 'bot' && (state.bots || []).length) view = { type: 'bot', id: state.bots[0].id };
   // 侧栏「对话」组要跨角色列线程，先拉齐索引再渲染
   await loadThreads();
   renderSidebar();
@@ -197,9 +208,8 @@ async function retryConnect() {
   else toast('已连接', 'ok');
 }
 
-// ---------- 左侧导航（「对话」与「角色」两组并列；模型/设置入口在底部） ----------
+// ---------- 左侧导航（只有角色列表；对话/记忆/渠道/心跳都是角色卡上的标签页） ----------
 function renderSidebar() {
-  renderChatList();
   const bots = state.bots || [];
   $('#bot-list').innerHTML = bots.length
     ? bots.map(b => {
@@ -226,71 +236,6 @@ function renderSidebar() {
   });
 }
 
-// 侧栏「对话」组：每个角色取最近活跃的一条线程作为快捷入口。
-// 对话在这里是一等对象（不再藏在角色页里），线程标题直接显示；
-// 该角色的全部线程在对话页左侧的线程条里切换。
-function renderChatList() {
-  const el = $('#chat-list');
-  if (!el) return;
-  const bots = state.bots || [];
-  if (!bots.length) { el.innerHTML = '<div class="side-empty">暂无角色</div>'; return; }
-  const rows = [];
-  bots.forEach(b => {
-    const t = threadsOf(b.id);
-    if (t.threads.length) rows.push({ bot: b, thread: t.threads[0], count: t.threads.length });
-  });
-  el.innerHTML = rows.length
-    ? rows.sort((a, c) => (c.thread.updatedAt || 0) - (a.thread.updatedAt || 0)).map(({ bot, thread, count }) => {
-        const dotCls = _chatting.has(bot.id) ? 'warn' : (STATUS_MAP[String(bot.runtime?.status || '').trim()] || 'off');
-        return `
-      <div class="side-item ${view.type === 'chat' && view.id === bot.id ? 'active' : ''}" onclick="openChat('${bot.id}')" title="${esc(thread.title)}">
-        <span class="dot ${dotCls}"></span>
-        <span class="side-avatar">${avatarInner(bot)}</span>
-        <span class="side-main">
-          <span class="side-name">${esc(thread.title || '新对话')}</span>
-          <span class="side-meta">${esc(bot.name || bot.id)}${count > 1 ? ' · ' + count + ' 个对话' : ''} · ${thread.msgCount || 0} 条</span>
-        </span>
-      </div>`;
-      }).join('')
-    : '<div class="side-empty">暂无对话</div>';
-}
-
-// 侧栏「对话 → ＋」：为角色开一条新对话（多个角色时先选角色）
-async function newChat() {
-  const bots = state.bots || [];
-  if (!bots.length) return toast('请先在「角色」里添加一个角色', 'err');
-  if (bots.length === 1) return openChat(bots[0].id, await createThread(bots[0].id));
-  const sel = await uiSelectBot('开始新对话 — 选择角色');
-  if (sel) openChat(sel, await createThread(sel));
-}
-
-// 角色选择弹窗（多角色场景复用）
-function uiSelectBot(title) {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.id = 'ui-select-bot';
-    overlay.innerHTML = `
-      <div class="modal-card confirm-modal">
-        <div class="modal-head"><span>${esc(title || '选择角色')}</span><span class="spacer"></span></div>
-        <div class="modal-body">
-          <div class="pick-list">
-            ${(state.bots || []).map(b => `<div class="pick-item" data-id="${esc(b.id)}">
-              <span class="side-avatar">${avatarInner(b)}</span>
-              <span class="side-main"><span class="side-name">${esc(b.name || b.id)}</span><span class="side-meta">${esc(b.id)}</span></span>
-            </div>`).join('')}
-          </div>
-        </div>
-        <div class="modal-foot cf-foot"><button class="ghost" id="sb-no">取消</button></div>
-      </div>`;
-    const done = (v) => { overlay.remove(); resolve(v); };
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
-    overlay.querySelector('#sb-no').addEventListener('click', () => done(null));
-    overlay.querySelectorAll('.pick-item').forEach(it => it.addEventListener('click', () => done(it.dataset.id)));
-    document.body.appendChild(overlay);
-  });
-}
-
 // 新建线程（返回新线程 id；失败返回 null）
 async function createThread(botId, title) {
   const r = await api(`/api/memory/${botId}/threads`, 'POST', { title: title || '' });
@@ -299,24 +244,36 @@ async function createThread(botId, title) {
   return r.thread.id;
 }
 
-// 进入「角色」页 —— 配置与记忆（不含对话）
-function selectBot(id) {
+// 进入「角色」工作区 —— 顶部角色卡 + 标签页（对话 / 记忆 / 渠道 / 心跳）
+function selectBot(id, tab) {
   view = { type: 'bot', id };
-  _chatTid = null;
+  if (tab) _botTab = tab;
   renderSidebar(); renderMain();
   updateAdminNow();
 }
 
-// 进入「对话」页 —— 纯对话界面（左侧线程条 + 右侧消息流）
-// 不传 tid 时用该角色最近活跃的线程
+// 进入某角色的对话标签页（不传 tid 时用该角色最近活跃的线程）
+// 保留这个入口是为了让「发消息后跳回对话」「fork 后跳过去」之类的调用不必关心 tab 机制
 async function openChat(id, tid) {
   if (!_threadsCache[id]) await loadThreads();
   const t = threadsOf(id);
   const fallback = t.defaultThreadId || (t.threads[0] && t.threads[0].id) || null;
-  view = { type: 'chat', id, tid: tid || fallback || null };
-  _chatTid = view.tid;
+  _botTab = 'chat';
+  _chatTid = tid || fallback || null;
+  view = { type: 'bot', id };
   renderSidebar(); renderMain();
   updateAdminNow();
+}
+
+// 切换角色卡上的标签页
+function switchBotTab(tab) {
+  _botTab = BOT_TABS.some(x => x.id === tab) ? tab : 'chat';
+  renderSidebar(); renderMain();
+}
+
+// 当前是否正停在某个角色的「对话」标签页
+function inChatTab(botId) {
+  return view.type === 'bot' && _botTab === 'chat' && (!botId || view.id === botId);
 }
 
 // 管理员面板打开时，同步弹窗顶部「操作对象」横幅（避免对错对象操作）
@@ -347,66 +304,48 @@ function renderMain() {
   if (view.type === 'model-form') return renderModelForm(view.id);
   if (view.type === 'model') return renderModelDetail(view.id);
   if (view.type === 'settings') return renderSettings();
-  if (view.type === 'chat') return renderChatView(view.id);
   return renderBotDetail(view.id);
 }
 
-// ================= 对话页（对话与角色设置分离） =================
-// 纯对话界面：左侧线程条（切换 / 新建 / 重命名 / 删除），右侧消息流与输入框。
-// 角色配置（AppID / 密钥 / 模型绑定 / 历史条数 …）不在这里 —— 在「角色」页，
-// 对话视线里只有对话本身。
-function renderChatView(id) {
-  const b = (state.bots || []).find(x => x.id === id);
-  if (!b) {
-    main.innerHTML = `<div class="card"><div class="empty-hint">先添加一个角色，然后就能在这里与它对话。</div></div>`;
-    return;
-  }
-  const t = threadsOf(id);
-  // 线程索引还没回来 → 先出骨架，拉到后重绘（避免空白页）
-  if (!t.threads.length) {
-    main.innerHTML = `
-      <div class="chat-page">
-        <div class="chat-threads">
-          <div class="ct-head"><span class="ct-title">对话</span></div>
-          <div class="ct-list"><div class="empty-hint">加载中…</div></div>
-        </div>
-        <div class="card session-card chat-main"><div class="empty-hint">加载中…</div></div>
-      </div>`;
-    loadThreads().then(() => { if (view.type === 'chat' && view.id === id) renderMain(); });
-    return;
-  }
+// ================= 角色工作区 =================
+// 主区结构：顶部角色卡（常驻）→ 角色卡上的标签页 → 标签页内容。
+// 下面各 renderXxxTabHtml 只负责「内容区」的 HTML；数据加载由 renderBotDetail 按当前 tab 分派。
 
-  // 当前线程：优先用 view.tid / _chatTid，失效则退回最近活跃的一条
+// 「对话」标签页：左侧线程条（切换 / 新建 / 重命名 / 删除），右侧消息流与输入框
+function renderChatTabHtml(b) {
+  const id = b.id;
+  const t = threadsOf(id);
+  // 线程索引还没回来 → 先给骨架，拉到后重绘（避免空白内容）
+  if (!t.threads.length) {
+    loadThreads().then(() => { if (inChatTab(id)) renderMain(); });
+    return '<div class="card"><div class="empty-hint">对话加载中…</div></div>';
+  }
+  // 当前线程：_chatTid 失效则退回最近活跃的一条
   const tid = (_chatTid && t.threads.some(x => x.id === _chatTid)) ? _chatTid : t.threads[0].id;
-  _chatTid = tid; view.tid = tid;
+  _chatTid = tid;
   const cur = t.threads.find(x => x.id === tid) || t.threads[0];
 
-  const rows = threadRowsHtml(id, tid);
-
-  main.innerHTML = `
+  return `
     <div class="chat-page">
       <div class="chat-threads">
         <div class="ct-head">
-          <span class="side-avatar">${avatarInner(b)}</span>
-          <span class="ct-title">${esc(b.name || b.id)}</span>
+          <span class="ct-title">对话</span>
+          <span class="ct-count">${t.threads.length}</span>
           <span class="spacer"></span>
           <button class="add-btn" onclick="newThread('${id}')" title="新建对话">＋</button>
         </div>
-        <div class="ct-list" id="thread-list">${rows}</div>
-        <div class="ct-foot">
-          <button class="ghost sm" onclick="selectBot('${id}')" title="角色配置与记忆：AppID / 密钥 / 模型绑定 / 记忆库 / 心跳">⚙ 角色设置</button>
-        </div>
+        <div class="ct-list" id="thread-list">${threadRowsHtml(id, tid)}</div>
       </div>
 
       <div class="card session-card chat-main">
         <div class="card-title">
           <span class="chat-title-text">${esc(cur.title || '新对话')}</span>
-          <span class="chat-title-sub">${badge(b.runtime?.status)}</span>
+          <span class="chat-title-sub">${cur.msgCount || 0} 条</span>
           <span class="spacer"></span>
           <button class="ghost sm" onclick="expandSessions('${id}','${tid}')" title="弹出完整记录">⛶ 展开</button>
           <button class="ghost sm" onclick="listBranchModals('${id}')" title="历史分支归档（旧版切分支留下的备份）">⑂ 归档</button>
           <button class="ghost sm" onclick="exportSessions('${id}','${tid}')" title="导出本条对话为纯文本">⬇ 导出</button>
-          <button class="danger sm" onclick="clearThread(id,'${tid}')">清空</button>
+          <button class="danger sm" onclick="clearThread('${id}','${tid}')">清空</button>
         </div>
         <div class="session-list" id="session-list"><div class="empty-hint">加载中…</div></div>
         <div class="chat-input">
@@ -415,14 +354,6 @@ function renderChatView(id) {
         </div>
       </div>
     </div>`;
-
-  loadSessions(id, tid);
-
-  // 当前线程的消息轮询（离开视图或切线程即停）
-  clearSessionTimer();
-  _sessionTimer = setInterval(() => {
-    if (view.type === 'chat' && view.id === id && _chatTid === tid && !document.hidden) loadSessions(id, tid);
-  }, 4000);
 }
 
 // 相对时间（会话列表中线程的活跃度提示）
@@ -455,14 +386,14 @@ function threadRowsHtml(botId, tid) {
 async function refreshThreadsUI(botId, tid) {
   await loadThreads();
   const el = $('#thread-list');
-  if (el && view.type === 'chat' && view.id === botId) el.innerHTML = threadRowsHtml(botId, tid);
+  if (el && inChatTab(botId)) el.innerHTML = threadRowsHtml(botId, tid);
   renderSidebar();
 }
 
 // 切换当前对话线程（同角色内切换不重建视图框架，直接重绘）
 function switchThread(botId, tid) {
-  if (view.type !== 'chat' || view.id !== botId) return openChat(botId, tid);
-  view.tid = tid; _chatTid = tid;
+  if (!inChatTab(botId)) return openChat(botId, tid);
+  _chatTid = tid;
   renderSidebar(); renderMain();
 }
 
@@ -470,7 +401,7 @@ function switchThread(botId, tid) {
 async function newThread(botId) {
   const tid = await createThread(botId);
   if (!tid) return;
-  _chatTid = tid; view.tid = tid;
+  _chatTid = tid;
   renderSidebar(); renderMain();
 }
 
@@ -493,9 +424,8 @@ async function delThread(botId, tid) {
   const r = await api(`/api/memory/${botId}/threads/${tid}`, 'DELETE');
   if (!r || !r.ok) return toast((r && r.err) || '删除失败', 'err');
   await loadThreads();
-  if (view.type === 'chat' && view.id === botId && _chatTid === tid) {
+  if (inChatTab(botId) && _chatTid === tid) {
     _chatTid = (threadsOf(botId).threads[0] || {}).id || null;
-    view.tid = _chatTid;
   }
   renderSidebar(); renderMain();
   toast('已删除该对话', 'ok');
@@ -508,14 +438,11 @@ async function clearThread(botId, tid) {
   if (!r || !r.ok) return toast((r && r.err) || '清空失败', 'err');
   await loadThreads();
   renderSidebar();
-  if (view.type === 'chat' && view.id === botId && _chatTid === tid) loadSessions(botId, tid);
+  if (inChatTab(botId) && _chatTid === tid) loadSessions(botId, tid);
   toast('已清空该对话', 'ok');
 }
 
-// ================= 机器人详情 =================
-let _botEditing = false;
-function toggleBotEdit() { _botEditing = !_botEditing; renderMain(); }
-
+// ================= 角色卡 & 头像 =================
 // 头像渲染：URL 图片 / 本地 /avatars 图片 / emoji / 名称首字
 function avatarInner(b) {
   const a = b.avatar || '';
@@ -579,124 +506,102 @@ async function momentDel(id, index) {
   if (r.ok) loadState();
 }
 
+// ================= 角色工作区：角色卡 + 标签页 =================
+// 主区结构：顶部角色卡（常驻）→ 角色卡上的标签页 → 标签页内容。
+// 「设置」是角色卡旁的按钮，点开是编辑弹窗；配置项不进标签页，对话视线里只有对话。
 function renderBotDetail(id) {
   const b = (state.bots || []).find(x => x.id === id);
   if (!b) {
-    main.innerHTML = `<div class="card"><div class="empty-hint">选择一个机器人，或点击左侧 ＋ 添加。</div></div>`;
+    main.innerHTML = `<div class="card"><div class="empty-hint">选择一个角色，或点击左侧 ＋ 添加。</div></div>`;
     return;
   }
-  const models = state.models || [];
-  const modelOpts = models.map(m => `<option value="${m.id}" ${m.id === b.modelId ? 'selected' : ''}>${esc(m.name || m.id)}</option>`).join('') || '<option value="">未绑定</option>';
-  const modelName = (models.find(m => m.id === b.modelId) || {}).name || b.modelId || '未绑定';
-  // 对话线程概况（角色页顶部展示「N 个对话 · M 条消息」；对话本身在「对话」页）
-  const tinfo = threadsOf(id);
-  const totalMsgs = tinfo.threads.reduce((a, x) => a + (Number(x.msgCount) || 0), 0);
-
-  const editForm = _botEditing ? `
-    <div class="card profile-card editing">
-      <div class="card-title">编辑机器人 · ${esc(b.name || b.id)}
-        <span class="spacer"></span>
-        <button class="ghost sm" onclick="restartBot('${b.id}')">↻ 重连</button>
-        <button class="ghost sm" onclick="delBot('${b.id}')">删除</button>
-        <button class="ghost sm" onclick="toggleBotEdit()">取消</button>
-        <button class="primary sm" onclick="saveBot('${b.id}')">保存</button>
-      </div>
-      <div class="profile-edit-head">
-        <div class="avatar avatar-preview" id="avatar-preview">${avatarInner(b)}</div>
-        <div class="frm-row" style="flex:1;margin:0">
-          <label class="frm">头像：图片 URL / emoji / 本地图片（上传后保存到项目 avatars/ 目录）</label>
-          <input id="f-avatar" type="text" value="${esc(b.avatar || '')}" placeholder="https://... 或 🤖 或点击选择本地图片">
-          <div style="margin-top:6px;display:flex;gap:8px">
-            <button class="sm" type="button" onclick="pickAvatarFile()">📁 选择本地图片</button>
-          </div>
-        </div>
-        <input type="file" id="f-avatar-file" accept="image/*" style="display:none" onchange="uploadAvatar('${b.id}')">
-      </div>
-      <div class="grid-3">
-        <div class="field"><label>名称</label><input id="f-name" type="text" value="${esc(b.name || '')}"></div>
-        <div class="field"><label>AppID</label><input id="f-appid" type="text" value="${esc(b.appId || '')}"></div>
-        <div class="field"><label>AppSecret（env: 变量或直接填）</label><input id="f-secret" type="password" value="${esc(b.appSecret || '')}"></div>
-      </div>
-      <div class="grid-3" style="margin-top:12px">
-        <div class="field"><label>绑定模型</label><select id="f-model">${modelOpts}</select></div>
-        <div class="field"><label>历史记忆条数</label><input id="f-history" type="number" value="${b.historyLimit || 10}"></div>
-        <div class="field"><label>运行环境</label><select id="f-sandbox">
-          <option value="true" ${b.sandbox !== false ? 'selected' : ''}>沙箱（测试）</option>
-          <option value="false" ${b.sandbox === false ? 'selected' : ''}>正式</option>
-        </select></div>
-      </div>
-      <div class="grid-3" style="margin-top:12px">
-        <div class="field"><label>允许联网</label><select id="f-web">
-          <option value="" ${b.webSearch === undefined || b.webSearch === null ? 'selected' : ''}>跟随全局设置（当前：${webEnabled(b) ? '开启' : '关闭'}）</option>
-          <option value="true" ${b.webSearch === true ? 'selected' : ''}>允许</option>
-          <option value="false" ${b.webSearch === false ? 'selected' : ''}>禁止</option>
-        </select></div>
-        <div class="field"><label>搜索方式</label><select id="f-smode">
-          <option value="" ${b.searchMode ? '' : 'selected'}>跟随全局（${modeLabel(state.searchMode || 'auto')}）</option>
-          <option value="auto" ${b.searchMode === 'auto' ? 'selected' : ''}>自动（轻量优先）</option>
-          <option value="light" ${b.searchMode === 'light' ? 'selected' : ''}>仅轻量</option>
-          <option value="browser" ${b.searchMode === 'browser' ? 'selected' : ''}>仅浏览器</option>
-        </select></div>
-        <div class="field"><label>联网状态</label><div class="value">${webEnabled(b) ? '✅ 已开启' : '❌ 关闭'}</div></div>
-      </div>
-      <div class="grid-3" style="margin-top:12px">
-        <div class="field"><label>流式回复（打字机效果，仅单聊）</label><select id="f-stream">
-          <option value="" ${b.streamReply === undefined || b.streamReply === null ? 'selected' : ''}>跟随全局设置（当前：${state.streamReply === true ? '开启' : '关闭'}）</option>
-          <option value="true" ${b.streamReply === true ? 'selected' : ''}>开启</option>
-          <option value="false" ${b.streamReply === false ? 'selected' : ''}>关闭</option>
-        </select></div>
-        <div class="field"><label>Markdown 回复</label><div class="value">自动启用，失败回退文本</div></div>
-        <div class="field"><label>流式可用性</label><div class="value">${b.streamReply === false ? '已关闭' : '需要官方 Markdown/流式权限'}</div></div>
-      </div>
-    </div>
-  ` : `
-    <div class="card profile-card">
-      <canvas class="pixel-wave" data-accent="" data-effect="${esc(cardEffectId())}"></canvas>
-      <div class="profile-wrap">
-        <div class="profile-side">
-          <div class="avatar avatar-lg">${avatarInner(b)}</div>
-        </div>
-        <div class="profile-main">
-          <div class="profile-head">
-            <div class="profile-info">
-              <div class="profile-name-line">
-                <span class="profile-name">${esc(b.name || b.id)}</span>
-                <span class="bot-tag">正在操作</span>
-              </div>
-              <div class="profile-sub">${badge(b.runtime?.status)}<span class="profile-id">${esc(b.id)} · ${tinfo.threads.length} 个对话 · ${totalMsgs} 条消息</span></div>
-            </div>
-            <div class="profile-actions">
-              <button class="primary sm" onclick="openChat('${b.id}')" title="进入对话（在「对话」页管理多条对话）">💬 打开对话</button>
-              <button class="ghost sm" onclick="restartBot('${b.id}')">↻ 重连</button>
-              <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
-              <button class="ghost sm edit-btn" onclick="toggleBotEdit()" title="编辑">✎ 编辑</button>
-            </div>
-          </div>
-          <div class="profile-status-bar">
-            <span class="status-chip ${b.sandbox === false ? 'ok' : 'warn'}"><span class="chip-dot ${b.sandbox === false ? 'on' : 'warn'}"></span>${b.sandbox === false ? '正式发布' : '沙箱测试'}</span>
-            ${webEnabled(b)
-              ? '<span class="status-chip ok"><span class="chip-dot on"></span>🌐 联网</span>'
-              : '<span class="status-chip"><span class="chip-dot off"></span>🌐 未联网</span>'}
-            <span class="status-chip"><span class="chip-icon">⚡</span>搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</span>
-            <span class="status-chip ${(b.runtime?.status || '') === '已连接' ? 'ok' : 'err'}"><span class="chip-dot ${(b.runtime?.status || '') === '已连接' ? 'on' : 'off'}"></span>${esc(b.runtime?.status || '未启动')}</span>
-        ${(() => { const on = b.streamReply === true || (b.streamReply === undefined && state.streamReply === true); return on ? '<span class="status-chip ok"><span class="chip-icon">⌨</span>流式</span>' : ''; })()}
-          </div>
-          <div class="profile-grid">
-            <div class="pg-item"><label>🧠 绑定模型</label><div>${esc(modelName)}</div></div>
-            <div class="pg-item"><label>🕘 历史记忆</label><div>${b.historyLimit || 10} 条</div></div>
-            <div class="pg-item"><label>🔑 Key 引用</label><div>${esc(b.appSecret ? (b.appSecret.length > 18 ? b.appSecret.slice(0, 18) + '…' : b.appSecret) : '-')}</div></div>
-            <div class="pg-item"><label>🗂 记忆文件</label><div id="pg-filecount">…</div></div>
-          </div>
-          ${renderMoments(b)}
-        </div>
-      </div>
-    </div>
-  `;
+  const tab = BOT_TABS.some(x => x.id === _botTab) ? _botTab : 'chat';
+  _botTab = tab;
+  const body = tab === 'chat' ? renderChatTabHtml(b)
+    : tab === 'memory' ? renderMemoryTabHtml(b)
+      : tab === 'channel' ? renderChannelTabHtml(b)
+        : renderHeartTabHtml(b);
 
   main.innerHTML = `
-    ${editForm}
+    ${renderBotCard(b)}
+    ${renderBotTabs(tab)}
+    <div class="bot-tab-body">${body}</div>`;
 
-    <!-- 记忆管理：独立全宽（对话已迁到「对话」页，不再与记忆并排） -->
+  // 各标签页自己的数据加载（切 tab 即分组加载，不做无用请求）
+  if (tab === 'chat') {
+    if (_chatTid) {
+      const tid = _chatTid;
+      loadSessions(id, tid);
+      // 当前线程的消息轮询（离开该 tab 或切线程即停）
+      _sessionTimer = setInterval(() => {
+        if (inChatTab(id) && _chatTid === tid && !document.hidden) loadSessions(id, tid);
+      }, 4000);
+    }
+  } else if (tab === 'memory') {
+    loadMemoryFiles(id);
+    loadMemLayers(id);
+  } else if (tab === 'channel') {
+    // 只为拿「最近发送者 / 主 ID」填 openid 默认值；#session-list 不存在时会自然跳过渲染
+    loadSessions(id);
+  } else if (tab === 'heart') {
+    refreshHeartNext(id);
+  }
+
+  startPixelWave();
+}
+
+// 角色卡：常驻主区顶部
+function renderBotCard(b) {
+  const models = state.models || [];
+  const modelName = (models.find(m => m.id === b.modelId) || {}).name || b.modelId || '未绑定';
+  const tinfo = threadsOf(b.id);
+  const totalMsgs = tinfo.threads.reduce((a, x) => a + (Number(x.msgCount) || 0), 0);
+  const streamOn = b.streamReply === true || (b.streamReply === undefined && state.streamReply === true);
+  return `
+    <div class="card bot-card">
+      <canvas class="pixel-wave" data-accent="" data-effect="${esc(cardEffectId())}"></canvas>
+      <div class="bc-wrap">
+        <div class="avatar avatar-lg bc-avatar">${avatarInner(b)}</div>
+        <div class="bc-main">
+          <div class="bc-titles">
+            <div class="bc-name">${esc(b.name || b.id)}</div>
+            <div class="bc-sub">
+              <span class="bc-id">${esc(b.id)}</span>
+              <span class="bc-sep">·</span><span>${tinfo.threads.length} 个对话</span>
+              <span class="bc-sep">·</span><span>${totalMsgs} 条消息</span>
+              <span class="bc-sep">·</span><span>${esc(modelName)}</span>
+            </div>
+          </div>
+          <div class="bc-chips">
+            ${badge(b.runtime?.status)}
+            <span class="status-chip ${b.sandbox === false ? 'ok' : 'warn'}"><span class="chip-dot ${b.sandbox === false ? 'on' : 'warn'}"></span>${b.sandbox === false ? '正式发布' : '沙箱测试'}</span>
+            ${webEnabled(b) ? '<span class="status-chip ok"><span class="chip-dot on"></span>🌐 联网</span>' : '<span class="status-chip"><span class="chip-dot off"></span>🌐 未联网</span>'}
+            <span class="status-chip"><span class="chip-icon">⚡</span>搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</span>
+            ${streamOn ? '<span class="status-chip ok"><span class="chip-icon">⌨</span>流式</span>' : ''}
+          </div>
+        </div>
+        <div class="bc-actions">
+          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑角色信息：名称 / 头像 / 模型 / 记忆条数 / 运行环境 / 联网 / 流式">⚙ 设置</button>
+          <button class="ghost sm" onclick="restartBot('${b.id}')" title="重新连接">↻ 重连</button>
+          <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// 角色卡上的标签页
+function renderBotTabs(tab) {
+  return `<div class="bot-tabs" role="tablist">
+    ${BOT_TABS.map(t => `<span class="bt-tab ${t.id === tab ? 'active' : ''}" role="tab" onclick="switchBotTab('${t.id}')">${t.n}</span>`).join('')}
+  </div>`;
+}
+
+// 「记忆」标签页：AI 蒸馏内容 + 三层记忆文件管理
+// 「精彩时刻」也放在这里 —— 它本来就是 AI 从记忆与对话里蒸馏出来的产物，
+// 留在角色卡上会把对话往下挤。
+function renderMemoryTabHtml(b) {
+  return `
+    ${renderMoments(b)}
     <div class="card mem-card">
       <div class="card-title">记忆管理（memory/${esc(b.id)}/）
           <span class="spacer"></span>
@@ -739,15 +644,12 @@ function renderBotDetail(id) {
           <textarea id="f-ingest" rows="1" placeholder="概述新剧情 / 内容，AI 自动归类写入对应记忆文件…"></textarea>
           <button class="primary sm" onclick="ingestMemory('${b.id}')">✉ AI 归档</button>
         </div>
-      </div>
+      </div>`;
+}
 
-
-    <!-- 渠道：QQ 官方机器人相关（C3 将收进「渠道」选装模块，默认关闭） -->
-    <div class="sec-head">
-      <span class="sec-name">渠道</span>
-      <span class="sec-sub">QQ 官方机器人 · 主动发消息需填写目标 openid</span>
-    </div>
-
+// 「渠道」标签页：QQ 官方机器人相关（C3 会把这块收进「渠道」选装模块，默认关闭）
+function renderChannelTabHtml(b) {
+  return `
     <div class="card">
       <div class="card-title">主动发消息（单聊需填写对方的 openid）</div>
       <div class="send-bar">
@@ -766,20 +668,95 @@ function renderBotDetail(id) {
         </div>
         <button class="primary" onclick="sendMsg('${b.id}')">发送</button>
       </div>
-    </div>
+    </div>`;
+}
 
-    ${renderHeartCard(b)}
-  `;
+// 「心跳」标签页
+function renderHeartTabHtml(b) {
+  return renderHeartCard(b);
+}
 
-  loadMemoryFiles(b.id);
-  loadMemLayers(b.id);
-  // 角色页不再渲染对话（已迁到「对话」页）。这里只借跨线程归并结果拿「最近发送者 / 主 ID」，
-  // 供下方「渠道 → 主动发消息」填 openid 默认值；#session-list 不存在时会自然跳过渲染。
-  loadSessions(b.id);
-  refreshHeartNext(b.id);
+// ---------- 设置弹窗（角色卡旁的「⚙ 设置」）----------
+// 配置项集中收在弹窗里，不占标签页 —— 对话视线里只有对话本身。
+function openBotSettings(id) {
+  const b = (state.bots || []).find(x => x.id === id);
+  if (!b) return;
+  const models = state.models || [];
+  const modelOpts = models.map(m => `<option value="${m.id}" ${m.id === b.modelId ? 'selected' : ''}>${esc(m.name || m.id)}</option>`).join('') || '<option value="">未绑定</option>';
+  const old = $('#bot-settings-modal');
+  if (old) old.remove();
 
-  // 启动卡片底部像素波浪
-  startPixelWave();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'bot-settings-modal';
+  overlay.innerHTML = `
+    <div class="modal-card bot-settings-modal">
+      <div class="modal-head">
+        <span>设置角色 — ${esc(b.name || b.id)}</span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="closeBotSettings()">✕ 关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="profile-edit-head">
+          <div class="avatar avatar-preview" id="avatar-preview">${avatarInner(b)}</div>
+          <div class="frm-row" style="flex:1;margin:0">
+            <label class="frm">头像：图片 URL / emoji / 本地图片（上传后保存到项目 avatars/ 目录）</label>
+            <input id="f-avatar" type="text" value="${esc(b.avatar || '')}" placeholder="https://... 或 🤖 或点击选择本地图片">
+            <div style="margin-top:6px;display:flex;gap:8px">
+              <button class="sm" type="button" onclick="pickAvatarFile()">📁 选择本地图片</button>
+            </div>
+          </div>
+          <input type="file" id="f-avatar-file" accept="image/*" style="display:none" onchange="uploadAvatar('${b.id}')">
+        </div>
+        <div class="grid-3">
+          <div class="field"><label>名称</label><input id="f-name" type="text" value="${esc(b.name || '')}"></div>
+          <div class="field"><label>AppID</label><input id="f-appid" type="text" value="${esc(b.appId || '')}"></div>
+          <div class="field"><label>AppSecret（env: 变量或直接填）</label><input id="f-secret" type="password" value="${esc(b.appSecret || '')}"></div>
+        </div>
+        <div class="grid-3" style="margin-top:12px">
+          <div class="field"><label>绑定模型</label><select id="f-model">${modelOpts}</select></div>
+          <div class="field"><label>历史记忆条数</label><input id="f-history" type="number" value="${b.historyLimit || 10}"></div>
+          <div class="field"><label>运行环境</label><select id="f-sandbox">
+            <option value="true" ${b.sandbox !== false ? 'selected' : ''}>沙箱（测试）</option>
+            <option value="false" ${b.sandbox === false ? 'selected' : ''}>正式</option>
+          </select></div>
+        </div>
+        <div class="grid-3" style="margin-top:12px">
+          <div class="field"><label>允许联网</label><select id="f-web">
+            <option value="" ${b.webSearch === undefined || b.webSearch === null ? 'selected' : ''}>跟随全局设置（当前：${webEnabled(b) ? '开启' : '关闭'}）</option>
+            <option value="true" ${b.webSearch === true ? 'selected' : ''}>允许</option>
+            <option value="false" ${b.webSearch === false ? 'selected' : ''}>禁止</option>
+          </select></div>
+          <div class="field"><label>搜索方式</label><select id="f-smode">
+            <option value="" ${b.searchMode ? '' : 'selected'}>跟随全局（${modeLabel(state.searchMode || 'auto')}）</option>
+            <option value="auto" ${b.searchMode === 'auto' ? 'selected' : ''}>自动（轻量优先）</option>
+            <option value="light" ${b.searchMode === 'light' ? 'selected' : ''}>仅轻量</option>
+            <option value="browser" ${b.searchMode === 'browser' ? 'selected' : ''}>仅浏览器</option>
+          </select></div>
+          <div class="field"><label>联网状态</label><div class="value">${webEnabled(b) ? '✅ 已开启' : '❌ 关闭'}</div></div>
+        </div>
+        <div class="grid-3" style="margin-top:12px">
+          <div class="field"><label>流式回复（打字机效果，仅单聊）</label><select id="f-stream">
+            <option value="" ${b.streamReply === undefined || b.streamReply === null ? 'selected' : ''}>跟随全局设置（当前：${state.streamReply === true ? '开启' : '关闭'}）</option>
+            <option value="true" ${b.streamReply === true ? 'selected' : ''}>开启</option>
+            <option value="false" ${b.streamReply === false ? 'selected' : ''}>关闭</option>
+          </select></div>
+          <div class="field"><label>Markdown 回复</label><div class="value">自动启用，失败回退文本</div></div>
+          <div class="field"><label>流式可用性</label><div class="value">${b.streamReply === false ? '已关闭' : '需要官方 Markdown/流式权限'}</div></div>
+        </div>
+      </div>
+      <div class="modal-foot cf-foot">
+        <button class="ghost" onclick="closeBotSettings()">取消</button>
+        <button class="primary" onclick="saveBot('${b.id}')">保存</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeBotSettings(); });
+  document.body.appendChild(overlay);
+}
+
+function closeBotSettings() {
+  const m = $('#bot-settings-modal');
+  if (m) m.remove();
 }
 
 let _scene = 'c2c';
@@ -1845,8 +1822,8 @@ async function loadSessions(id, tid) {
 async function directChat(id) {
   const content = $('#f-chat').value.trim();
   if (!content) return toast('请输入内容', 'err');
-  // 定位当前线程：对话页用 _chatTid；不在对话页时不传，由后端回退到默认线程
-  const tid = (view.type === 'chat' && view.id === id) ? _chatTid : null;
+  // 定位当前线程：在对话标签页时用 _chatTid；否则不传，由后端回退到默认线程
+  const tid = inChatTab(id) ? _chatTid : null;
   const btn = document.querySelector('.chat-input .primary');
   if (btn) { btn.disabled = true; btn.textContent = '思考中…'; }
 
@@ -2088,7 +2065,7 @@ function adminToggleStream(btn) {
 }
 
 function currentBotId() {
-  if ((view.type === 'bot' || view.type === 'chat') && view.id) return view.id;
+  if (view.type === 'bot' && view.id) return view.id;
   return (state.bots || [])[0]?.id || '';
 }
 function currentBotName() {
@@ -2888,7 +2865,8 @@ async function saveBot(id) {
   };
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
-  if (r.ok) { _botEditing = false; await loadState(); }
+  // 保存成功后关掉设置弹窗并刷新（角色卡上的名称/模型/状态会随之更新）
+  if (r.ok) { closeBotSettings(); await loadState(); }
 }
 
 async function restartBot(id) {
@@ -3769,16 +3747,17 @@ function hexA(hex, a) {
 
 // ---------- 事件绑定 ----------
 $('#btn-add-bot').addEventListener('click', () => { view = { type: 'bot-form' }; renderMain(); });
-// 侧栏「对话 → ＋」：新建一条对话并直接进入
-$('#btn-new-chat').addEventListener('click', () => newChat());
 
-// ---------- 内联 onclick 依赖的对话页函数 ----------
+// ---------- 内联 onclick 依赖的角色工作区函数 ----------
 // 顶层 function 声明在当前（非模块）脚本里本就在全局作用域，内联 onclick 可以直接调到；
 // 这里显式挂一次有两个作用：
 //   ① lint 的 no-unused-vars 不把它们误判成死代码 —— 模板字符串里的 onclick 不算引用；
 //   ② 为批 4′（app.js 拆 ES Modules）预留 —— 那时顶层声明不再挂 window，
 //      所有内联 onclick 都会整体失效，需要统一改成事件委托。届时这行即可移除。
-Object.assign(window, { switchThread, newThread, renameThreadUI, delThread, clearThread });
+Object.assign(window, {
+  switchThread, newThread, renameThreadUI, delThread, clearThread,
+  switchBotTab, openBotSettings, closeBotSettings,
+});
 // 模型入口已在底部按钮（openModels），不再绑定已删除的 #btn-add-model
 $('#btn-refresh').addEventListener('click', loadState);
 $('#btn-theme').addEventListener('click', toggleTheme);
