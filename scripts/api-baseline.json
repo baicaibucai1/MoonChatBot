@@ -1,0 +1,1676 @@
+{
+  "meta": {
+    "generatedAt": "2026-09-28T09:23:26.248Z",
+    "node": "v22.22.2",
+    "sourceSha": "<unknown>",
+    "probeCount": 71,
+    "note": "由 scripts/api-baseline.mjs 在临时副本沙箱中生成。比对时忽略 meta.generatedAt。"
+  },
+  "results": [
+    {
+      "id": "entry:preflight",
+      "kind": "entry",
+      "method": "OPTIONS",
+      "path": "/api/state",
+      "note": "CORS 预检 → 204 空响应",
+      "status": 204,
+      "bodyKind": "empty",
+      "headers": {
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": 0
+    },
+    {
+      "id": "entry:cors-allowed",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/api/state",
+      "note": "壳内 origin 应回 Access-Control-Allow-Origin",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-origin": "http://tauri.localhost",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS"
+      },
+      "shape": [
+        "$:object",
+        "bots:array",
+        "bots[].appId:string",
+        "bots[].appSecret:string",
+        "bots[].avatar:string",
+        "bots[].enabled:boolean",
+        "bots[].heartbeats:array",
+        "bots[].heartbeats[].enabled:boolean",
+        "bots[].heartbeats[].intervalMin:number",
+        "bots[].heartbeats[].maxMin:number",
+        "bots[].heartbeats[].minMin:number",
+        "bots[].heartbeats[].mode:string",
+        "bots[].heartbeats[].prompt:string",
+        "bots[].heartbeats[].tasks:array",
+        "bots[].heartbeats[].tasks[].prompt:string",
+        "bots[].heartbeats[].tasks[].time:string",
+        "bots[].heartbeats[].tasks[]:object",
+        "bots[].heartbeats[].tone:string",
+        "bots[].heartbeats[]:object",
+        "bots[].historyLimit:number",
+        "bots[].id:string",
+        "bots[].intents:array",
+        "bots[].intents[]:string",
+        "bots[].modelId:string",
+        "bots[].moments:array",
+        "bots[].moments[].quote:string",
+        "bots[].moments[].summary:string",
+        "bots[].moments[].title:string",
+        "bots[].moments[]:object",
+        "bots[].name:string",
+        "bots[].personaFile:string",
+        "bots[].runtime.status:string",
+        "bots[].runtime:object",
+        "bots[].sandbox:boolean",
+        "bots[].searchMode:string",
+        "bots[].useGlobal:boolean",
+        "bots[].webSearch:boolean",
+        "bots[]:object",
+        "distillModel:string",
+        "models:array",
+        "models[].apiKeyEnv:string",
+        "models[].baseURL:string",
+        "models[].hasKey:boolean",
+        "models[].id:string",
+        "models[].maxTokens:number",
+        "models[].model:string",
+        "models[].name:string",
+        "models[].temperature:number",
+        "models[].webSearch:boolean",
+        "models[]:object",
+        "ok:boolean",
+        "port:number",
+        "searchMode:string",
+        "streamReply:boolean",
+        "webSearch:boolean"
+      ]
+    },
+    {
+      "id": "entry:cors-denied",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/api/state",
+      "note": "非白名单 origin 不得回 ACAO",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "bots:array",
+        "bots[].appId:string",
+        "bots[].appSecret:string",
+        "bots[].avatar:string",
+        "bots[].enabled:boolean",
+        "bots[].heartbeats:array",
+        "bots[].heartbeats[].enabled:boolean",
+        "bots[].heartbeats[].intervalMin:number",
+        "bots[].heartbeats[].maxMin:number",
+        "bots[].heartbeats[].minMin:number",
+        "bots[].heartbeats[].mode:string",
+        "bots[].heartbeats[].prompt:string",
+        "bots[].heartbeats[].tasks:array",
+        "bots[].heartbeats[].tasks[].prompt:string",
+        "bots[].heartbeats[].tasks[].time:string",
+        "bots[].heartbeats[].tasks[]:object",
+        "bots[].heartbeats[].tone:string",
+        "bots[].heartbeats[]:object",
+        "bots[].historyLimit:number",
+        "bots[].id:string",
+        "bots[].intents:array",
+        "bots[].intents[]:string",
+        "bots[].modelId:string",
+        "bots[].moments:array",
+        "bots[].moments[].quote:string",
+        "bots[].moments[].summary:string",
+        "bots[].moments[].title:string",
+        "bots[].moments[]:object",
+        "bots[].name:string",
+        "bots[].personaFile:string",
+        "bots[].runtime.status:string",
+        "bots[].runtime:object",
+        "bots[].sandbox:boolean",
+        "bots[].searchMode:string",
+        "bots[].useGlobal:boolean",
+        "bots[].webSearch:boolean",
+        "bots[]:object",
+        "distillModel:string",
+        "models:array",
+        "models[].apiKeyEnv:string",
+        "models[].baseURL:string",
+        "models[].hasKey:boolean",
+        "models[].id:string",
+        "models[].maxTokens:number",
+        "models[].model:string",
+        "models[].name:string",
+        "models[].temperature:number",
+        "models[].webSearch:boolean",
+        "models[]:object",
+        "ok:boolean",
+        "port:number",
+        "searchMode:string",
+        "streamReply:boolean",
+        "webSearch:boolean"
+      ]
+    },
+    {
+      "id": "static:root",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/",
+      "note": "→ index.html",
+      "status": 200,
+      "bodyKind": "html",
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": "<64K"
+    },
+    {
+      "id": "static:index",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/index.html",
+      "note": "",
+      "status": 200,
+      "bodyKind": "html",
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": "<64K"
+    },
+    {
+      "id": "static:app-js",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/app.js",
+      "note": ".js 应带 no-cache",
+      "status": 200,
+      "bodyKind": "js",
+      "headers": {
+        "content-type": "text/javascript; charset=utf-8",
+        "cache-control": "no-cache",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": ">=64K"
+    },
+    {
+      "id": "static:style-css",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/style.css",
+      "note": "",
+      "status": 200,
+      "bodyKind": "css",
+      "headers": {
+        "content-type": "text/css; charset=utf-8",
+        "cache-control": "no-cache",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": ">=64K"
+    },
+    {
+      "id": "static:missing",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/definitely-not-here.js",
+      "note": "",
+      "status": 404,
+      "bodyKind": "text",
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": "<1K"
+    },
+    {
+      "id": "static:avatar-missing",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/avatars/__nope__.png",
+      "note": "",
+      "status": 404,
+      "bodyKind": "text",
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": "<1K"
+    },
+    {
+      "id": "static:traversal-literal",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/..%2f..%2fserver.js",
+      "note": "解码后应被 startsWith(PUBLIC_DIR) 拦住",
+      "status": 404,
+      "bodyKind": "text",
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": "<1K"
+    },
+    {
+      "id": "static:traversal-encoded",
+      "kind": "entry",
+      "method": "GET",
+      "path": "/%2e%2e%2f%2e%2e%2fserver.js",
+      "note": "同上，另一种编码形式",
+      "status": 404,
+      "bodyKind": "text",
+      "headers": {
+        "content-type": "text/plain; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "length": "<1K"
+    },
+    {
+      "id": "api:state",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/state",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "bots:array",
+        "bots[].appId:string",
+        "bots[].appSecret:string",
+        "bots[].avatar:string",
+        "bots[].enabled:boolean",
+        "bots[].heartbeats:array",
+        "bots[].heartbeats[].enabled:boolean",
+        "bots[].heartbeats[].intervalMin:number",
+        "bots[].heartbeats[].maxMin:number",
+        "bots[].heartbeats[].minMin:number",
+        "bots[].heartbeats[].mode:string",
+        "bots[].heartbeats[].prompt:string",
+        "bots[].heartbeats[].tasks:array",
+        "bots[].heartbeats[].tasks[].prompt:string",
+        "bots[].heartbeats[].tasks[].time:string",
+        "bots[].heartbeats[].tasks[]:object",
+        "bots[].heartbeats[].tone:string",
+        "bots[].heartbeats[]:object",
+        "bots[].historyLimit:number",
+        "bots[].id:string",
+        "bots[].intents:array",
+        "bots[].intents[]:string",
+        "bots[].modelId:string",
+        "bots[].moments:array",
+        "bots[].moments[].quote:string",
+        "bots[].moments[].summary:string",
+        "bots[].moments[].title:string",
+        "bots[].moments[]:object",
+        "bots[].name:string",
+        "bots[].personaFile:string",
+        "bots[].runtime.status:string",
+        "bots[].runtime:object",
+        "bots[].sandbox:boolean",
+        "bots[].searchMode:string",
+        "bots[].useGlobal:boolean",
+        "bots[].webSearch:boolean",
+        "bots[]:object",
+        "distillModel:string",
+        "models:array",
+        "models[].apiKeyEnv:string",
+        "models[].baseURL:string",
+        "models[].hasKey:boolean",
+        "models[].id:string",
+        "models[].maxTokens:number",
+        "models[].model:string",
+        "models[].name:string",
+        "models[].temperature:number",
+        "models[].webSearch:boolean",
+        "models[]:object",
+        "ok:boolean",
+        "port:number",
+        "searchMode:string",
+        "streamReply:boolean",
+        "webSearch:boolean"
+      ]
+    },
+    {
+      "id": "api:usage",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/usage",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean",
+        "stats.byBot:array",
+        "stats.byBot[].botId:string",
+        "stats.byBot[].calls:number",
+        "stats.byBot[].completion:number",
+        "stats.byBot[].failed:number",
+        "stats.byBot[].ok:number",
+        "stats.byBot[].prompt:number",
+        "stats.byBot[].total:number",
+        "stats.byBot[]:object",
+        "stats.byDay:array",
+        "stats.byDay[].date:string",
+        "stats.byDay[].total:number",
+        "stats.byDay[]:object",
+        "stats.byModel:array",
+        "stats.byModel[].calls:number",
+        "stats.byModel[].completion:number",
+        "stats.byModel[].failed:number",
+        "stats.byModel[].modelId:string",
+        "stats.byModel[].ok:number",
+        "stats.byModel[].prompt:number",
+        "stats.byModel[].total:number",
+        "stats.byModel[]:object",
+        "stats.today.calls:number",
+        "stats.today.completion:number",
+        "stats.today.failed:number",
+        "stats.today.ok:number",
+        "stats.today.prompt:number",
+        "stats.today.total:number",
+        "stats.today:object",
+        "stats.total.calls:number",
+        "stats.total.completion:number",
+        "stats.total.failed:number",
+        "stats.total.ok:number",
+        "stats.total.prompt:number",
+        "stats.total.total:number",
+        "stats.total:object",
+        "stats:object"
+      ]
+    },
+    {
+      "id": "api:global-files",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/global/files",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "files:array",
+        "files[].content:string",
+        "files[].desc:string",
+        "files[].enabled:boolean",
+        "files[].key:string",
+        "files[].name:string",
+        "files[]:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:heartbeat-status",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/heartbeat/status",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "list:array",
+        "list[].enabled:boolean",
+        "list[].id:string",
+        "list[].last:number",
+        "list[].master:string",
+        "list[].mode:string",
+        "list[].next:number",
+        "list[].prompt:string",
+        "list[].secondsLeft:number",
+        "list[].slot:number",
+        "list[].taskCount:number",
+        "list[]:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:admin-sessions",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/admin/sessions",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean",
+        "sessions:array",
+        "sessions[].count:number",
+        "sessions[].id:string",
+        "sessions[].title:string",
+        "sessions[].updatedAt:number",
+        "sessions[]:object"
+      ]
+    },
+    {
+      "id": "api:admin-session-one",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/admin/sessions/probe-session",
+      "note": "不存在的会话 id → 空消息列表",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "messages:array",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-files",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/memory/BOT1/files",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "files:array",
+        "files[].content:string",
+        "files[].desc:string",
+        "files[].enabled:boolean",
+        "files[].key:string",
+        "files[].name:string",
+        "files[].sys:boolean",
+        "files[].tier:number",
+        "files[]:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-layers",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/memory/BOT1/layers",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean",
+        "state.archiveCount:number",
+        "state.core.core.boundaries:string",
+        "state.core.core.evolved_notes:string",
+        "state.core.core.identity:string",
+        "state.core.core.relationship_state:string",
+        "state.core.core.tone:string",
+        "state.core.core:object",
+        "state.core.manual:boolean",
+        "state.core.ts:number",
+        "state.core:object",
+        "state.coreFresh:boolean",
+        "state.eventCount:number",
+        "state.events:array",
+        "state.events[].actors:array",
+        "state.events[].actors[]:string",
+        "state.events[].emotion:string",
+        "state.events[].event:string",
+        "state.events[].importance:number",
+        "state.events[].source:string",
+        "state.events[].ts:number",
+        "state.events[]:object",
+        "state.roundsSinceDistill:number",
+        "state.seedEmpty:boolean",
+        "state.summaries.content.empty:boolean",
+        "state.summaries.content.exists:boolean",
+        "state.summaries.content.fresh:boolean",
+        "state.summaries.content.name:string",
+        "state.summaries.content.sections:array",
+        "state.summaries.content:object",
+        "state.summaries.plot.empty:boolean",
+        "state.summaries.plot.exists:boolean",
+        "state.summaries.plot.fresh:boolean",
+        "state.summaries.plot.name:string",
+        "state.summaries.plot.sections:array",
+        "state.summaries.plot:object",
+        "state.summaries.traits.empty:boolean",
+        "state.summaries.traits.exists:boolean",
+        "state.summaries.traits.fresh:boolean",
+        "state.summaries.traits.name:string",
+        "state.summaries.traits.sections:array",
+        "state.summaries.traits:object",
+        "state.summaries:object",
+        "state.summary:string",
+        "state.summaryFileExists:boolean",
+        "state:object"
+      ]
+    },
+    {
+      "id": "api:mem-sessions",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/memory/BOT1/sessions",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "lastSender:string",
+        "masterSender:string",
+        "ok:boolean",
+        "sessions:array",
+        "sessions[].content:string",
+        "sessions[].role:string",
+        "sessions[].ts:number",
+        "sessions[]:object"
+      ]
+    },
+    {
+      "id": "api:mem-branches",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/memory/BOT1/branches",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "branches:array",
+        "branches[].count:number",
+        "branches[].fromTs:number",
+        "branches[].ts:number",
+        "branches[]:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:avatar-empty",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/upload-avatar",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "无效的 botId"
+      }
+    },
+    {
+      "id": "api:avatar-bad-ext",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/upload-avatar",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "不支持的图片格式"
+      }
+    },
+    {
+      "id": "api:avatar-ok",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/upload-avatar",
+      "note": "合法 1×1 PNG，仅写入副本 avatars/",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean",
+        "url:string"
+      ]
+    },
+    {
+      "id": "api:config-put",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/config",
+      "note": "空 body → 原样回写 + 热重载",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:config-bad-bot-id",
+      "kind": "reject",
+      "method": "PUT",
+      "path": "/api/config",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "机器人 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）"
+      }
+    },
+    {
+      "id": "api:config-bad-distill",
+      "kind": "reject",
+      "method": "PUT",
+      "path": "/api/config",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "蒸馏/总结模型不存在: __nope__"
+      }
+    },
+    {
+      "id": "api:global-create-no-key",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/global/files",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "缺少文件名 key"
+      }
+    },
+    {
+      "id": "api:global-create",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/global/files",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:global-put",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/global/files/__baseline_probe__",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:global-enabled",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/global/files/__baseline_probe__/enabled",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:global-delete",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/global/files/__baseline_probe__",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-create-no-key",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/memory/BOT1/files",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "缺少文件名 key"
+      }
+    },
+    {
+      "id": "api:mem-create",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/memory/BOT1/files",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-put",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/memory/BOT1/files/__baseline_probe__",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-desc",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/memory/BOT1/files/__baseline_probe__/desc",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-tier",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/memory/BOT1/files/__baseline_probe__/tier",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-enabled",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/memory/BOT1/files/__baseline_probe__/enabled",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-order",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/memory/BOT1/files/order",
+      "note": "验证 /files/order 优先于通配 /files/:key 匹配",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-delete",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/memory/BOT1/files/__baseline_probe__",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-upload-empty",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/memory/BOT1/upload",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "文件内容为空"
+      }
+    },
+    {
+      "id": "api:mem-upload-ok",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/memory/BOT1/upload",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "key:string",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-key-event",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/memory/BOT1/key-events",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-core-put",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/memory/BOT1/core",
+      "note": "覆盖人格核心卡（仅副本）",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-seed-from-core",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/memory/BOT1/seed-from-core",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-event-delete-one",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/memory/BOT1/events/9999999999",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-session-delete-one",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/memory/BOT1/sessions/9999999999",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-events-clear",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/memory/BOT1/events",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-events-summary-clear",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/memory/BOT1/events-summary",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-branch-fork",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/memory/BOT1/sessions/branch",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-branch-restore",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/memory/BOT1/branches/restore",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:mem-sessions-clear",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/memory/BOT1/sessions",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:admin-session-delete",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/admin/sessions/probe-session",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:bot-restart-404",
+      "kind": "probe",
+      "method": "POST",
+      "path": "/api/bots/__nope__/restart",
+      "note": "不存在的 id，避免用假凭证去连 QQ",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "机器人不存在"
+      }
+    },
+    {
+      "id": "api:bot-send-404",
+      "kind": "probe",
+      "method": "POST",
+      "path": "/api/bots/__nope__/send",
+      "note": "不存在的 id，避免真的发 QQ 消息",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "机器人不存在"
+      }
+    },
+    {
+      "id": "api:bot-ingest-404",
+      "kind": "probe",
+      "method": "POST",
+      "path": "/api/bots/__nope__/ingest",
+      "note": "",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "机器人不存在"
+      }
+    },
+    {
+      "id": "api:bot-chat-nope",
+      "kind": "probe",
+      "method": "POST",
+      "path": "/api/bots/__nope__/chat",
+      "note": "无前置实体校验：会写 memory/<id>/ 后返回 200 {ok:false}",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "ok": "false",
+        "err": "机器人不存在"
+      }
+    },
+    {
+      "id": "api:model-test-404",
+      "kind": "probe",
+      "method": "POST",
+      "path": "/api/models/__nope__/test",
+      "note": "不存在的 id，避免真实调用模型",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "模型不存在"
+      }
+    },
+    {
+      "id": "api:mem-distill-404",
+      "kind": "probe",
+      "method": "POST",
+      "path": "/api/memory/__nope__/distill",
+      "note": "不存在的 id，避免真实调用模型",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "机器人不存在"
+      }
+    },
+    {
+      "id": "api:moments-post-404",
+      "kind": "probe",
+      "method": "POST",
+      "path": "/api/moments/__nope__",
+      "note": "",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "机器人不存在: __nope__"
+      }
+    },
+    {
+      "id": "api:moments-delete-404",
+      "kind": "probe",
+      "method": "DELETE",
+      "path": "/api/moments/__nope__",
+      "note": "",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "机器人不存在: __nope__"
+      }
+    },
+    {
+      "id": "api:admin-chat-empty",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/admin/chat",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "缺少内容"
+      }
+    },
+    {
+      "id": "api:admin-stream-empty",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/admin/chat/stream",
+      "note": "",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "缺少内容"
+      }
+    },
+    {
+      "id": "bound:404-fallback",
+      "kind": "boundary",
+      "method": "GET",
+      "path": "/api/__totally_nonexistent__",
+      "note": "",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "接口不存在: /api/__totally_nonexistent__"
+      }
+    },
+    {
+      "id": "bound:mem-dot",
+      "kind": "boundary",
+      "method": "GET",
+      "path": "/api/memory/a.b/files",
+      "note": "「.」不在字符类内 → 应落 404 兜底",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "接口不存在: /api/memory/a.b/files"
+      }
+    },
+    {
+      "id": "bound:mem-slash",
+      "kind": "boundary",
+      "method": "GET",
+      "path": "/api/memory/a/b/files",
+      "note": "「/」不在字符类内 → 应落 404 兜底",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "接口不存在: /api/memory/a/b/files"
+      }
+    },
+    {
+      "id": "bound:bot-exclaim",
+      "kind": "boundary",
+      "method": "POST",
+      "path": "/api/bots/BAD!!/restart",
+      "note": "「!」不在字符类内 → 应落 404 兜底",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "接口不存在: /api/bots/BAD!!/restart"
+      }
+    },
+    {
+      "id": "bound:open-folder-illegal",
+      "kind": "boundary",
+      "method": "POST",
+      "path": "/api/bots/BAD!!/open-folder",
+      "note": "open-folder 无实体校验、会弹资源管理器，故只用非法字符验证正则边界",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "接口不存在: /api/bots/BAD!!/open-folder"
+      }
+    },
+    {
+      "id": "charset:mem-cn",
+      "kind": "boundary",
+      "method": "GET",
+      "path": "/api/memory/%E6%B5%8B%E8%AF%95/files",
+      "note": "中文 id → 走字符类的 \\u4e00-\\u9fa5 分支",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "files:array",
+        "files[].content:string",
+        "files[].desc:string",
+        "files[].enabled:boolean",
+        "files[].key:string",
+        "files[].name:string",
+        "files[].sys:boolean",
+        "files[].tier:number",
+        "files[]:object",
+        "ok:boolean"
+      ],
+      "captured": {}
+    },
+    {
+      "id": "charset:mem-hyphen",
+      "kind": "boundary",
+      "method": "GET",
+      "path": "/api/memory/my-bot/files",
+      "note": "连字符分支",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "files:array",
+        "files[].content:string",
+        "files[].desc:string",
+        "files[].enabled:boolean",
+        "files[].key:string",
+        "files[].name:string",
+        "files[].sys:boolean",
+        "files[].tier:number",
+        "files[]:object",
+        "ok:boolean"
+      ],
+      "captured": {}
+    },
+    {
+      "id": "charset:mem-long",
+      "kind": "boundary",
+      "method": "GET",
+      "path": "/api/memory/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/files",
+      "note": "memory 的 :id 无长度上限（moments 才有 {1,64}）",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "files:array",
+        "files[].content:string",
+        "files[].desc:string",
+        "files[].enabled:boolean",
+        "files[].key:string",
+        "files[].name:string",
+        "files[].sys:boolean",
+        "files[].tier:number",
+        "files[]:object",
+        "ok:boolean"
+      ],
+      "captured": {}
+    }
+  ]
+}

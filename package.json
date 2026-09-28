@@ -7,11 +7,18 @@
     "start": "node server.js",
     "setup": "node setup.js",
     "start.cmd": "start",
-    "up": "node server.js"
+    "up": "node server.js",
+    "lint": "eslint .",
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "baseline": "node scripts/api-baseline.mjs",
+    "baseline:check": "node scripts/api-baseline.mjs --check"
   },
   "dependencies": {
     "playwright": "^1.62.1",
-    "qq-guild-bot": "^2.7.0",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0"
   }
 }
