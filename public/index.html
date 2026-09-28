@@ -16,10 +16,20 @@
       <span class="logo-text">MoonChatBot 控制台</span>
     </div>
 
+    <!-- 对话：与角色并列的独立一等入口。列出各角色的对话线程，点开即是纯对话界面 -->
     <div class="side-group">
       <div class="side-label">
-        <span>机器人</span>
-        <button class="add-btn" id="btn-add-bot" title="添加机器人">＋</button>
+        <span>对话</span>
+        <button class="add-btn" id="btn-new-chat" title="开始新对话">＋</button>
+      </div>
+      <div class="side-list" id="chat-list"></div>
+    </div>
+
+    <!-- 角色：配置与记忆。AppID / 密钥 / 模型绑定等设置项都在这里，不在对话视线里 -->
+    <div class="side-group side-group-bots">
+      <div class="side-label">
+        <span>角色</span>
+        <button class="add-btn" id="btn-add-bot" title="添加角色">＋</button>
       </div>
       <div class="side-list" id="bot-list"></div>
     </div>

@@ -153,6 +153,7 @@ function buildProbes(botId) {
     { id: 'api:mem-thread-rename-404', kind: 'probe', method: 'PUT', path: `/api/memory/${B}/threads/9999999999`, json: { title: 'probe' }, capture: ['err'] },
     { id: 'api:mem-thread-delete-404', kind: 'probe', method: 'DELETE', path: `/api/memory/${B}/threads/9999999999`, capture: ['err'] },
     { id: 'api:mem-thread-fork-404', kind: 'probe', method: 'POST', path: `/api/memory/${B}/threads/9999999999/fork`, json: { fromTs: 9999999999 }, capture: ['err'] },
+    { id: 'api:mem-thread-clear-404', kind: 'probe', method: 'DELETE', path: `/api/memory/${B}/threads/9999999999/messages`, capture: ['err'], note: '清空指定对话的消息（C2）；不存在的 tid → 404，无副作用' },
     { id: 'api:mem-thread-create', kind: 'write', method: 'POST', path: `/api/memory/${B}/threads`, json: { title: '__baseline_probe__' }, note: '新建线程，仅写入副本' },
     { id: 'api:admin-session-delete', kind: 'write', method: 'DELETE', path: '/api/admin/sessions/probe-session' },
 

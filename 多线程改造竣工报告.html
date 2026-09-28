@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多线程改造 C1 · 竣工报告 — MoonChatBot</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --card: #ffffff;
+    --card-2: #f5f5f4;
+    --border: #e7e5e4;
+    --border-strong: #d6d3d1;
+    --text: #1c1917;
+    --muted: #78716c;
+    --faint: #a8a29e;
+    --accent: #0f6e56;
+    --accent-soft: #e1f5ee;
+    --accent-mid: #5dcaa5;
+    --warn: #854f0b;
+    --warn-soft: #faeeda;
+    --danger: #a32d2d;
+    --danger-soft: #fcebeb;
+    --info: #185fa5;
+    --info-soft: #e6f1fb;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1917;
+      --card: #232120;
+      --card-2: #2a2726;
+      --border: #383432;
+      --border-strong: #4a4544;
+      --text: #f5f5f4;
+      --muted: #a8a29e;
+      --faint: #78716c;
+      --accent: #5dcaa5;
+      --accent-soft: #0b2b23;
+      --accent-mid: #1d9e75;
+      --warn: #ef9f27;
+      --warn-soft: #33270d;
+      --danger: #f09595;
+      --danger-soft: #341414;
+      --info: #85b7eb;
+      --info-soft: #0d2137;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px 24px 72px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { margin-bottom: 40px; }
+  .badge {
+    display: inline-block; padding: 3px 10px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent);
+    font-size: 12px; font-weight: 600; letter-spacing: .02em; margin-bottom: 14px;
+  }
+  h1 { font-size: 27px; font-weight: 650; margin: 0 0 10px; letter-spacing: -.01em; }
+  .lede { font-size: 15px; color: var(--muted); margin: 0; max-width: 780px; }
+  h2 {
+    font-size: 17px; font-weight: 600; margin: 0 0 4px;
+    display: flex; align-items: center; gap: 9px;
+  }
+  h2 .num {
+    font-family: var(--mono); font-size: 12px; color: var(--faint);
+    border: 1px solid var(--border-strong); border-radius: 5px;
+    padding: 1px 6px; font-weight: 500;
+  }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  section { margin-bottom: 34px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 22px 24px;
+  }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .kpi {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 18px;
+  }
+  .kpi .k { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .kpi .v { font-size: 22px; font-weight: 650; font-family: var(--mono); letter-spacing: -.02em; }
+  .kpi .v small { font-size: 13px; font-weight: 500; color: var(--faint); }
+  .kpi .n { font-size: 12px; color: var(--faint); margin-top: 4px; }
+  .kpi.ok .v { color: var(--accent); }
+  .kpi.bad .v { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; background: var(--card-2); }
+  th:first-child { border-top-left-radius: 8px; }
+  th:last-child { border-top-right-radius: 8px; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.mono, code, .mono { font-family: var(--mono); font-size: 12.5px; }
+  code {
+    background: var(--card-2); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 5px;
+  }
+  .ok { color: var(--accent); font-weight: 600; }
+  .bad { color: var(--danger); font-weight: 600; }
+  .tag {
+    display: inline-block; font-size: 11.5px; padding: 1px 7px;
+    border-radius: 5px; font-weight: 600; font-family: var(--mono);
+  }
+  .tag.teal { background: var(--accent-soft); color: var(--accent); }
+  .tag.amber { background: var(--warn-soft); color: var(--warn); }
+  .tag.red { background: var(--danger-soft); color: var(--danger); }
+  .tag.gray { background: var(--card-2); color: var(--muted); border: 1px solid var(--border); }
+  .tag.blue { background: var(--info-soft); color: var(--info); }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .pane { border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .pane.before { background: var(--card-2); }
+  .pane.after { background: var(--accent-soft); border-color: var(--accent-mid); }
+  .pane h3 { margin: 0 0 4px; font-size: 13px; font-weight: 650; }
+  .pane .cap { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+  .tree { font-family: var(--mono); font-size: 12px; line-height: 1.9; white-space: pre; margin: 0; }
+  .tree .c { color: var(--faint); }
+  .tree .hi { color: var(--accent); font-weight: 600; }
+  .tree .del { color: var(--danger); text-decoration: line-through; opacity: .65; }
+
+  ul.tight { margin: 0; padding-left: 18px; }
+  ul.tight li { margin-bottom: 6px; }
+  .callout {
+    border-left: 3px solid var(--accent-mid); background: var(--card-2);
+    padding: 12px 16px; border-radius: 0 8px 8px 0; font-size: 13px; margin: 14px 0 0;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.danger { border-left-color: var(--danger); }
+  .callout strong { font-weight: 650; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; margin-top: 6px; flex-wrap: wrap; }
+  .step {
+    flex: 1 1 150px; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; background: var(--card);
+  }
+  .step .st { font-size: 11.5px; font-family: var(--mono); color: var(--faint); margin-bottom: 3px; }
+  .step .sn { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  .step .sd { font-size: 12px; color: var(--muted); }
+  .step.done { background: var(--accent-soft); border-color: var(--accent-mid); }
+  .arrow { flex: 0 0 22px; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 15px; }
+  .foot { color: var(--faint); font-size: 12px; text-align: center; margin-top: 44px; }
+  @media (max-width: 860px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .split { grid-template-columns: 1fr; }
+    .arrow { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="badge">C1 已完成 · 四道门禁全绿</div>
+  <h1>对话从机器人界面里独立出来</h1>
+  <p class="lede">
+    把「一个角色一条对话流」升级为「一个角色多条并列对话线程」，为「对话 / 角色 / 渠道」三层信息架构打地基。
+    C1 只动后端数据层 —— 老接口签名与响应形状不变，是纯增量改造：<strong>老的 71 条基线探针逐字段 0 差异</strong>。
+  </p>
+</header>
+
+<section>
+  <div class="kpis">
+    <div class="kpi ok">
+      <div class="k">路由条目</div>
+      <div class="v">45 <small>→</small> 51</div>
+      <div class="n">新增 6 条线程接口</div>
+    </div>
+    <div class="kpi ok">
+      <div class="k">基线探针</div>
+      <div class="v">71 <small>→</small> 80</div>
+      <div class="n">老 71 条：0 处差异</div>
+    </div>
+    <div class="kpi ok">
+      <div class="k">memory.js 导出</div>
+      <div class="v">61 <small>→</small> 62</div>
+      <div class="n">只加 threads，零移除</div>
+    </div>
+    <div class="kpi ok">
+      <div class="k">Lint 问题数</div>
+      <div class="v">92</div>
+      <div class="n">与拆分前完全相同</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">01</span>存储结构：从「一条线」到「多线程」</h2>
+  <p class="sub">
+    迁移是一次性、幂等的，且<strong>不删任何老文件</strong> —— 出问题能原路退回。
+  </p>
+  <div class="split">
+    <div class="pane before">
+      <h3>迁移前</h3>
+      <p class="cap">一个角色一个文件，所有对话混在同一条线</p>
+      <pre class="tree">memory/BOT1/
+├─ sessions.jsonl        <span class="c">← 一条会话线</span>
+├─ branches/
+│   ├─ 1788359061065.jsonl   <span class="c">← 分叉的尾巴</span>
+│   └─ main-1788263000001.jsonl
+├─ persona.md  plot.md  content.md …
+└─ master_sender.json    <span class="c">← QQ 相关</span></pre>
+    </div>
+    <div class="pane after">
+      <h3>迁移后</h3>
+      <p class="cap">每条线程一个文件，索引记录元数据</p>
+      <pre class="tree">memory/BOT1/
+├─ <span class="hi">threads/</span>
+│   ├─ <span class="hi">index.json</span>            <span class="c">← 索引 + lastTs 取号器</span>
+│   └─ <span class="hi">1788859818695.jsonl</span>  <span class="c">← 每文件一条线程</span>
+├─ <span class="del">sessions.jsonl</span>         <span class="c">← 保留，不再写入</span>
+├─ <span class="del">branches/</span>              <span class="c">← 保留，只读归档</span>
+└─ persona.md  plot.md  content.md …</pre>
+    </div>
+  </div>
+  <div class="callout">
+    <strong>为什么渠道与对端不铺成目录？</strong>
+    原方案设想的是 <code>sessions/&lt;channelId&gt;/&lt;peerId&gt;/</code>。改成把 <code>channel</code> / <code>peer</code>
+    收进线程索引的<strong>字段</strong>后，目录固定两层：未来再加维度只需加字段，
+    <strong>不用改目录结构，也不用再迁一次数据</strong>。这一步顺带完成了《角色化改造方案》的 B3。
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">02</span>真实数据迁移结果</h2>
+  <p class="sub">在沙箱实例上跑的是真实数据：<code>memory/BOT1</code> 共 164 条消息 + 2 个分支文件。</p>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th style="width:74px">线程 id</th><th>标题（自动生成）</th><th style="width:72px">条数</th><th style="width:96px">origin</th><th style="width:110px">来源</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="mono">1788859818695</td>
+          <td>你今天做什么去了</td>
+          <td><strong>160</strong></td>
+          <td><span class="tag teal">migrated</span></td>
+          <td>原 <code>sessions.jsonl</code></td>
+        </tr>
+        <tr>
+          <td class="mono">1788359061065</td>
+          <td>分支 @ 2026-09-02 14:24</td>
+          <td>3</td>
+          <td><span class="tag gray">fork</span></td>
+          <td><code>branches/</code> 归档</td>
+        </tr>
+        <tr>
+          <td class="mono">1788263000001</td>
+          <td>分支 @ 2026-09-01 11:43</td>
+          <td>1</td>
+          <td><span class="tag gray">fork</span></td>
+          <td><code>branches/</code> 归档</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <strong>零丢失已核对：</strong>老接口 <code>GET /api/memory/BOT1/sessions</code> 返回
+    <strong>164 条 = 160 + 3 + 1</strong>；标题是自动从首条用户消息截取的，无需人工命名。
+    连续两次请求线程数稳定（5 → 5），迁移幂等。
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">03</span>设计核心：两种读法，不能一刀切</h2>
+  <p class="sub">
+    <code>getRecentSessions</code> 全仓有 7 个调用点。逐一核对后确认 ——
+    <strong>只有 1 处（对话上下文）该跟着线程走</strong>，其余 6 处都该看「这个角色的全部经历」。
+  </p>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th style="width:150px">调用点</th><th>用途</th><th style="width:130px">读法</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="mono">chatWithBot</td><td>对话上下文</td><td><span class="tag teal">单线程</span></td></tr>
+        <tr><td class="mono">hbFire</td><td>心跳主动发言的语境</td><td><span class="tag gray">跨线程</span></td></tr>
+        <tr><td class="mono">管理员总结</td><td>总结整个角色</td><td><span class="tag gray">跨线程</span></td></tr>
+        <tr><td class="mono">genBotMoments</td><td>提炼精彩时刻</td><td><span class="tag gray">跨线程</span></td></tr>
+        <tr><td class="mono">read_sessions</td><td>管理员工具</td><td><span class="tag gray">跨线程</span></td></tr>
+        <tr><td class="mono">memory.js:552</td><td>蒸馏人格核心卡</td><td><span class="tag gray">跨线程</span></td></tr>
+        <tr><td class="mono">memory.js:714</td><td>seed 空检查</td><td><span class="tag gray">跨线程</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    于是 <code>getRecentSessions</code> 可以<strong>保持原签名、原语义</strong>（= 跨线程归并），
+    那 6 处行为零变化；只有对话那一路改用新的 <code>threads.readThreadMessages()</code>。
+    <strong>这就是老 71 条探针能逐字段零变化的原因。</strong>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">04</span>踩到并修掉的两个坑</h2>
+  <div class="card" style="margin-bottom:14px">
+    <h3 style="margin:0 0 6px;font-size:14px">① 按 <code>updatedAt</code> 取最大，会把「分支」误判成当前对话 <span class="tag red">真 bug</span></h3>
+    <p style="margin:0 0 8px;color:var(--muted);font-size:13px">
+      旧 fork 的语义是「主会话截断到分叉点，之后内容存进 <code>branches/</code>」——
+      也就是说<strong>分支里的时间戳必然晚于被截断的主会话</strong>。迁移后若按更新时间排序取最大，
+      选出来的是分支，对话上下文直接跑到分支上去了。
+    </p>
+    <p style="margin:0;font-size:13px">
+      修法：索引里显式记录 <code>defaultThreadId</code>，迁移时指定为原主会话；
+      此后「在哪个线程说话，哪条就是当前线程」。单测专门构造了这个反例，真机上 160 条的主会话也正确当选。
+    </p>
+  </div>
+  <div class="card">
+    <h3 style="margin:0 0 6px;font-size:14px">② <code>.gitignore</code> 的 <code>memory/</code> 规则会吞掉 <code>lib/memory/</code> <span class="tag red">会导致提交残缺</span></h3>
+    <p style="margin:0 0 8px;color:var(--muted);font-size:13px">
+      未锚定的 <code>memory/</code> 匹配任意层级的同名目录。它把本次新增的
+      <code>lib/memory/threads.js</code> 一起忽略掉了 —— 提交上去的代码里
+      <code>require('./memory/threads')</code> 会直接炸。
+    </p>
+    <p style="margin:0;font-size:13px">
+      修法：改成 <code>/memory/</code> 锚定到仓库根（<code>/avatars/</code>、<code>/logs/</code> 同样处理），
+      并显式补一条 <code>/.workbuddy/memory/</code> 保住原有的忽略行为。
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">05</span>验收证据</h2>
+  <p class="sub">四道门禁全绿。最强的一条是最后一行。</p>
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th style="width:190px">门禁</th><th>结果</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>baseline:check</code></td><td class="ok">80 / 80 探针逐条对齐</td></tr>
+        <tr><td><code>lint</code></td><td class="ok">0 errors / 92 warnings —— 与拆分前条数完全相同</td></tr>
+        <tr><td><code>test</code></td><td class="ok">47 个 · 45 通过 · 0 失败 · 2 todo（todo 是批 4 的已知问题）</td></tr>
+        <tr><td><code>audit:regex</code></td><td class="ok">老 30 条正则全部等价表达 + 3 条有意新增</td></tr>
+        <tr>
+          <td><strong>老探针逐字段比对</strong></td>
+          <td class="ok">老的 71 条：状态码 / 响应结构 / 请求头 / 捕获值 <strong>0 处差异</strong>　→ C1 是纯增量</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">06</span>真机验证（沙箱实例 · 模型可用 / QQ 断开）</h2>
+  <p class="sub">真实数据 + 真实模型，不是单测。</p>
+  <div class="card">
+    <table>
+      <thead><tr><th style="width:230px">验证项</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>老 <code>/sessions</code> 跨线程归并</td><td class="ok">164 条 = 160 + 3 + 1，零丢失</td></tr>
+        <tr><td>老 <code>/branches</code> 响应形状</td><td class="ok">完全不变</td></tr>
+        <tr><td>新建 / 重命名 / 删除</td><td class="ok">全部正常；删除后 404，当前线程自动回退</td></tr>
+        <tr><td><strong>fork 非破坏性</strong></td><td class="ok">从主线程派生 → 原线程 <strong>160 → 160，一条没动</strong>（旧实现会截断到 2 条）</td></tr>
+        <tr><td>迁移幂等</td><td class="ok">连续两次请求，线程数 5 → 5 不增长</td></tr>
+        <tr><td><strong>线程隔离</strong></td><td class="ok">在指定线程对话，该线程只有 2 条，<strong>没串到 160 条的主线程</strong></td></tr>
+        <tr><td>对话链路</td><td class="ok">真实模型回复正常 · <code>"pushed": false</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout warn">
+    <code>pushed: false</code> 恰好印证了最初的排查结论：后端 <code>/chat</code> 里那段「把回复推送给 QQ 主 ID」
+    在未连 QQ 时是<strong>纯空转</strong>。这正是 C3 要处理的东西。
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">07</span>接下来</h2>
+  <p class="sub">顺序是已确认的：先把前端拆成 ES Modules，再动对话 UI。</p>
+  <div class="flow">
+    <div class="step done">
+      <div class="st">C1</div>
+      <div class="sn">后端线程层</div>
+      <div class="sd">已完成</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="st">批 4′</div>
+      <div class="sn">前端模块化</div>
+      <div class="sd">app.js 3477 行 → 多文件</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="st">C2</div>
+      <div class="sn">线程 UI</div>
+      <div class="sd">侧栏双分组 + 对话页</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="st">C3</div>
+      <div class="sn">QQ 收进「渠道」</div>
+      <div class="sd">选装模块，默认关</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="step">
+      <div class="st">C4 / C5</div>
+      <div class="sn">改名「角色」并合流</div>
+      <div class="sd">164 处文案 + 并入角色化方案</div>
+    </div>
+  </div>
+  <div class="callout">
+    能看到界面变化的是 <strong>C2</strong>。C1 是它必须先落地的地基 —— 数据层稳了，
+    前端改造期间就不会有「底层还在变」的双重不确定性。
+  </div>
+</section>
+
+<p class="foot">MoonChatBot · 多线程改造 C1 竣工报告 · 2026-09-28 · 提交 2f09291</p>
+
+</div>
+</body>
+</html>

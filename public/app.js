@@ -2,9 +2,17 @@
 'use strict';
 
 let state = null;            // { bots, models }
-let view = { type: 'bot', id: null };   // 当前视图
+// 默认落在「对话」而不是角色设置：对话是日常主界面，设置是次要入口
+let view = { type: 'chat', id: null };   // 当前视图
 let lastSender = '';         // 最近一次消息发送者（方便主动回复）
 let masterSender = '';       // 主 ID：第一个对话者（主动发消息默认目标）
+
+// ---- 对话线程（多线程改造 C2：对话与角色设置分离） ----
+// _threadsCache: botId -> { threads:[meta...], defaultThreadId }
+// 由 loadThreads() 填充；侧栏「对话」组与对话页的线程条都读它。
+const _threadsCache = {};
+// 当前对话页正在看的线程 id（发消息、刷新单线程记录都按它定位）
+let _chatTid = null;
 
 const $ = (s) => document.querySelector(s);
 const main = $('#main');
@@ -132,12 +140,31 @@ async function loadState(keepView = true) {
     showOffline(state.err);
     return;
   }
-  // 校验当前选中项仍存在
-  if (view.type === 'bot' && view.id && !(state.bots || []).some(b => b.id === view.id)) view = { type: 'bot', id: null };
+  // 校验当前选中项仍存在（对话与角色共用同一份 bot 列表）
+  if ((view.type === 'bot' || view.type === 'chat') && view.id && !(state.bots || []).some(b => b.id === view.id)) view = { type: view.type, id: null };
   if (view.type === 'model' && view.id && !(state.models || []).some(m => m.id === view.id)) view = { type: 'models' };
-  if (!view.id && (view.type === 'bot') && (state.bots || []).length) view = { type: 'bot', id: state.bots[0].id };
+  if (!view.id && (view.type === 'bot' || view.type === 'chat') && (state.bots || []).length) view = { type: view.type, id: state.bots[0].id };
+  // 侧栏「对话」组要跨角色列线程，先拉齐索引再渲染
+  await loadThreads();
   renderSidebar();
   renderMain();
+}
+
+// ---------- 对话线程索引 ----------
+// 拉取全部角色的线程列表。单个角色读失败不该拖垮整个界面 → 降级为空列表。
+async function loadThreads() {
+  const bots = (state && state.bots) || [];
+  await Promise.all(bots.map(async (b) => {
+    const r = await api(`/api/memory/${b.id}/threads`);
+    _threadsCache[b.id] = r && r.ok
+      ? { threads: r.threads || [], defaultThreadId: r.defaultThreadId || null }
+      : { threads: [], defaultThreadId: null };
+  }));
+}
+
+// 线程索引（取不到时返回空壳，避免各处判空）
+function threadsOf(botId) {
+  return _threadsCache[botId] || { threads: [], defaultThreadId: null };
 }
 
 // ---------- 后端不可用提示 ----------
@@ -170,8 +197,9 @@ async function retryConnect() {
   else toast('已连接', 'ok');
 }
 
-// ---------- 左侧导航（仅机器人列表；模型/设置入口在底部） ----------
+// ---------- 左侧导航（「对话」与「角色」两组并列；模型/设置入口在底部） ----------
 function renderSidebar() {
+  renderChatList();
   const bots = state.bots || [];
   $('#bot-list').innerHTML = bots.length
     ? bots.map(b => {
@@ -191,15 +219,102 @@ function renderSidebar() {
         </span>
       </div>`;
       }).join('')
-    : '<div class="side-empty">暂无机器人</div>';
+    : '<div class="side-empty">暂无角色</div>';
   // 底部按钮状态指示（设置/模型）
   document.querySelectorAll('.side-btns .settings-btn').forEach(btn => {
     btn.classList.toggle('active', btn.getAttribute('onclick').includes(view.type));
   });
 }
 
+// 侧栏「对话」组：每个角色取最近活跃的一条线程作为快捷入口。
+// 对话在这里是一等对象（不再藏在角色页里），线程标题直接显示；
+// 该角色的全部线程在对话页左侧的线程条里切换。
+function renderChatList() {
+  const el = $('#chat-list');
+  if (!el) return;
+  const bots = state.bots || [];
+  if (!bots.length) { el.innerHTML = '<div class="side-empty">暂无角色</div>'; return; }
+  const rows = [];
+  bots.forEach(b => {
+    const t = threadsOf(b.id);
+    if (t.threads.length) rows.push({ bot: b, thread: t.threads[0], count: t.threads.length });
+  });
+  el.innerHTML = rows.length
+    ? rows.sort((a, c) => (c.thread.updatedAt || 0) - (a.thread.updatedAt || 0)).map(({ bot, thread, count }) => {
+        const dotCls = _chatting.has(bot.id) ? 'warn' : (STATUS_MAP[String(bot.runtime?.status || '').trim()] || 'off');
+        return `
+      <div class="side-item ${view.type === 'chat' && view.id === bot.id ? 'active' : ''}" onclick="openChat('${bot.id}')" title="${esc(thread.title)}">
+        <span class="dot ${dotCls}"></span>
+        <span class="side-avatar">${avatarInner(bot)}</span>
+        <span class="side-main">
+          <span class="side-name">${esc(thread.title || '新对话')}</span>
+          <span class="side-meta">${esc(bot.name || bot.id)}${count > 1 ? ' · ' + count + ' 个对话' : ''} · ${thread.msgCount || 0} 条</span>
+        </span>
+      </div>`;
+      }).join('')
+    : '<div class="side-empty">暂无对话</div>';
+}
+
+// 侧栏「对话 → ＋」：为角色开一条新对话（多个角色时先选角色）
+async function newChat() {
+  const bots = state.bots || [];
+  if (!bots.length) return toast('请先在「角色」里添加一个角色', 'err');
+  if (bots.length === 1) return openChat(bots[0].id, await createThread(bots[0].id));
+  const sel = await uiSelectBot('开始新对话 — 选择角色');
+  if (sel) openChat(sel, await createThread(sel));
+}
+
+// 角色选择弹窗（多角色场景复用）
+function uiSelectBot(title) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'ui-select-bot';
+    overlay.innerHTML = `
+      <div class="modal-card confirm-modal">
+        <div class="modal-head"><span>${esc(title || '选择角色')}</span><span class="spacer"></span></div>
+        <div class="modal-body">
+          <div class="pick-list">
+            ${(state.bots || []).map(b => `<div class="pick-item" data-id="${esc(b.id)}">
+              <span class="side-avatar">${avatarInner(b)}</span>
+              <span class="side-main"><span class="side-name">${esc(b.name || b.id)}</span><span class="side-meta">${esc(b.id)}</span></span>
+            </div>`).join('')}
+          </div>
+        </div>
+        <div class="modal-foot cf-foot"><button class="ghost" id="sb-no">取消</button></div>
+      </div>`;
+    const done = (v) => { overlay.remove(); resolve(v); };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+    overlay.querySelector('#sb-no').addEventListener('click', () => done(null));
+    overlay.querySelectorAll('.pick-item').forEach(it => it.addEventListener('click', () => done(it.dataset.id)));
+    document.body.appendChild(overlay);
+  });
+}
+
+// 新建线程（返回新线程 id；失败返回 null）
+async function createThread(botId, title) {
+  const r = await api(`/api/memory/${botId}/threads`, 'POST', { title: title || '' });
+  if (!r || !r.ok) { toast((r && r.err) || '新建对话失败', 'err'); return null; }
+  await loadThreads();
+  return r.thread.id;
+}
+
+// 进入「角色」页 —— 配置与记忆（不含对话）
 function selectBot(id) {
   view = { type: 'bot', id };
+  _chatTid = null;
+  renderSidebar(); renderMain();
+  updateAdminNow();
+}
+
+// 进入「对话」页 —— 纯对话界面（左侧线程条 + 右侧消息流）
+// 不传 tid 时用该角色最近活跃的线程
+async function openChat(id, tid) {
+  if (!_threadsCache[id]) await loadThreads();
+  const t = threadsOf(id);
+  const fallback = t.defaultThreadId || (t.threads[0] && t.threads[0].id) || null;
+  view = { type: 'chat', id, tid: tid || fallback || null };
+  _chatTid = view.tid;
   renderSidebar(); renderMain();
   updateAdminNow();
 }
@@ -232,7 +347,169 @@ function renderMain() {
   if (view.type === 'model-form') return renderModelForm(view.id);
   if (view.type === 'model') return renderModelDetail(view.id);
   if (view.type === 'settings') return renderSettings();
+  if (view.type === 'chat') return renderChatView(view.id);
   return renderBotDetail(view.id);
+}
+
+// ================= 对话页（对话与角色设置分离） =================
+// 纯对话界面：左侧线程条（切换 / 新建 / 重命名 / 删除），右侧消息流与输入框。
+// 角色配置（AppID / 密钥 / 模型绑定 / 历史条数 …）不在这里 —— 在「角色」页，
+// 对话视线里只有对话本身。
+function renderChatView(id) {
+  const b = (state.bots || []).find(x => x.id === id);
+  if (!b) {
+    main.innerHTML = `<div class="card"><div class="empty-hint">先添加一个角色，然后就能在这里与它对话。</div></div>`;
+    return;
+  }
+  const t = threadsOf(id);
+  // 线程索引还没回来 → 先出骨架，拉到后重绘（避免空白页）
+  if (!t.threads.length) {
+    main.innerHTML = `
+      <div class="chat-page">
+        <div class="chat-threads">
+          <div class="ct-head"><span class="ct-title">对话</span></div>
+          <div class="ct-list"><div class="empty-hint">加载中…</div></div>
+        </div>
+        <div class="card session-card chat-main"><div class="empty-hint">加载中…</div></div>
+      </div>`;
+    loadThreads().then(() => { if (view.type === 'chat' && view.id === id) renderMain(); });
+    return;
+  }
+
+  // 当前线程：优先用 view.tid / _chatTid，失效则退回最近活跃的一条
+  const tid = (_chatTid && t.threads.some(x => x.id === _chatTid)) ? _chatTid : t.threads[0].id;
+  _chatTid = tid; view.tid = tid;
+  const cur = t.threads.find(x => x.id === tid) || t.threads[0];
+
+  const rows = threadRowsHtml(id, tid);
+
+  main.innerHTML = `
+    <div class="chat-page">
+      <div class="chat-threads">
+        <div class="ct-head">
+          <span class="side-avatar">${avatarInner(b)}</span>
+          <span class="ct-title">${esc(b.name || b.id)}</span>
+          <span class="spacer"></span>
+          <button class="add-btn" onclick="newThread('${id}')" title="新建对话">＋</button>
+        </div>
+        <div class="ct-list" id="thread-list">${rows}</div>
+        <div class="ct-foot">
+          <button class="ghost sm" onclick="selectBot('${id}')" title="角色配置与记忆：AppID / 密钥 / 模型绑定 / 记忆库 / 心跳">⚙ 角色设置</button>
+        </div>
+      </div>
+
+      <div class="card session-card chat-main">
+        <div class="card-title">
+          <span class="chat-title-text">${esc(cur.title || '新对话')}</span>
+          <span class="chat-title-sub">${badge(b.runtime?.status)}</span>
+          <span class="spacer"></span>
+          <button class="ghost sm" onclick="expandSessions('${id}','${tid}')" title="弹出完整记录">⛶ 展开</button>
+          <button class="ghost sm" onclick="listBranchModals('${id}')" title="历史分支归档（旧版切分支留下的备份）">⑂ 归档</button>
+          <button class="ghost sm" onclick="exportSessions('${id}','${tid}')" title="导出本条对话为纯文本">⬇ 导出</button>
+          <button class="danger sm" onclick="clearThread(id,'${tid}')">清空</button>
+        </div>
+        <div class="session-list" id="session-list"><div class="empty-hint">加载中…</div></div>
+        <div class="chat-input">
+          <textarea id="f-chat" rows="1" placeholder="与 ${esc(b.name || b.id)} 说话… Enter 发送，Shift+Enter 换行" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${id}')}"></textarea>
+          <button class="primary sm" onclick="directChat('${id}')">发送</button>
+        </div>
+      </div>
+    </div>`;
+
+  loadSessions(id, tid);
+
+  // 当前线程的消息轮询（离开视图或切线程即停）
+  clearSessionTimer();
+  _sessionTimer = setInterval(() => {
+    if (view.type === 'chat' && view.id === id && _chatTid === tid && !document.hidden) loadSessions(id, tid);
+  }, 4000);
+}
+
+// 相对时间（会话列表中线程的活跃度提示）
+function fmtAgo(ts) {
+  if (!ts) return '';
+  const d = Date.now() - Number(ts);
+  if (d < 0) return '刚刚';
+  if (d < 60e3) return '刚刚';
+  if (d < 3600e3) return Math.floor(d / 60e3) + ' 分钟前';
+  if (d < 86400e3) return Math.floor(d / 3600e3) + ' 小时前';
+  if (d < 7 * 86400e3) return Math.floor(d / 86400e3) + ' 天前';
+  return new Date(Number(ts)).toLocaleDateString();
+}
+
+// 线程条行 HTML（对话页左侧 + 发消息后局部重绘共用）
+function threadRowsHtml(botId, tid) {
+  return threadsOf(botId).threads.map(x => `
+        <div class="thread-item ${x.id === tid ? 'active' : ''}" onclick="switchThread('${botId}','${x.id}')">
+          <span class="ti-title">${esc(x.title || '新对话')}</span>
+          <span class="ti-meta">${x.msgCount || 0} 条 · ${fmtAgo(x.updatedAt)}</span>
+          <span class="ti-ops">
+            <button title="重命名" onclick="event.stopPropagation();renameThreadUI('${botId}','${x.id}')">✎</button>
+            <button class="del" title="删除这条对话" onclick="event.stopPropagation();delThread('${botId}','${x.id}')">✕</button>
+          </span>
+        </div>`).join('');
+}
+
+// 只重绘线程条 + 侧栏（发完消息后刷新消息数与活跃时间，不重建整个视图，
+// 避免输入框失焦、消息滚动位置被重置）
+async function refreshThreadsUI(botId, tid) {
+  await loadThreads();
+  const el = $('#thread-list');
+  if (el && view.type === 'chat' && view.id === botId) el.innerHTML = threadRowsHtml(botId, tid);
+  renderSidebar();
+}
+
+// 切换当前对话线程（同角色内切换不重建视图框架，直接重绘）
+function switchThread(botId, tid) {
+  if (view.type !== 'chat' || view.id !== botId) return openChat(botId, tid);
+  view.tid = tid; _chatTid = tid;
+  renderSidebar(); renderMain();
+}
+
+// 新建一条对话并切过去
+async function newThread(botId) {
+  const tid = await createThread(botId);
+  if (!tid) return;
+  _chatTid = tid; view.tid = tid;
+  renderSidebar(); renderMain();
+}
+
+// 重命名线程
+async function renameThreadUI(botId, tid) {
+  const cur = (threadsOf(botId).threads.find(x => x.id === tid) || {}).title || '';
+  const name = await uiPrompt({ title: '重命名对话', message: '起个名字，方便在对话列表里认出它。', value: cur, okText: '保存' });
+  if (name == null) return;
+  const r = await api(`/api/memory/${botId}/threads/${tid}`, 'PUT', { title: name });
+  if (!r || !r.ok) return toast((r && r.err) || '重命名失败', 'err');
+  await loadThreads();
+  renderSidebar(); renderMain();
+}
+
+// 删除线程（至少保留一条，避免出现「无对话可用」的死状态）
+async function delThread(botId, tid) {
+  const t = threadsOf(botId);
+  if (t.threads.length <= 1) return toast('至少保留一条对话', 'err');
+  if (!(await uiConfirm({ title: '删除对话', message: '确定删除这条对话？\n其中的消息记录将一并移除，不可恢复。', okText: '删除', danger: true }))) return;
+  const r = await api(`/api/memory/${botId}/threads/${tid}`, 'DELETE');
+  if (!r || !r.ok) return toast((r && r.err) || '删除失败', 'err');
+  await loadThreads();
+  if (view.type === 'chat' && view.id === botId && _chatTid === tid) {
+    _chatTid = (threadsOf(botId).threads[0] || {}).id || null;
+    view.tid = _chatTid;
+  }
+  renderSidebar(); renderMain();
+  toast('已删除该对话', 'ok');
+}
+
+// 清空当前线程的消息（保留线程本身）
+async function clearThread(botId, tid) {
+  if (!(await uiConfirm({ title: '清空对话', message: '确定清空这条对话的全部消息？\nAI 将不再读到这些历史，此操作不可恢复。', okText: '清空', danger: true }))) return;
+  const r = await api(`/api/memory/${botId}/threads/${tid}/messages`, 'DELETE');
+  if (!r || !r.ok) return toast((r && r.err) || '清空失败', 'err');
+  await loadThreads();
+  renderSidebar();
+  if (view.type === 'chat' && view.id === botId && _chatTid === tid) loadSessions(botId, tid);
+  toast('已清空该对话', 'ok');
 }
 
 // ================= 机器人详情 =================
@@ -311,6 +588,9 @@ function renderBotDetail(id) {
   const models = state.models || [];
   const modelOpts = models.map(m => `<option value="${m.id}" ${m.id === b.modelId ? 'selected' : ''}>${esc(m.name || m.id)}</option>`).join('') || '<option value="">未绑定</option>';
   const modelName = (models.find(m => m.id === b.modelId) || {}).name || b.modelId || '未绑定';
+  // 对话线程概况（角色页顶部展示「N 个对话 · M 条消息」；对话本身在「对话」页）
+  const tinfo = threadsOf(id);
+  const totalMsgs = tinfo.threads.reduce((a, x) => a + (Number(x.msgCount) || 0), 0);
 
   const editForm = _botEditing ? `
     <div class="card profile-card editing">
@@ -383,9 +663,10 @@ function renderBotDetail(id) {
                 <span class="profile-name">${esc(b.name || b.id)}</span>
                 <span class="bot-tag">正在操作</span>
               </div>
-              <div class="profile-sub">${badge(b.runtime?.status)}<span class="profile-id">${esc(b.id)} · AppID ${esc(b.appId || '-')}</span></div>
+              <div class="profile-sub">${badge(b.runtime?.status)}<span class="profile-id">${esc(b.id)} · ${tinfo.threads.length} 个对话 · ${totalMsgs} 条消息</span></div>
             </div>
             <div class="profile-actions">
+              <button class="primary sm" onclick="openChat('${b.id}')" title="进入对话（在「对话」页管理多条对话）">💬 打开对话</button>
               <button class="ghost sm" onclick="restartBot('${b.id}')">↻ 重连</button>
               <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
               <button class="ghost sm edit-btn" onclick="toggleBotEdit()" title="编辑">✎ 编辑</button>
@@ -415,9 +696,9 @@ function renderBotDetail(id) {
   main.innerHTML = `
     ${editForm}
 
-    <div class="cards-2">
-      <div class="card mem-card">
-        <div class="card-title">记忆管理（memory/${esc(b.id)}/）
+    <!-- 记忆管理：独立全宽（对话已迁到「对话」页，不再与记忆并排） -->
+    <div class="card mem-card">
+      <div class="card-title">记忆管理（memory/${esc(b.id)}/）
           <span class="spacer"></span>
           <button class="ghost sm" onclick="distillNow('${b.id}')" title="蒸馏人格核心卡 + 生成剧情/内容摘要 + 压缩事件流">↻ 立即蒸馏</button>
           <button class="ghost sm" onclick="openUploadModal('${b.id}')">⬆ 上传</button>
@@ -459,22 +740,13 @@ function renderBotDetail(id) {
           <button class="primary sm" onclick="ingestMemory('${b.id}')">✉ AI 归档</button>
         </div>
       </div>
-      <div class="card session-card">
-        <div class="card-title">会话记录
-          <span class="spacer"></span>
-          <button class="ghost sm" onclick="expandSessions('${b.id}')" title="弹出完整会话窗口">⛶ 展开</button>
-          <button class="ghost sm" onclick="listBranchModals('${b.id}')" title="管理对话分支（回切/恢复）">⑂ 分支</button>
-          <button class="ghost sm" onclick="exportSessions('${b.id}')" title="导出为纯文本">⬇ 导出</button>
-          <button class="danger sm" onclick="clearSessions('${b.id}')">清空</button>
-        </div>
-        <div class="session-list" id="session-list"><div class="empty-hint">加载中…</div></div>
-        <div class="chat-input">
-          <textarea id="f-chat" rows="1" placeholder="直接与模型对话（使用当前人设与记忆），Enter 发送，Shift+Enter 换行…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${b.id}')}"></textarea>
-          <button class="primary sm" onclick="directChat('${b.id}')">发送</button>
-        </div>
-      </div>
-    </div>
 
+
+    <!-- 渠道：QQ 官方机器人相关（C3 将收进「渠道」选装模块，默认关闭） -->
+    <div class="sec-head">
+      <span class="sec-name">渠道</span>
+      <span class="sec-sub">QQ 官方机器人 · 主动发消息需填写目标 openid</span>
+    </div>
 
     <div class="card">
       <div class="card-title">主动发消息（单聊需填写对方的 openid）</div>
@@ -501,17 +773,13 @@ function renderBotDetail(id) {
 
   loadMemoryFiles(b.id);
   loadMemLayers(b.id);
+  // 角色页不再渲染对话（已迁到「对话」页）。这里只借跨线程归并结果拿「最近发送者 / 主 ID」，
+  // 供下方「渠道 → 主动发消息」填 openid 默认值；#session-list 不存在时会自然跳过渲染。
   loadSessions(b.id);
   refreshHeartNext(b.id);
 
   // 启动卡片底部像素波浪
   startPixelWave();
-
-  // 会话自动刷新（仅当仍停留在该机器人视图时）
-  clearSessionTimer();
-  _sessionTimer = setInterval(() => {
-    if (view.type === 'bot' && view.id === b.id && !document.hidden) loadSessions(b.id);
-  }, 4000);
 }
 
 let _scene = 'c2c';
@@ -1503,18 +1771,34 @@ async function delMemoryFile(id, key) {
   r.ok ? toast(preset ? '已清空，模板已重建' : '已删除', 'ok') : toast(r.err, 'err');
   if (r.ok) loadMemoryFiles(id);
 }
-let _sessionsCache = {}; // botId -> [{role,content,ts}] 会话缓存（供展开/导出）
+let _sessionsCache = {}; // key -> [{role,content,ts}] 消息缓存（供展开/导出）
+// 缓存键：对话页按线程存（id@tid），角色页按角色存跨线程归并结果（id）
+function cacheKey(id, tid) { return tid ? id + '@' + tid : id; }
 
-async function loadSessions(id) {
-  const r = await api(`/api/memory/${id}/sessions`);
-  const list = r.sessions || [];
-  _sessionsCache[id] = list;
-  if (r.lastSender) lastSender = r.lastSender;
-  // 主 ID：第一个对话者，主动发消息默认填入
-  if (r.masterSender) {
-    masterSender = r.masterSender;
-    const t = $('#f-target');
-    if (t && !t.value) t.value = masterSender;
+// tid 有值 → 只读该线程（对话页，对话上下文就该只看这一条）
+// tid 无值 → 跨线程归并（角色页取最近发送者 / 主 ID 用；渲染到 #session-list 时该元素不存在，会自然跳过）
+async function loadSessions(id, tid) {
+  let list = [];
+  if (tid) {
+    const r = await api(`/api/memory/${id}/threads/${tid}`);
+    if (!r || !r.ok) {
+      const el0 = $('#session-list');
+      if (el0) el0.innerHTML = '<div class="empty-hint">对话不存在或已删除</div>';
+      return;
+    }
+    list = r.messages || [];
+    _sessionsCache[cacheKey(id, tid)] = list;
+  } else {
+    const r = await api(`/api/memory/${id}/sessions`);
+    list = r.sessions || [];
+    _sessionsCache[id] = list;
+    if (r.lastSender) lastSender = r.lastSender;
+    // 主 ID：第一个对话者，主动发消息默认填入
+    if (r.masterSender) {
+      masterSender = r.masterSender;
+      const t = $('#f-target');
+      if (t && !t.value) t.value = masterSender;
+    }
   }
   const el = $('#session-list');
   if (!el) return;
@@ -1528,8 +1812,8 @@ async function loadSessions(id) {
         <div class="bubble md">${md(s.content)}
           <div class="time">${new Date(s.ts).toLocaleString()}
             <span class="s-ops">
-              <button class="ghost sm del" onclick="deleteSessionItem('${id}','${s.ts}')" title="删除本条（AI 将不再读到）">✕</button>
-              <button class="ghost sm" onclick="forkSessionAt('${id}','${s.ts}')" title="从本条开始新分支（后续对话转存分支，本条继续）">⑂</button>
+              <button class="ghost sm del" onclick="deleteSessionItem('${id}','${s.ts}','${tid || ''}')" title="删除本条（AI 将不再读到）">✕</button>
+              <button class="ghost sm" onclick="forkSessionAt('${id}','${s.ts}','${tid || ''}')" title="从本条派生一条新对话（本条及其之前的消息复制过去，原对话不动）">⑂</button>
             </span>
           </div>
         </div>
@@ -1557,14 +1841,16 @@ async function loadSessions(id) {
   }
 }
 
-// ---- 面板直接对话 ----
+// ---- 面板直接对话（在对话页的当前线程里说话） ----
 async function directChat(id) {
   const content = $('#f-chat').value.trim();
   if (!content) return toast('请输入内容', 'err');
+  // 定位当前线程：对话页用 _chatTid；不在对话页时不传，由后端回退到默认线程
+  const tid = (view.type === 'chat' && view.id === id) ? _chatTid : null;
   const btn = document.querySelector('.chat-input .primary');
   if (btn) { btn.disabled = true; btn.textContent = '思考中…'; }
 
-  // 标记该机器人「正在对话」→ 侧栏黄点
+  // 标记该角色「正在对话」→ 侧栏黄点
   _chatting.add(id);
   renderSidebar();
 
@@ -1580,11 +1866,13 @@ async function directChat(id) {
   if (listEl) listEl.scrollTop = listEl.scrollHeight;
 
   try {
-    const r = await api(`/api/bots/${id}/chat`, 'POST', { content });
+    const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
     if (r.ok) {
       $('#f-chat').value = '';
       toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok');
-      loadSessions(id);
+      await loadSessions(id, tid);
+      // 消息数与活跃时间变了 → 局部刷新线程条与侧栏（不重建视图，保住输入焦点）
+      if (tid) await refreshThreadsUI(id, tid);
     } else {
       toast('对话失败: ' + r.err, 'err');
     }
@@ -1597,12 +1885,13 @@ async function directChat(id) {
   }
 }
 
-// ---- 会话记录展开（独立弹窗卡片，完整展示全部记录） ----
-function expandSessions(id) {
+// ---- 会话记录展开（独立弹窗卡片，完整展示指定线程的全部记录） ----
+function expandSessions(id, tid) {
   const old = $('#session-modal');
   if (old) old.remove();   // 防叠加：重开前先清掉旧的会话弹窗
-  const list = _sessionsCache[id] || [];
+  const list = _sessionsCache[cacheKey(id, tid)] || [];
   const bot = (state.bots || []).find(x => x.id === id);
+  const th = tid ? threadsOf(id).threads.find(x => x.id === tid) : null;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'session-modal';
@@ -1617,15 +1906,15 @@ function expandSessions(id) {
   overlay.innerHTML = `
     <div class="modal-card">
       <div class="modal-head">
-        <span>会话完整记录${bot ? ' — ' + esc(bot.name || bot.id) : ''}</span>
+        <span>会话完整记录${bot ? ' — ' + esc(bot.name || bot.id) : ''}${th ? ' · ' + esc(th.title || '') : ''}</span>
         <span class="spacer"></span>
-        <button class="ghost sm" onclick="exportSessions('${id}')">⬇ 导出</button>
+        <button class="ghost sm" onclick="exportSessions('${id}','${tid || ''}')">⬇ 导出</button>
         <button class="ghost sm" onclick="closeSessionModal()">✕ 关闭</button>
       </div>
       <div class="modal-body">${html}</div>
       <div class="modal-foot">
-        <textarea id="m-chat" rows="1" placeholder="在弹窗中直接对 ${esc(bot?.name || id)} 说话，Enter 发送…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();modalChat('${id}')}"></textarea>
-        <button class="primary sm" onclick="modalChat('${id}')">发送</button>
+        <textarea id="m-chat" rows="1" placeholder="在弹窗中直接对 ${esc(bot?.name || id)} 说话，Enter 发送…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();modalChat('${id}','${tid || ''}')}"></textarea>
+        <button class="primary sm" onclick="modalChat('${id}','${tid || ''}')">发送</button>
       </div>
     </div>`;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeSessionModal(); });
@@ -1633,7 +1922,7 @@ function expandSessions(id) {
 }
 
 // 弹窗内直接对话：发送后刷新弹窗内容（保留弹窗，含思考占位）
-async function modalChat(id) {
+async function modalChat(id, tid) {
   const ta = $('#m-chat');
   const content = ta && ta.value.trim();
   if (!content) return toast('请输入内容', 'err');
@@ -1643,12 +1932,18 @@ async function modalChat(id) {
   renderSidebar();
   // 弹窗内追加气泡（AI 回复后由刷新替换）
   try {
-    const r = await api(`/api/bots/${id}/chat`, 'POST', { content });
+    const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
     if (r.ok) {
       if (ta) ta.value = '';
-      _sessionsCache[id] = (await api(`/api/memory/${id}/sessions`)).sessions || [];
+      if (tid) {
+        const x = await api(`/api/memory/${id}/threads/${tid}`);
+        _sessionsCache[cacheKey(id, tid)] = (x && x.messages) || [];
+      } else {
+        _sessionsCache[id] = (await api(`/api/memory/${id}/sessions`)).sessions || [];
+      }
       // 刷新弹窗内容并保持底部输入条
-      expandSessions(id);
+      expandSessions(id, tid);
+      if (tid) refreshThreadsUI(id, tid);
     } else {
       toast('对话失败: ' + r.err, 'err');
     }
@@ -1664,23 +1959,27 @@ function closeSessionModal() {
   if (m) m.remove();
 }
 
-// ---- 删除单条会话（AI 将不再读到这条；用于清掉 AI 拒答/答偏的记录） ----
-async function deleteSessionItem(id, ts) {
+// ---- 删除单条消息（AI 将不再读到这条；用于清掉 AI 拒答/答偏的记录） ----
+async function deleteSessionItem(id, ts, tid) {
   if (!(await uiConfirm({ title: '删除会话记录', message: '删除这条记录？\n删除后对话历史与 AI 都将读不到它。', okText: '删除', danger: true }))) return;
   const r = await api(`/api/memory/${id}/sessions/${ts}`, 'DELETE');
-  if (r.ok) { toast('已删除本条记录', 'ok'); loadSessions(id); }
+  if (r.ok) { toast('已删除本条记录', 'ok'); loadSessions(id, tid); if (tid) refreshThreadsUI(id, tid); }
   else toast('删除失败: ' + (r.err || ''), 'err');
 }
 
-// ---- 从本条开始新分支：本条及之前保留为主会话，这条之后的对话移入分支文件 ----
-async function forkSessionAt(id, ts) {
-  if (!(await uiConfirm({ title: '开启新分支', message: '从这里开启新分支？\n• 本条及之前保留为主会话继续对话\n• 本条之后的全部对话将移入分支文件（可随时回切恢复）\n• AI 此后只读到主会话内容', okText: '开启分支' }))) return;
-  const r = await api(`/api/memory/${id}/sessions/branch`, 'POST', { fromTs: Number(ts) });
-  if (r.ok) { toast(r.savedLines ? `分支已建：后续 ${r.savedLines} 条已转存` : '分支点已就位', 'ok'); loadSessions(id); }
-  else toast('分支失败: ' + (r.err || ''), 'err');
+// ---- 从本条派生一条新对话：本条及其之前的消息复制过去，原对话一条都不动 ----
+// （多线程改造后是非破坏性派生；旧版「主会话截断、尾巴转存分支」的语义已废弃）
+async function forkSessionAt(id, ts, tid) {
+  if (!tid) return toast('请先进入对话页再派生', 'err');
+  if (!(await uiConfirm({ title: '派生新对话', message: '从这里派生一条新对话？\n• 本条及其之前的消息会复制到新对话\n• 原对话保持原样，一条都不会动\n• 之后可在左侧对话列表自由切换', okText: '派生' }))) return;
+  const r = await api(`/api/memory/${id}/threads/${tid}/fork`, 'POST', { fromTs: Number(ts) });
+  if (!r || !r.ok) return toast('派生失败: ' + ((r && r.err) || ''), 'err');
+  await loadThreads();
+  toast(`已派生新对话（复制 ${r.copied} 条）`, 'ok');
+  openChat(id, r.threadId);
 }
 
-// ---- 分支管理：列出 / 恢复 ----
+// ---- 历史分支归档（旧版「切分支」留下的 branches/*.jsonl，可恢复成独立对话） ----
 async function listBranchModals(id) {
   const r = await api(`/api/memory/${id}/branches`);
   if (!r.ok) return toast('读取分支失败: ' + (r.err || ''), 'err');
@@ -1709,27 +2008,34 @@ async function listBranchModals(id) {
 
 function closeBranchModal() { const m = $('#branch-modal'); if (m) m.remove(); }
 
+// 归档分支 → 恢复成一条独立对话（不再「切回主会话」：多线程下对话是并列的）
 async function restoreBranchById(id, fromTs) {
-  if (!(await uiConfirm({ title: '恢复分支', message: '恢复这一分支为主会话？\n当前主会话将被转存为新的分支备份。', okText: '恢复' }))) return;
+  if (!(await uiConfirm({ title: '恢复归档', message: '把这段归档恢复成一条独立对话？\n恢复后它会出现在左侧对话列表里，可随时切换。', okText: '恢复' }))) return;
   const r = await api(`/api/memory/${id}/branches/restore`, 'POST', { fromTs });
-  if (r.ok) { toast('已切换到该分支', 'ok'); closeBranchModal(); loadSessions(id); }
-  else toast('恢复失败: ' + (r.err || ''), 'err');
+  if (!r || !r.ok) return toast('恢复失败: ' + ((r && r.err) || ''), 'err');
+  closeBranchModal();
+  await loadThreads();
+  toast(`已恢复为独立对话（${r.count} 条）`, 'ok');
+  openChat(id, r.threadId);
 }
 
-// ---- 会话记录导出为纯文本 ----
-function exportSessions(id) {
-  const list = _sessionsCache[id] || [];
-  if (!list.length) return toast('暂无会话记录可导出', 'err');
+// ---- 会话记录导出为纯文本（导出指定线程；不传则导出跨线程归并结果） ----
+function exportSessions(id, tid) {
+  const list = _sessionsCache[cacheKey(id, tid)] || [];
+  if (!list.length) return toast('暂无对话记录可导出', 'err');
   const bot = (state.bots || []).find(x => x.id === id);
+  const th = tid ? threadsOf(id).threads.find(x => x.id === tid) : null;
   const lines = list.map(s => {
-    const who = s.role === 'assistant' ? (bot?.name || '机器人') : '用户';
+    const who = s.role === 'assistant' ? (bot?.name || '角色') : '用户';
     return `[${new Date(s.ts).toLocaleString()}] ${who}\n${s.content}`;
   });
-  const text = `${bot?.name || id} 会话记录（${list.length} 条）\n${'='.repeat(36)}\n\n${lines.join('\n\n---\n\n')}\n`;
+  const head = `${bot?.name || id}${th ? ' · ' + (th.title || '') : ''} 对话记录（${list.length} 条）`;
+  const text = `${head}\n${'='.repeat(36)}\n\n${lines.join('\n\n---\n\n')}\n`;
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${id}-会话记录-${new Date().toISOString().slice(0, 10)}.txt`;
+  const safeTitle = th ? String(th.title || '').replace(/[\\/:*?"<>|]/g, '_') : '';
+  a.download = `${id}${safeTitle ? '-' + safeTitle : ''}-对话记录-${new Date().toISOString().slice(0, 10)}.txt`;
   document.body.appendChild(a);
   a.click();
   URL.revokeObjectURL(a.href);
@@ -1782,7 +2088,7 @@ function adminToggleStream(btn) {
 }
 
 function currentBotId() {
-  if (view.type === 'bot' && view.id) return view.id;
+  if ((view.type === 'bot' || view.type === 'chat') && view.id) return view.id;
   return (state.bots || [])[0]?.id || '';
 }
 function currentBotName() {
@@ -2599,12 +2905,8 @@ async function delBot(id) {
   await loadState();
 }
 
-async function clearSessions(id) {
-  if (!(await uiConfirm({ title: '清空会话记录', message: '确定清空该机器人全部会话记录？\nAI 将不再读到这些历史对话，此操作不可恢复。', okText: '清空', danger: true }))) return;
-  const r = await api(`/api/memory/${id}/sessions`, 'DELETE');
-  r.ok ? toast('已清空', 'ok') : toast(r.err, 'err');
-  loadSessions(id);
-}
+// 说明：旧的全量「清空会话记录」入口已随会话卡一并移除 ——
+// 多线程下清空是「针对某条对话」的操作，见 clearThread(botId, tid)。
 
 async function sendMsg(id) {
   const targetId = $('#f-target').value.trim();
@@ -3467,6 +3769,16 @@ function hexA(hex, a) {
 
 // ---------- 事件绑定 ----------
 $('#btn-add-bot').addEventListener('click', () => { view = { type: 'bot-form' }; renderMain(); });
+// 侧栏「对话 → ＋」：新建一条对话并直接进入
+$('#btn-new-chat').addEventListener('click', () => newChat());
+
+// ---------- 内联 onclick 依赖的对话页函数 ----------
+// 顶层 function 声明在当前（非模块）脚本里本就在全局作用域，内联 onclick 可以直接调到；
+// 这里显式挂一次有两个作用：
+//   ① lint 的 no-unused-vars 不把它们误判成死代码 —— 模板字符串里的 onclick 不算引用；
+//   ② 为批 4′（app.js 拆 ES Modules）预留 —— 那时顶层声明不再挂 window，
+//      所有内联 onclick 都会整体失效，需要统一改成事件委托。届时这行即可移除。
+Object.assign(window, { switchThread, newThread, renameThreadUI, delThread, clearThread });
 // 模型入口已在底部按钮（openModels），不再绑定已删除的 #btn-add-model
 $('#btn-refresh').addEventListener('click', loadState);
 $('#btn-theme').addEventListener('click', toggleTheme);

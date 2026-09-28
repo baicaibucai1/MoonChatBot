@@ -55,8 +55,8 @@ let router;
 before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
-  test('条目总数稳定在 51（批 1 的 45 条 + 多线程 C1 的 6 条线程路由）', () => {
-    assert.equal(router.routes.length, 51);
+  test('条目总数稳定在 52（批 1 的 45 条 + C1 的 6 条线程路由 + C2 的 1 条清空路由）', () => {
+    assert.equal(router.routes.length, 52);
   });
 
   test('每条路由只声明 exact 或 re 之一，且方法字段合法', () => {
@@ -115,6 +115,16 @@ describe('路由表结构', () => {
     assert.ok(iList >= 0, '应存在 /threads 列表条目');
     assert.ok(iFork < iOne, `/threads/:tid/fork 必须排在 /threads/:tid 之前（当前 ${iFork} vs ${iOne}）`);
   });
+
+  test('threads 域：清空消息条目排在 /threads/:tid 之前', () => {
+    const idx = (pred) => router.routes.findIndex(pred);
+    // 用源码「以 /messages$ 结尾」定位，避开正则源码里 \\d 的转义细节
+    const iMsgs = idx((r) => r.re && clean(r).endsWith('/messages$'));
+    const iOne = idx((r) => r.re && clean(r).endsWith(String.raw`/threads/(\d{1,20})$`));
+    assert.ok(iMsgs >= 0, '应存在 /threads/:tid/messages 条目');
+    assert.ok(iOne >= 0, '应存在 /threads/:tid 条目');
+    assert.ok(iMsgs < iOne, `/threads/:tid/messages 必须排在 /threads/:tid 之前（当前 ${iMsgs} vs ${iOne}）`);
+  });
 });
 
 describe('参数提取', () => {
@@ -157,6 +167,11 @@ describe('参数提取', () => {
     assert.equal(m[2], '1759000000000');
 
     assert.ok(router.matchEntry('POST', '/api/memory/BOT1/threads/1759000000000/fork'), '应命中 fork 条目');
+    const em = router.matchEntry('DELETE', '/api/memory/BOT1/threads/1759000000000/messages');
+    assert.ok(em && em.re, '应命中清空消息条目');
+    const mm = em.re.exec('/api/memory/BOT1/threads/1759000000000/messages');
+    assert.equal(mm[1], 'BOT1');
+    assert.equal(mm[2], '1759000000000');
     assert.equal(router.matchEntry('PUT', '/api/memory/BOT1/threads/abc'), null, 'tid 非数字应落空');
     assert.equal(router.matchEntry('PUT', '/api/memory/BOT1/threads/a.b'), null);
   });
