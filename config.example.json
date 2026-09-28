@@ -5,7 +5,7 @@
       "id": "BOT1",
       "name": "我的机器人",
       "appId": "你的AppID",
-      "appSecret": "env:QQBOT_SECRET 或直接填密钥",
+      "appSecret": "env:MOONCHATBOT_SECRET 或直接填密钥",
       "modelId": "siliconflow",
       "sandbox": true,
       "enabled": true,

@@ -1,5 +1,5 @@
 {
-  "name": "qqbot-manager",
+  "name": "moonchatbot",
   "version": "1.0.0",
   "description": "QQ 机器人管理面板：多机器人 + 记忆文档 + 模型接入",
   "main": "server.js",

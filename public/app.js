@@ -1,4 +1,4 @@
-// QQBOT 控制台 — 前端逻辑（左侧导航 + 主区上下文）
+// MoonChatBot 控制台 — 前端逻辑（左侧导航 + 主区上下文）
 'use strict';
 
 let state = null;            // { bots, models }
@@ -2627,7 +2627,7 @@ function renderBotForm(id) {
       </div>
       <div class="grid-2" style="margin-top:12px">
         <div class="field"><label>AppID</label><input id="f-appid" type="text" placeholder="如 1905280605"></div>
-        <div class="field"><label>AppSecret（.env 变量引用或直接填）</label><input id="f-secret" type="password" placeholder="env:QQBOT_SECRET 或密钥"></div>
+        <div class="field"><label>AppSecret（.env 变量引用或直接填）</label><input id="f-secret" type="password" placeholder="env:MOONCHATBOT_SECRET 或密钥"></div>
       </div>
       <div class="grid-3" style="margin-top:12px">
         <div class="field"><label>绑定模型</label><select id="f-model">${modelOpts}</select></div>

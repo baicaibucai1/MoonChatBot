@@ -1,4 +1,4 @@
-// QQBOT Console - one-shot setup
+// MoonChatBot - one-shot setup
 // 1) copies example configs to real ones when missing (never overwrites)
 // 2) verifies Node.js / deps are ready
 // Usage: node setup.js   (also wired to `npm run setup`)
@@ -22,7 +22,7 @@ function copyIfMissing(src, dst, label) {
 }
 
 console.log('');
-console.log('== QQBOT Console · one-shot setup ==');
+console.log('== MoonChatBot · one-shot setup ==');
 console.log('');
 
 // 0) Node version sanity

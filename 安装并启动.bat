@@ -1,9 +1,9 @@
 @echo off
 rem ============================================================
-rem  QQBOT Console - one-click: install deps -> prepare config -> run
+rem  MoonChatBot - one-click: install deps -> prepare config -> run
 rem  Double-click this file after cloning / downloading from GitHub.
 rem ============================================================
-title QQBOT Console - Install & Run
+title MoonChatBot - Install & Run
 cd /d "%~dp0"
 
 where node >nul 2>nul
