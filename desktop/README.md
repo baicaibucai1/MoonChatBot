@@ -181,6 +181,27 @@ WebView2 数据目录 `%LOCALAPPDATA%\com.baicaibucai.moonchatbot\EBWebView`
 
 ---
 
+## 0.2.0 改名后复核（2026-09-28）
+
+项目更名为 MoonChatBot、`identifier` 一并变更后重新打包，产物 `MoonChatBot_0.2.0_x64-setup.exe`（1.2 MB）：
+
+| 检查项 | 结果 |
+|---|---|
+| `pack.mjs` 全流程 | ✅ 退出码 0 |
+| `check-installer.mjs` | ✅ PASS 7 / FAIL 0 |
+| 安装清单主程序名 | ✅ `moonchatbot.exe` |
+| 二进制内嵌窗口标题 | ✅ `MoonChatBot 控制台`（旧标题无残留） |
+| 二进制内嵌 identifier | ✅ `com.baicaibucai.moonchatbot`（旧值无残留） |
+
+> 上一节「桌面壳加载」是 0.1.0 时期的记录，验证的是交互式会话下的窗口渲染；
+> 其结论（跨域通路、WebView2 缓存命中、窗口尺寸 1280×820）不受改名影响。
+> 本次未重做 GUI 实测 —— 非交互式会话下窗口会被最小化（见上节末尾注意），此环境验不了。
+>
+> ⚠️ `identifier` 变更意味着 Windows 把 0.2.0 视为**另一个应用**：
+> 已装 0.1.0 的机器需要先卸载旧版再装新版，不能原地升级。
+
+---
+
 ## 已知限制
 
 | 限制 | 说明 |
