@@ -756,6 +756,30 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .scene-pick .chip:hover { border-color: var(--accent-glow); transform: translateY(-1px); }
 .scene-pick .chip.active { background: var(--accent-soft); border-color: var(--accent); color: color-mix(in srgb, var(--accent) 60%, #000); font-weight: 600; }
 
+/* 「渠道」页：连接 QQ 的引导行（开关 + 一句「不连也行」的说明）
+   align-items: flex-start 是为了让副说明能换行而不把开关挤到中间 */
+.chan-lead {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 2px; margin-bottom: 14px;
+  border-top: 1px dashed var(--line-2);
+  border-bottom: 1px dashed var(--line-2);
+}
+.chan-lead .switch { margin-top: 1px; }
+.chan-lead-text { font-size: 12px; color: var(--text); font-weight: 600; line-height: 1.5; }
+.chan-lead-sub { display: block; font-size: 11px; color: var(--text-faint); font-weight: 400; }
+.chan-foot { margin-top: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chan-hint { font-size: 11px; color: var(--text-faint); }
+.chan-hint code { background: var(--accent-soft); color: color-mix(in srgb, var(--accent) 58%, #000); border-radius: 4px; padding: 1px 5px; }
+
+/* 表单底部的一句说明（设置弹窗 / 添加角色表单）：指向「渠道」，避免用户在错误的地方找 QQ 配置 */
+.frm-hint {
+  margin-top: 14px; padding-top: 10px;
+  border-top: 1px dashed var(--line-2);
+  font-size: 11px; color: var(--text-faint); line-height: 1.6;
+}
+/* 「这个角色还没有对话」空状态里的居中操作按钮 */
+.empty-thread-actions { display: flex; justify-content: center; padding-top: 4px; }
+
 /* 记忆库：文件开关列表 + AI 归档 */
 .mem-files { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .mem-sec-title { font-size: 12px; font-weight: 700; margin: 10px 0 6px 2px; display: flex; align-items: baseline; gap: 8px; }

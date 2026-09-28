@@ -13,6 +13,11 @@ let masterSender = '';       // 主 ID：第一个对话者（主动发消息默
 const _threadsCache = {};
 // 当前对话正在看的线程 id（发消息、刷新单线程记录都按它定位）
 let _chatTid = null;
+// 「首次为空时自动建一条默认对话」的状态：botId -> 'working' | 'done' | 'failed'
+// 背景：GET /api/memory/:id/threads 刻意不建线程（读接口不留副作用），所以全新角色的
+// 线程列表本来就该是空的。没有这个状态机，「拉一次索引 → 还是空」会导致永久停在
+// 「对话加载中…」，连「＋ 新建对话」都渲染不出来 —— 新角色等于没有对话页。
+const _threadBootstrap = new Map();
 
 // ---- 角色卡上的标签页（多线程改造 C2 第二版） ----
 // 左侧只有角色列表；点进一个角色后，主区顶部常驻角色卡，
@@ -214,9 +219,12 @@ function renderSidebar() {
   $('#bot-list').innerHTML = bots.length
     ? bots.map(b => {
         const st = String(b.runtime?.status || '').trim();
+        // 未连 QQ 的角色：它的状态跟 QQ 无关，别把「未启动」渲染成橙点 ——
+        // 那会让一个纯粹没接 QQ 的角色看起来像出了故障。统一灰点 + 直说原因。
+        const qqOff = b.enabled !== true;
         // 已连接 → 绿；正在对话 → 黄（优先显示）；断开/错误 → 红；其余 → 橙
-        const dotCls = _chatting.has(b.id) ? 'warn' : (STATUS_MAP[st] || 'off');
-        const tip = _chatting.has(b.id) ? '正在对话…' : (st || '未知状态');
+        const dotCls = _chatting.has(b.id) ? 'warn' : (qqOff ? 'off' : (STATUS_MAP[st] || 'off'));
+        const tip = _chatting.has(b.id) ? '正在对话…' : (qqOff ? '未连接 QQ（不影响面板内对话）' : (st || '未知状态'));
         const m = (state.models || []).find(x => x.id === b.modelId);
         const modelTxt = m ? m.name || m.id : (b.modelId ? b.modelId : '未绑定模型');
         return `
@@ -224,7 +232,7 @@ function renderSidebar() {
         <span class="dot ${dotCls}" title="${esc(tip)}"></span>
         <span class="side-avatar">${avatarInner(b)}</span>
         <span class="side-main">
-          <span class="side-name">${esc(b.name || b.id)}${b.enabled ? '' : ' <i class="side-off">停用</i>'}</span>
+          <span class="side-name">${esc(b.name || b.id)}${qqOff ? ' <i class="side-off">未连QQ</i>' : ''}</span>
           <span class="side-meta">${esc(b.id)} · ${esc(modelTxt)}</span>
         </span>
       </div>`;
@@ -311,14 +319,45 @@ function renderMain() {
 // 主区结构：顶部角色卡（常驻）→ 角色卡上的标签页 → 标签页内容。
 // 下面各 renderXxxTabHtml 只负责「内容区」的 HTML；数据加载由 renderBotDetail 按当前 tab 分派。
 
+// 首次发现某角色一条对话都没有 → 主动建一条默认对话（幂等，按 _threadBootstrap 防重入）。
+// 建完/失败都重拉索引并重绘；失败会落到下面 emptyThreadsCard 的可手动新建空状态，
+// 不会卡在中间态，也不会反复重试刷请求。
+function ensureDefaultThread(botId) {
+  if (_threadBootstrap.has(botId)) return;
+  _threadBootstrap.set(botId, 'working');
+  const done = (ok) => {
+    _threadBootstrap.set(botId, ok ? 'done' : 'failed');
+    loadThreads().then(() => { if (inChatTab(botId)) renderMain(); });
+  };
+  api(`/api/memory/${botId}/threads`, 'POST', { title: '' })
+    .then((r) => done(!!(r && r.ok)))
+    .catch(() => done(false));
+}
+
+// 无对话时的内容区：正在建 → 骨架；建失败或已被清空 → 给一个能手动新建的落点
+function emptyThreadsCard(id, pending) {
+  if (pending) return '<div class="card"><div class="empty-hint">正在准备第一条对话…</div></div>';
+  return `<div class="card">
+      <div class="empty-hint">这个角色还没有对话。</div>
+      <div class="empty-thread-actions"><button class="primary sm" onclick="newThread('${id}')">＋ 新建对话</button></div>
+    </div>`;
+}
+
 // 「对话」标签页：左侧线程条（切换 / 新建 / 重命名 / 删除），右侧消息流与输入框
 function renderChatTabHtml(b) {
   const id = b.id;
   const t = threadsOf(id);
-  // 线程索引还没回来 → 先给骨架，拉到后重绘（避免空白内容）
+  // 一条线程都没有 → 先自动补一条默认对话（见 ensureDefaultThread 的注释）
   if (!t.threads.length) {
-    loadThreads().then(() => { if (inChatTab(id)) renderMain(); });
-    return '<div class="card"><div class="empty-hint">对话加载中…</div></div>';
+    // 索引压根没拉过时不能急着建线程 —— 那会把「还没拉」误判成「一条都没有」，
+    // 于是给每个角色都白建一条。先等 loadThreads 落地（失败也会写入空索引，不会死循环）。
+    if (!(id in _threadsCache)) {
+      loadThreads().then(() => { if (inChatTab(id)) renderMain(); });
+      return '<div class="card"><div class="empty-hint">对话加载中…</div></div>';
+    }
+    const st = _threadBootstrap.get(id);
+    if (!st) { ensureDefaultThread(id); return emptyThreadsCard(id, true); }
+    return emptyThreadsCard(id, st === 'working');
   }
   // 当前线程：_chatTid 失效则退回最近活跃的一条
   const tid = (_chatTid && t.threads.some(x => x.id === _chatTid)) ? _chatTid : t.threads[0].id;
@@ -557,6 +596,11 @@ function renderBotCard(b) {
   const tinfo = threadsOf(b.id);
   const totalMsgs = tinfo.threads.reduce((a, x) => a + (Number(x.msgCount) || 0), 0);
   const streamOn = b.streamReply === true || (b.streamReply === undefined && state.streamReply === true);
+  // QQ 相关只在「已启用」时才有意义 —— 不连 QQ 的角色，卡上不该出现「沙箱测试」
+  // 这种从头到尾无从生效的标签，只留一个诚实的「未连 QQ」。
+  const qqChips = b.enabled
+    ? `${badge(b.runtime?.status)}<span class="status-chip ${b.sandbox === false ? 'ok' : 'warn'}"><span class="chip-dot ${b.sandbox === false ? 'on' : 'warn'}"></span>${b.sandbox === false ? '正式发布' : '沙箱测试'}</span>`
+    : '<span class="status-chip"><span class="chip-dot off"></span>📡 未连 QQ</span>';
   return `
     <div class="card bot-card">
       <canvas class="pixel-wave" data-accent="" data-effect="${esc(cardEffectId())}"></canvas>
@@ -573,16 +617,14 @@ function renderBotCard(b) {
             </div>
           </div>
           <div class="bc-chips">
-            ${badge(b.runtime?.status)}
-            <span class="status-chip ${b.sandbox === false ? 'ok' : 'warn'}"><span class="chip-dot ${b.sandbox === false ? 'on' : 'warn'}"></span>${b.sandbox === false ? '正式发布' : '沙箱测试'}</span>
+            ${qqChips}
             ${webEnabled(b) ? '<span class="status-chip ok"><span class="chip-dot on"></span>🌐 联网</span>' : '<span class="status-chip"><span class="chip-dot off"></span>🌐 未联网</span>'}
             <span class="status-chip"><span class="chip-icon">⚡</span>搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</span>
             ${streamOn ? '<span class="status-chip ok"><span class="chip-icon">⌨</span>流式</span>' : ''}
           </div>
         </div>
         <div class="bc-actions">
-          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑角色信息：名称 / 头像 / 模型 / 记忆条数 / 运行环境 / 联网 / 流式">⚙ 设置</button>
-          <button class="ghost sm" onclick="restartBot('${b.id}')" title="重新连接">↻ 重连</button>
+          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑角色信息：名称 / 头像 / 模型 / 记忆条数 / 联网 / 流式">⚙ 设置</button>
           <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
         </div>
       </div>
@@ -647,9 +689,17 @@ function renderMemoryTabHtml(b) {
       </div>`;
 }
 
-// 「渠道」标签页：QQ 官方机器人相关（C3 会把这块收进「渠道」选装模块，默认关闭）
+// 「渠道」标签页：QQ 官方机器人的**唯一**入口。
+//
+// 连接 QQ 不是必须的 —— 不连也能在面板里正常对话、记忆、心跳，是完整可用的形态。
+// 所以「是否连接 / 凭据 / 运行环境 / 重连 / 主动发消息」全部收在这里；
+// 角色的其它界面（创建表单、设置弹窗、角色卡）一律不再出现任何 QQ 概念。
 function renderChannelTabHtml(b) {
-  return `
+  const on = b.enabled === true;
+  const st = b.runtime?.status || '未启动';
+
+  // 主动发消息：没连 QQ 时整块换成提示，而不是给一个点了必然失败的按钮
+  const sendCard = on ? `
     <div class="card">
       <div class="card-title">主动发消息（单聊需填写对方的 openid）</div>
       <div class="send-bar">
@@ -668,7 +718,66 @@ function renderChannelTabHtml(b) {
         </div>
         <button class="primary" onclick="sendMsg('${b.id}')">发送</button>
       </div>
+    </div>` : `
+    <div class="card">
+      <div class="card-title">主动发消息</div>
+      <div class="empty-hint">未连接 QQ —— 勾选上方「连接 QQ」并保存后，才能主动发消息。</div>
     </div>`;
+
+  return `
+    <div class="card">
+      <div class="card-title">QQ 官方机器人
+        <span class="spacer"></span>
+        ${on ? badge(st) : '<span class="status-chip"><span class="chip-dot off"></span>未连接</span>'}
+      </div>
+      <div class="chan-lead">
+        <label class="switch" title="开启后本角色会登录下方的 QQ 官方机器人">
+          <input type="checkbox" id="ch-enabled" ${on ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
+        <span class="chan-lead-text">连接 QQ
+          <span class="chan-lead-sub">开启后本角色会以 AppID + AppSecret 登录 QQ 官方机器人，收发单聊 / 群聊 / 频道消息。不开启也不影响面板里的对话、记忆与心跳 —— 不连 QQ 是完整可用的形态。</span>
+        </span>
+      </div>
+      <div class="grid-3">
+        <div class="field"><label>AppID</label><input id="ch-appid" type="text" value="${esc(b.appId || '')}" placeholder="如 1905280605"></div>
+        <div class="field"><label>AppSecret（env: 变量或直接填）</label><input id="ch-secret" type="password" value="${esc(b.appSecret || '')}"></div>
+        <div class="field"><label>运行环境</label><select id="ch-sandbox">
+          <option value="true" ${b.sandbox !== false ? 'selected' : ''}>沙箱（测试）</option>
+          <option value="false" ${b.sandbox === false ? 'selected' : ''}>正式</option>
+        </select></div>
+      </div>
+      <div class="chan-foot">
+        <button class="primary" onclick="saveChannel('${b.id}')">${on ? '保存并重连' : '保存'}</button>
+        ${on ? `<button class="ghost" onclick="restartBot('${b.id}')">↻ 仅重连</button>` : ''}
+        <span class="chan-hint">AppSecret 可写 <code>env:变量名</code> 引用 .env，密钥就不必落在 config.json 里。</span>
+      </div>
+    </div>
+    ${sendCard}`;
+}
+
+// 「渠道」的唯一写入口：勾选状态 + 凭据 + 运行环境一次提交。
+// 勾了「连接 QQ」却没填凭据 → 当场拦下，不写出「启用了但必然连不上」的中间态。
+// 写入后由 PUT /api/config 热重载触发 BotManager.sync()：开→连，关→断。
+async function saveChannel(id) {
+  const bots = (state.bots || []).slice();
+  const i = bots.findIndex(x => x.id === id);
+  if (i < 0) return;
+  const enabled = !!($('#ch-enabled') && $('#ch-enabled').checked);
+  const appId = $('#ch-appid').value.trim();
+  const appSecret = $('#ch-secret').value.trim();
+  if (enabled && (!appId || !appSecret)) return toast('开启 QQ 连接需要同时填写 AppID 与 AppSecret', 'err');
+  bots[i] = {
+    ...bots[i],
+    enabled,
+    appId,
+    appSecret,
+    sandbox: $('#ch-sandbox').value === 'true',
+  };
+  const r = await api('/api/config', 'PUT', { bots });
+  if (!r.ok) return toast(r.err, 'err');
+  toast(enabled ? '已保存，正在重连…' : '已保存（未连接 QQ）', 'ok');
+  await loadState();
 }
 
 // 「心跳」标签页
@@ -710,16 +819,8 @@ function openBotSettings(id) {
         </div>
         <div class="grid-3">
           <div class="field"><label>名称</label><input id="f-name" type="text" value="${esc(b.name || '')}"></div>
-          <div class="field"><label>AppID</label><input id="f-appid" type="text" value="${esc(b.appId || '')}"></div>
-          <div class="field"><label>AppSecret（env: 变量或直接填）</label><input id="f-secret" type="password" value="${esc(b.appSecret || '')}"></div>
-        </div>
-        <div class="grid-3" style="margin-top:12px">
           <div class="field"><label>绑定模型</label><select id="f-model">${modelOpts}</select></div>
           <div class="field"><label>历史记忆条数</label><input id="f-history" type="number" value="${b.historyLimit || 10}"></div>
-          <div class="field"><label>运行环境</label><select id="f-sandbox">
-            <option value="true" ${b.sandbox !== false ? 'selected' : ''}>沙箱（测试）</option>
-            <option value="false" ${b.sandbox === false ? 'selected' : ''}>正式</option>
-          </select></div>
         </div>
         <div class="grid-3" style="margin-top:12px">
           <div class="field"><label>允许联网</label><select id="f-web">
@@ -744,6 +845,7 @@ function openBotSettings(id) {
           <div class="field"><label>Markdown 回复</label><div class="value">自动启用，失败回退文本</div></div>
           <div class="field"><label>流式可用性</label><div class="value">${b.streamReply === false ? '已关闭' : '需要官方 Markdown/流式权限'}</div></div>
         </div>
+        <div class="frm-hint">这里只管角色本体。QQ 连接（AppID / AppSecret / 运行环境）在角色卡下的「📡 渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
       </div>
       <div class="modal-foot cf-foot">
         <button class="ghost" onclick="closeBotSettings()">取消</button>
@@ -2940,6 +3042,9 @@ function md(s) {
   return h;
 }
 
+// 设置弹窗的保存：只覆盖角色本体字段。appId / appSecret / sandbox / enabled 一律
+// 不在这里读 —— 它们属于「渠道」，由 saveChannel 独家负责（同一操作唯一切入口）。
+// 靠 {...bots[i]} 展开保留，所以不写就等于原样不动。
 async function saveBot(id) {
   const bots = (state.bots || []).slice();
   const i = bots.findIndex(x => x.id === id);
@@ -2947,12 +3052,9 @@ async function saveBot(id) {
   bots[i] = {
     ...bots[i],
     name: $('#f-name').value.trim(),
-    appId: $('#f-appid').value.trim(),
-    appSecret: $('#f-secret').value.trim(),
     avatar: ($('#f-avatar') && $('#f-avatar').value.trim()) || '',
     modelId: $('#f-model').value,
     historyLimit: Number($('#f-history').value) || 10,
-    sandbox: $('#f-sandbox').value === 'true',
     // 允许联网：空 = 跟随全局；true/false 单独覆盖
     webSearch: $('#f-web').value === 'true' ? true : $('#f-web').value === 'false' ? false : undefined,
     // 搜索方式：空 = 跟随全局
@@ -2992,8 +3094,11 @@ async function sendMsg(id) {
   if (r.ok) { $('#f-content').value = ''; loadSessions(id); }
 }
 
-// ================= 机器人表单（添加） =================
-function renderBotForm(id) {
+// ================= 角色表单（添加） =================
+// 只创建角色本体：ID / 名称 / 绑定模型 / 历史条数。
+// QQ 相关（AppID / AppSecret / 运行环境）已全部移入「渠道」标签页 —— 连接 QQ 不是必须的，
+// 所以创建这一步不该向用户索要任何 QQ 信息。
+function renderBotForm() {
   const models = state.models || [];
   const modelOpts = models.map(m => `<option value="${m.id}">${esc(m.name || m.id)}</option>`).join('') || '<option value="">先添加模型</option>';
   main.innerHTML = `
@@ -3008,14 +3113,10 @@ function renderBotForm(id) {
         <div class="field"><label>名称</label><input id="f-name" type="text" placeholder="我的机器人"></div>
       </div>
       <div class="grid-2" style="margin-top:12px">
-        <div class="field"><label>AppID</label><input id="f-appid" type="text" placeholder="如 1905280605"></div>
-        <div class="field"><label>AppSecret（.env 变量引用或直接填）</label><input id="f-secret" type="password" placeholder="env:MOONCHATBOT_SECRET 或密钥"></div>
-      </div>
-      <div class="grid-3" style="margin-top:12px">
         <div class="field"><label>绑定模型</label><select id="f-model">${modelOpts}</select></div>
         <div class="field"><label>历史记忆条数</label><input id="f-history" type="number" value="10"></div>
-        <div class="field"><label>运行环境</label><select id="f-sandbox"><option value="true">沙箱（测试）</option><option value="false">正式</option></select></div>
       </div>
+      <div class="frm-hint">创建后即可直接对话，不需要填任何 QQ 信息。要接入 QQ 时，到该角色卡下的「📡 渠道」标签页开启并填写 AppID / AppSecret。</div>
       <div style="margin-top:18px;display:flex;gap:8px">
         <button class="primary" onclick="createBot()">创建</button>
         <button class="ghost" onclick="backToBots()">取消</button>
@@ -3029,12 +3130,11 @@ async function createBot() {
   const entry = {
     id: $('#f-id').value.trim(),
     name: $('#f-name').value.trim() || $('#f-id').value.trim(),
-    appId: $('#f-appid').value.trim(),
-    appSecret: $('#f-secret').value.trim(),
     modelId: $('#f-model').value,
-    sandbox: $('#f-sandbox').value === 'true',
-    enabled: true,
     historyLimit: Number($('#f-history').value) || 10,
+    // 默认不连 QQ：新角色是「纯角色」，开箱即可在面板里对话、记忆、心跳。
+    // 需要时去「渠道」勾选启用并填凭据 —— 这也顺手补上了此前 enabled 全仓无从修改的缺口。
+    enabled: false,
     personaFile: '',
     intents: ['GROUP_AND_C2C_EVENT', 'PUBLIC_GUILD_MESSAGES'],
   };
@@ -3044,7 +3144,15 @@ async function createBot() {
   const bots = (state.bots || []).concat(entry);
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已创建', 'ok') : toast(r.err, 'err');
-  if (r.ok) { view = { type: 'bot', id: entry.id }; await loadState(); }
+  if (r.ok) {
+    // 新建的角色不存在「上次在看哪个标签页」这回事 —— _botTab 那条「切角色保留」的规则
+    // 是为了避免在已有角色之间来回跳，用在这里只会把人丢在一个空渠道页上。
+    // 新角色唯一立刻有用的地方就是对话。
+    _botTab = 'chat';
+    _chatTid = null;
+    view = { type: 'bot', id: entry.id };
+    await loadState();
+  }
 }
 
 // ================= 模型供应商 =================
