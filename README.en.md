@@ -1,4 +1,4 @@
-# QQBOT Console — QQ Bot Management Panel
+# MoonChatBot — QQ Bot Management Panel
 
 > **English · [中文](README.md)**
 
@@ -58,7 +58,7 @@ Then set your credentials either way:
 1. edit `config.json` (bot AppID, bound model) and `.env` (QQ Secret, model API keys); or
 2. open **http://127.0.0.1:4357** and add bots / models visually in the panel (saved automatically).
 
-> For web-search / browser features, Playwright prepares its browser engine on first use; for long-running processes use `pm2 start server.js --name qqbot-panel`.
+> For web-search / browser features, Playwright prepares its browser engine on first use; for long-running processes use `pm2 start server.js --name moonchatbot-panel`.
 
 ## 🖥 Desktop Shell (optional)
 
@@ -81,7 +81,7 @@ The panel runs in a browser by default. If you'd rather have it in a **standalon
 
 That split pays off: the shell doesn't carry Playwright (701 MB) or a Rust runtime, so the **installer is only 1.18 MB** — and restarting, tailing logs, or `pm2`-managing the service is independent of the window.
 
-- **Usage**: run `启动面板.bat` first, then open **QQBOT Console**. Reverse order just shows a "cannot reach backend" card with a retry button — no blank window.
+- **Usage**: run `启动面板.bat` first, then open **MoonChatBot**. Reverse order just shows a "cannot reach backend" card with a retry button — no blank window.
 - **Build from source**: run `desktop/打包桌面版.bat`; toolchain deps (Rust + MSYS2/MinGW-w64) are prepared by scripts — **no admin rights, no Visual Studio**.
 - **CORS note**: on Windows the WebView2 origin is `http://tauri.localhost`, so `server.js` whitelists it (plus local dev ports — not a wildcard). Update the server alongside the frontend.
 - Design trade-offs, verification log and known limits: **[`desktop/README.md`](desktop/README.md)**.

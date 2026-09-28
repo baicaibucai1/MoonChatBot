@@ -1,4 +1,4 @@
-# QQBOT 控制台 — QQ 机器人管理面板
+# MoonChatBot — QQ 机器人管理面板
 
 > **[English](README.en.md) · 中文**
 
@@ -58,7 +58,7 @@ npm start
 1. 编辑 `config.json`（机器人 AppID、绑定模型）与 `.env`（QQ Secret、模型 Key）；或
 2. 直接打开 **http://127.0.0.1:4357**，在面板「机器人 / 模型」页里可视化添加（保存即落盘）。
 
-> 需要联网搜索/浏览器能力时，Playwright 首次使用会自动准备浏览器内核；长期运行可用 `pm2 start server.js --name qqbot-panel` 守护。
+> 需要联网搜索/浏览器能力时，Playwright 首次使用会自动准备浏览器内核；长期运行可用 `pm2 start server.js --name moonchatbot-panel` 守护。
 
 ## 🖥 桌面版（可选）
 
@@ -81,7 +81,7 @@ npm start
 
 这么拆的好处很实在：壳不用背 Playwright（701 MB）和 Rust 运行时，**安装包只有 1.18 MB**；服务想重启、想看日志、想 `pm2` 守护都不受壳影响。
 
-- **用法**：先双击 `启动面板.bat` 起服务，再打开开始菜单里的「QQBOT Console」。顺序反了也不会白屏 —— 壳会显示「无法连接后端服务」并给「重试连接」按钮。
+- **用法**：先双击 `启动面板.bat` 起服务，再打开开始菜单里的「MoonChatBot」。顺序反了也不会白屏 —— 壳会显示「无法连接后端服务」并给「重试连接」按钮。
 - **从源码打包**：双击 `desktop/打包桌面版.bat`；编译器依赖（Rust + MSYS2/MinGW-w64）脚本会自动准备，**不需要管理员权限、不需要 Visual Studio**。
 - **跨域说明**：Windows 上 WebView2 的页面来源是 `http://tauri.localhost`，所以 `server.js` 里加了一层跨域白名单（仅放行 `tauri.localhost` 与本地开发端口，非通配符）。这也是为什么把前端换到桌面壳后**服务端必须一起更新**。
 - 详细设计取舍、验证记录与已知限制见 **[`desktop/README.md`](desktop/README.md)**。
