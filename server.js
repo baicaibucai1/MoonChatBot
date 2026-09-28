@@ -1681,6 +1681,11 @@ function handleApi(req, res, p) {
       if (!model) return send(400, { ok: false, err: '该机器人未绑定模型' });
       const apiKey = model.apiKey || app.env[model.apiKeyEnv];
       if (!apiKey) return send(400, { ok: false, err: '模型未配置 API Key' });
+      // 统一模型调用器：内部按「全局蒸馏模型 > 机器人绑定模型」选择并记录用量。
+      // 修复：此前这里直接调用 chatFn 但从未创建它，导致本接口必然抛
+      // ReferenceError（被 .catch 吞成 200 {ok:false}），AI 归档功能完全不可用。
+      const chatFn = makeChatFn(bot.id);
+      if (!chatFn) return send(400, { ok: false, err: '没有可用的模型，请先配置 API Key' });
       (async () => {
         // 系统生成文件（events_summary/events_archive）只读管理，不允许 AI 归档写入
         const files = memory.getMemoryFiles(bot.id).filter((f) => f.enabled && !f.sys);

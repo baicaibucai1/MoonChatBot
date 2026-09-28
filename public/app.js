@@ -1172,6 +1172,11 @@ function renderMemDistill(id) {
   const coreSeedBtn = s.core
     ? `<button class="ghost sm" onclick="seedFromCore('${id}')" title="把核心卡内容写回 persona.md（种子丢失/清空后一键恢复）">☰ 还原种子</button>`
     : '';
+  // 折叠态 class：_dfOpen 记录「处于展开状态」的块，不在集合里即为折叠。
+  // 修复：此前 dfCls 被调用但从未定义，el.innerHTML 赋值时抛 ReferenceError，
+  // 导致「记忆层级」视图整块渲染中断。distillFold 切换时同步维护 _dfOpen，
+  // 所以重绘/切页后用户的选择得以保持。
+  const dfCls = (k) => (_dfOpen.has(id + '::' + k) ? '' : 'folded');
   el.innerHTML = `
     <div class="distill-block span2 ${dfCls('core')}"><div class="distill-label" onclick="distillFold(event,'${id}','core')" title="点击展开/收起正文"><span class="dd-ic">▾</span>人格核心卡 ${badge(s.core ? s.coreFresh : null)}${s.core && s.core.manual ? '<span class="distill-ok">手动编辑</span>' : ''}<span class="spacer"></span>${coreSeedBtn}<button class="ghost sm" onclick="openCoreEditModal('${id}')">✎ 编辑</button></div><div class="distill-body">${coreBody}</div></div>
     ${sumBlocks}
