@@ -76,7 +76,11 @@ async function chatWithBot(botId, content, opts = {}) {
   const system = memory.buildSystemPrompt(botId, { useGlobal: bot.useGlobal }) +
     '\n\n【记忆规则】\n对话中出现关键剧情变化（重要事件、人物关系变化、重大决定等）时，' +
     '在回复末尾单独附加一行，以【记录】开头并简述该关键剧情，格式：【记录】事件简述。';
-  const history = memory.getRecentSessions(botId, bot.historyLimit || 10);
+  // 对话历史只读「当前线程」——这是多线程隔离的关键一处。
+  // 别误用 getRecentSessions：那个是**跨线程归并**，给蒸馏/摘要/心跳/精彩时刻用的；
+  // 拿它当对话上下文，两条线程的内容就会互相污染。
+  const threadId = opts.threadId || memory.threads.getDefaultThreadId(botId);
+  const history = memory.threads.readThreadMessages(botId, threadId, bot.historyLimit || 10);
 
   const messages = [
     { role: 'system', content: system },

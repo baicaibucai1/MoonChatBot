@@ -101,6 +101,10 @@ function buildProbes(botId) {
     { id: 'api:mem-layers', kind: 'read', method: 'GET', path: `/api/memory/${B}/layers` },
     { id: 'api:mem-sessions', kind: 'read', method: 'GET', path: `/api/memory/${B}/sessions` },
     { id: 'api:mem-branches', kind: 'read', method: 'GET', path: `/api/memory/${B}/branches` },
+    // 对话线程（多线程 C1）。放在这里是因为前面的 /sessions 已经触发过一次迁移，
+    // 到这里线程状态已稳定；副本每次都是同样的输入，因此结果可复现。
+    { id: 'api:mem-threads', kind: 'read', method: 'GET', path: `/api/memory/${B}/threads`, note: '线程列表（老数据迁移后应非空）' },
+    { id: 'api:mem-threads-nope', kind: 'read', method: 'GET', path: `/api/memory/${N}/threads`, note: '不存在的角色 → 空列表，且不产生目录副作用' },
 
     // ── 上传头像（校验分支 + 成功路径）────────────────────────────────
     { id: 'api:avatar-empty', kind: 'reject', method: 'POST', path: '/api/upload-avatar', json: {}, capture: ['err'] },
@@ -144,6 +148,12 @@ function buildProbes(botId) {
     { id: 'api:mem-branch-fork', kind: 'write', method: 'POST', path: `/api/memory/${B}/sessions/branch`, json: { fromTs: 9999999999 } },
     { id: 'api:mem-branch-restore', kind: 'write', method: 'POST', path: `/api/memory/${B}/branches/restore`, json: { fromTs: 9999999999 } },
     { id: 'api:mem-sessions-clear', kind: 'write', method: 'DELETE', path: `/api/memory/${B}/sessions` },
+    // ── 对话线程（多线程 C1）：失败路径 + 成功创建 ──────────────────────
+    { id: 'api:mem-thread-one-404', kind: 'probe', method: 'GET', path: `/api/memory/${B}/threads/9999999999`, capture: ['err'] },
+    { id: 'api:mem-thread-rename-404', kind: 'probe', method: 'PUT', path: `/api/memory/${B}/threads/9999999999`, json: { title: 'probe' }, capture: ['err'] },
+    { id: 'api:mem-thread-delete-404', kind: 'probe', method: 'DELETE', path: `/api/memory/${B}/threads/9999999999`, capture: ['err'] },
+    { id: 'api:mem-thread-fork-404', kind: 'probe', method: 'POST', path: `/api/memory/${B}/threads/9999999999/fork`, json: { fromTs: 9999999999 }, capture: ['err'] },
+    { id: 'api:mem-thread-create', kind: 'write', method: 'POST', path: `/api/memory/${B}/threads`, json: { title: '__baseline_probe__' }, note: '新建线程，仅写入副本' },
     { id: 'api:admin-session-delete', kind: 'write', method: 'DELETE', path: '/api/admin/sessions/probe-session' },
 
     // ── 需要外部副作用 → 只验证「路由命中 + 参数提取」────────────────
@@ -166,6 +176,8 @@ function buildProbes(botId) {
     { id: 'bound:404-fallback', kind: 'boundary', method: 'GET', path: '/api/__totally_nonexistent__', capture: ['err'] },
     { id: 'bound:mem-dot', kind: 'boundary', method: 'GET', path: '/api/memory/a.b/files', capture: ['err'], note: '「.」不在字符类内 → 应落 404 兜底' },
     { id: 'bound:mem-slash', kind: 'boundary', method: 'GET', path: '/api/memory/a/b/files', capture: ['err'], note: '「/」不在字符类内 → 应落 404 兜底' },
+    { id: 'bound:mem-thread-nonnumeric', kind: 'boundary', method: 'GET', path: `/api/memory/${B}/threads/abc`, capture: ['err'], note: 'tid 必须是纯数字 → 不命中，落 404 兜底' },
+    { id: 'bound:mem-thread-vs-branch', kind: 'boundary', method: 'GET', path: `/api/memory/${B}/threads/order`, capture: ['err'], note: 'threads 段不接受非数字，避免与 files 域的顺序约束混淆' },
     { id: 'bound:bot-exclaim', kind: 'boundary', method: 'POST', path: '/api/bots/BAD!!/restart', capture: ['err'], note: '「!」不在字符类内 → 应落 404 兜底' },
     { id: 'bound:open-folder-illegal', kind: 'boundary', method: 'POST', path: '/api/bots/BAD!!/open-folder', capture: ['err'], note: 'open-folder 无实体校验、会弹资源管理器，故只用非法字符验证正则边界' },
     { id: 'charset:mem-cn', kind: 'boundary', method: 'GET', path: `/api/memory/${encodeURIComponent('测试')}/files`, capture: ['err'], note: '中文 id → 走字符类的 \\u4e00-\\u9fa5 分支' },

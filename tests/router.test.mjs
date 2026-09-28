@@ -55,8 +55,8 @@ let router;
 before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
-  test('条目总数稳定在 45（覆盖 46 个「方法+路径」组合，moments 一条管两法）', () => {
-    assert.equal(router.routes.length, 45);
+  test('条目总数稳定在 51（批 1 的 45 条 + 多线程 C1 的 6 条线程路由）', () => {
+    assert.equal(router.routes.length, 51);
   });
 
   test('每条路由只声明 exact 或 re 之一，且方法字段合法', () => {
@@ -104,6 +104,17 @@ describe('路由表结构', () => {
     assert.ok(iOrder < iWild, `/files/order 必须排在 /files/:key 之前（当前 ${iOrder} vs ${iWild}）`);
     assert.ok(iTier < iWild, `/files/:key/tier 必须排在 /files/:key 之前（当前 ${iTier} vs ${iWild}）`);
   });
+
+  test('threads 域同样守「先具体后通配」：/threads/:tid/fork 必须排在 /threads/:tid 之前', () => {
+    const idx = (pred) => router.routes.findIndex(pred);
+    const iFork = idx((r) => r.re && clean(r).endsWith(String.raw`/threads/(\d{1,20})/fork$`));
+    const iOne = idx((r) => r.re && clean(r).endsWith(String.raw`/threads/(\d{1,20})$`));
+    const iList = idx((r) => r.re && clean(r).endsWith('/threads$'));
+    assert.ok(iFork >= 0, '应存在 /threads/:tid/fork 条目');
+    assert.ok(iOne >= 0, '应存在 /threads/:tid 条目');
+    assert.ok(iList >= 0, '应存在 /threads 列表条目');
+    assert.ok(iFork < iOne, `/threads/:tid/fork 必须排在 /threads/:tid 之前（当前 ${iFork} vs ${iOne}）`);
+  });
 });
 
 describe('参数提取', () => {
@@ -136,6 +147,18 @@ describe('参数提取', () => {
   test('非法路径段（含点/斜杠）不会被通配条目吞掉', () => {
     assert.equal(router.matchEntry('GET', '/api/memory/a.b/files'), null);
     assert.equal(router.matchEntry('GET', '/api/memory/a/b/files'), null);
+  });
+
+  test('线程路由：:id 与 :tid 能分别提取，非数字 tid 不命中', () => {
+    const e = router.matchEntry('PUT', '/api/memory/BOT1/threads/1759000000000');
+    assert.ok(e && e.re, '应命中线程重命名条目');
+    const m = e.re.exec('/api/memory/BOT1/threads/1759000000000');
+    assert.equal(m[1], 'BOT1');
+    assert.equal(m[2], '1759000000000');
+
+    assert.ok(router.matchEntry('POST', '/api/memory/BOT1/threads/1759000000000/fork'), '应命中 fork 条目');
+    assert.equal(router.matchEntry('PUT', '/api/memory/BOT1/threads/abc'), null, 'tid 非数字应落空');
+    assert.equal(router.matchEntry('PUT', '/api/memory/BOT1/threads/a.b'), null);
   });
 });
 

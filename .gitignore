@@ -2,9 +2,12 @@ node_modules/
 playwright-browsers/
 .env
 config.json
-memory/
-avatars/
-logs/
+
+# 运行时数据目录 —— 必须锚定到仓库根，否则会连 lib/memory/ 一起吞掉
+# （批 3 会把 lib/memory.js 拆成 lib/memory/ 目录，未锚定的 `memory/` 规则会让它整个不被跟踪）
+/memory/
+/avatars/
+/logs/
 *.log
 
 # 桌面版（desktop/）编译产物：安装包走 GitHub Releases，不进版本库
@@ -14,8 +17,12 @@ dist-setup/
 .tmp-diagnostics/
 
 # dev:sandbox 的运行时状态（PID / 端口 / 沙箱目录），会随进程启停变化，不进版本库
-# 注意：本目录下的 memory/ 已由上面的 `memory/` 规则覆盖，故不整体忽略 .workbuddy/
 .workbuddy/dev-sandbox.json
+
+# dev 会话日志：同上，属于本地工作笔记
+# （注意：以前这条是靠上面未锚定的 `memory/` 规则顺带覆盖的；该规则已锚定到根，
+#   所以要在这里显式写一次，否则 .workbuddy/memory/ 会变成待提交文件）
+/.workbuddy/memory/
 
 # 阶段性推演/分析文档：属于本地工作笔记，不进版本库
 # （架构拆分方案.md / 角色化改造方案.md 是活文档，要跟着代码一起走，故不在此列）

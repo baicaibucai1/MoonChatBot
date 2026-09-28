@@ -1,9 +1,9 @@
 {
   "meta": {
-    "generatedAt": "2026-09-28T09:23:26.248Z",
+    "generatedAt": "2026-09-28T13:06:19.481Z",
     "node": "v22.22.2",
     "sourceSha": "<unknown>",
-    "probeCount": 71,
+    "probeCount": 80,
     "note": "由 scripts/api-baseline.mjs 在临时副本沙箱中生成。比对时忽略 meta.generatedAt。"
   },
   "results": [
@@ -650,6 +650,55 @@
       ]
     },
     {
+      "id": "api:mem-threads",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/memory/BOT1/threads",
+      "note": "线程列表（老数据迁移后应非空）",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "defaultThreadId:string",
+        "ok:boolean",
+        "threads:array",
+        "threads[].channel:string",
+        "threads[].createdAt:number",
+        "threads[].id:string",
+        "threads[].msgCount:number",
+        "threads[].origin:string",
+        "threads[].peer:string",
+        "threads[].title:string",
+        "threads[].updatedAt:number",
+        "threads[]:object"
+      ]
+    },
+    {
+      "id": "api:mem-threads-nope",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/memory/__nope__/threads",
+      "note": "不存在的角色 → 空列表，且不产生目录副作用",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "defaultThreadId:null",
+        "ok:boolean",
+        "threads:array"
+      ]
+    },
+    {
       "id": "api:avatar-empty",
       "kind": "reject",
       "method": "POST",
@@ -1240,6 +1289,121 @@
       ]
     },
     {
+      "id": "api:mem-thread-one-404",
+      "kind": "probe",
+      "method": "GET",
+      "path": "/api/memory/BOT1/threads/9999999999",
+      "note": "",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "线程不存在"
+      }
+    },
+    {
+      "id": "api:mem-thread-rename-404",
+      "kind": "probe",
+      "method": "PUT",
+      "path": "/api/memory/BOT1/threads/9999999999",
+      "note": "",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "线程不存在"
+      }
+    },
+    {
+      "id": "api:mem-thread-delete-404",
+      "kind": "probe",
+      "method": "DELETE",
+      "path": "/api/memory/BOT1/threads/9999999999",
+      "note": "",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "线程不存在"
+      }
+    },
+    {
+      "id": "api:mem-thread-fork-404",
+      "kind": "probe",
+      "method": "POST",
+      "path": "/api/memory/BOT1/threads/9999999999/fork",
+      "note": "",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "分叉点未找到"
+      }
+    },
+    {
+      "id": "api:mem-thread-create",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/memory/BOT1/threads",
+      "note": "新建线程，仅写入副本",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean",
+        "thread.channel:string",
+        "thread.createdAt:number",
+        "thread.id:string",
+        "thread.msgCount:number",
+        "thread.origin:string",
+        "thread.peer:string",
+        "thread.title:string",
+        "thread.updatedAt:number",
+        "thread:object"
+      ]
+    },
+    {
       "id": "api:admin-session-delete",
       "kind": "write",
       "method": "DELETE",
@@ -1542,6 +1706,50 @@
       ],
       "captured": {
         "err": "接口不存在: /api/memory/a/b/files"
+      }
+    },
+    {
+      "id": "bound:mem-thread-nonnumeric",
+      "kind": "boundary",
+      "method": "GET",
+      "path": "/api/memory/BOT1/threads/abc",
+      "note": "tid 必须是纯数字 → 不命中，落 404 兜底",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "接口不存在: /api/memory/BOT1/threads/abc"
+      }
+    },
+    {
+      "id": "bound:mem-thread-vs-branch",
+      "kind": "boundary",
+      "method": "GET",
+      "path": "/api/memory/BOT1/threads/order",
+      "note": "threads 段不接受非数字，避免与 files 域的顺序约束混淆",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "接口不存在: /api/memory/BOT1/threads/order"
       }
     },
     {
