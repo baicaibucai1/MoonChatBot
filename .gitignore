@@ -13,6 +13,10 @@ dist-setup/
 # 本地临时诊断产物
 .tmp-diagnostics/
 
+# dev:sandbox 的运行时状态（PID / 端口 / 沙箱目录），会随进程启停变化，不进版本库
+# 注意：本目录下的 memory/ 已由上面的 `memory/` 规则覆盖，故不整体忽略 .workbuddy/
+.workbuddy/dev-sandbox.json
+
 # 阶段性推演/分析文档：属于本地工作笔记，不进版本库
 # （架构拆分方案.md / 角色化改造方案.md 是活文档，要跟着代码一起走，故不在此列）
 优化建议.md

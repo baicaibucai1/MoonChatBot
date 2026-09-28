@@ -12,7 +12,8 @@
     "test": "node --test \"tests/**/*.test.mjs\"",
     "baseline": "node scripts/api-baseline.mjs",
     "baseline:check": "node scripts/api-baseline.mjs --check",
-    "audit:regex": "node scripts/regex-audit.mjs"
+    "audit:regex": "node scripts/regex-audit.mjs",
+    "dev:sandbox": "node scripts/dev-sandbox.mjs"
   },
   "dependencies": {
     "playwright": "^1.62.1",

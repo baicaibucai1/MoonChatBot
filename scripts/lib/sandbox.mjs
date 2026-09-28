@@ -57,16 +57,27 @@ export function makeSandbox() {
 }
 
 // 改写副本 config.json：换端口、断机器人、清 Key。返回 { port, botId }
-export async function patchSandboxConfig(dir) {
+//
+// opts.keepModelKeys
+//   默认 false —— 清空所有模型 Key。api-baseline.mjs 与 frontend.test.mjs 依赖这个默认值：
+//     基线要求可复现（真跑模型会因网络抖动产生不稳定响应），测试要求零费用。
+//   置 true 时保留内联 Key，模型可真实调用。仅供 dev-sandbox.mjs 起「能对话的实例」用。
+//
+// opts.enableBots
+//   默认 false —— 机器人全部禁用，不建立任何 QQ 连接。
+export async function patchSandboxConfig(dir, opts = {}) {
+  const { keepModelKeys = false, enableBots = false } = opts;
   const cfgPath = path.join(dir, 'config.json');
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
 
   for (const bot of cfg.bots || []) {
+    if (enableBots) continue;         // 保留原样（会真连 QQ）
     bot.enabled = false;              // sync() 会直接 continue，不连 QQ
     bot.appId = '__probe_appid__';    // 万一走到发送路径，只会认证失败
     bot.appSecret = '__probe_secret__';
   }
   for (const model of cfg.models || []) {
+    if (keepModelKeys) continue;      // 保留 Key，模型可真实调用
     delete model.apiKey;              // 所有模型调用在「未配置 Key」处早退
     model.apiKeyEnv = '__PROBE_NO_SUCH_KEY__';
   }
