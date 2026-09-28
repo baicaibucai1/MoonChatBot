@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MoonChatBot · 架构拆分施工图</title>
+<style>
+:root{
+  --bg:#f3f4f6; --bg-2:#fafafa; --panel:rgba(255,255,255,.78); --panel-solid:#fff;
+  --line:rgba(15,23,42,.08); --line-2:rgba(15,23,42,.14);
+  --text:#16181d; --text-dim:#5f6672; --text-faint:#9aa1ac;
+  --accent:#f5b301; --accent-soft:rgba(245,179,1,.12); --accent-soft-2:rgba(245,179,1,.2);
+  --ok:#2fa863; --err:#e5533c;
+  --hover:rgba(15,23,42,.045);
+  --font:"Cascadia Code","JetBrains Mono","Fira Code",ui-monospace,SFMono-Regular,Consolas,"Microsoft YaHei",monospace;
+  --font-ui:"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
+  --radius:14px; --shadow:0 1px 2px rgba(15,23,42,.05),0 10px 30px -12px rgba(15,23,42,.14);
+  --shadow-sm:0 1px 2px rgba(15,23,42,.05);
+  --ease:cubic-bezier(.22,.8,.3,1);
+}
+[data-theme="dark"]{
+  --bg:#0f1013; --bg-2:#17181c; --panel:rgba(23,24,28,.72); --panel-solid:#1b1c21;
+  --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.13);
+  --text:#e8e9ec; --text-dim:#9ba0a9; --text-faint:#656b76;
+  --accent:#f5b301; --accent-soft:rgba(245,179,1,.14); --accent-soft-2:rgba(245,179,1,.24);
+  --hover:rgba(255,255,255,.05);
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px -12px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--font-ui);
+  font-size:14px; line-height:1.65; padding:32px 24px 80px;
+  transition:background .3s var(--ease),color .3s var(--ease);
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px;margin:0 auto}
+
+/* ---------- 头部 ---------- */
+header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:28px}
+h1{font-size:23px;font-weight:650;letter-spacing:-.3px;display:flex;align-items:center;gap:10px}
+h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft);flex:none}
+.sub{color:var(--text-dim);font-size:13px;margin-top:6px}
+.sub code{font-family:var(--font);font-size:12px;background:var(--hover);padding:1px 5px;border-radius:5px}
+.theme-btn{
+  font-family:var(--font-ui);font-size:12px;color:var(--text-dim);cursor:pointer;
+  background:var(--panel-solid);border:1px solid var(--line);border-radius:9px;
+  padding:7px 13px;box-shadow:var(--shadow-sm);transition:all .2s var(--ease);white-space:nowrap;
+}
+.theme-btn:hover{color:var(--text);border-color:var(--line-2)}
+
+/* ---------- 关键数字 ---------- */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:30px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:15px 17px;box-shadow:var(--shadow-sm);backdrop-filter:blur(12px)}
+.kpi .v{font-family:var(--font);font-size:25px;font-weight:600;letter-spacing:-1px;line-height:1.15}
+.kpi .v .arw{font-size:14px;color:var(--text-faint);margin:0 7px;font-weight:400}
+.kpi .v .old{color:var(--text-faint);font-weight:400}
+.kpi .l{font-size:12px;color:var(--text-dim);margin-top:3px}
+.kpi .n{font-size:11px;color:var(--text-faint);font-family:var(--font);margin-top:5px}
+.kpi.hot .v{color:var(--err)}
+.kpi.ok .v{color:var(--ok)}
+/* 竣工徽标 */
+.done-badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-family:var(--font);
+  font-weight:600;color:#1a1400;background:var(--accent);border-radius:999px;padding:3px 11px;
+  box-shadow:0 1px 2px rgba(15,23,42,.1);vertical-align:middle;margin-left:4px}
+
+/* ---------- 区块 ---------- */
+section{margin-bottom:36px}
+h2{font-size:15px;font-weight:640;margin-bottom:5px;display:flex;align-items:center;gap:9px}
+h2 .idx{font-family:var(--font);font-size:11px;color:var(--accent);background:var(--accent-soft);
+  border:1px solid var(--accent-soft-2);border-radius:6px;padding:1px 7px;font-weight:600}
+h2 .tag{margin-left:auto;font-size:11px;font-weight:400;color:var(--text-faint);font-family:var(--font)}
+.desc{color:var(--text-dim);font-size:13px;margin-bottom:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);backdrop-filter:blur(12px);overflow:hidden}
+
+/* ---------- 剖面比例条 ---------- */
+.bar{display:flex;height:62px;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:var(--bg-2)}
+.seg{position:relative;cursor:pointer;transition:flex-grow .45s var(--ease),opacity .2s;min-width:0}
+.seg:hover{opacity:.88}
+.seg.on{outline:2px solid var(--text);outline-offset:-2px;z-index:2}
+.seg span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-family:var(--font);font-size:11px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.28);
+  overflow:hidden;white-space:nowrap;padding:0 4px}
+.seg.tiny span{font-size:9px}
+
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:14px}
+.lg{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-dim);cursor:pointer;
+  padding:3px 8px;border-radius:7px;transition:background .15s}
+.lg:hover{background:var(--hover)}
+.lg .sw{width:10px;height:10px;border-radius:3px;flex:none}
+.lg.off{opacity:.32}
+
+.zonelist{margin-top:16px;border-top:1px solid var(--line)}
+.zrow{display:grid;grid-template-columns:22px 1fr 92px 62px 74px;gap:10px;align-items:center;
+  padding:8px 14px;border-bottom:1px solid var(--line);font-size:12.5px;transition:background .15s;cursor:pointer}
+.zrow:hover{background:var(--hover)}
+.zrow.hi{background:var(--accent-soft)}
+.zrow .mk{width:9px;height:9px;border-radius:3px}
+.zrow .nm{font-weight:520}
+.zrow .ln{font-family:var(--font);font-size:11.5px;color:var(--text-faint);text-align:right}
+.zrow .ct{font-family:var(--font);font-size:12px;font-weight:600;text-align:right}
+.zrow .pc{font-family:var(--font);font-size:11.5px;color:var(--text-dim);text-align:right}
+.zrow.head{font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.5px;
+  font-weight:600;cursor:default;padding:7px 14px;background:var(--bg-2)}
+.zrow.head:hover{background:var(--bg-2)}
+
+/* ---------- 病灶卡 ---------- */
+.ills{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.ill{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--err);
+  border-radius:12px;padding:15px 17px;box-shadow:var(--shadow-sm)}
+.ill .t{font-size:13.5px;font-weight:640;margin-bottom:7px;display:flex;align-items:baseline;gap:8px}
+.ill .t em{font-family:var(--font);font-style:normal;font-size:16px;color:var(--err);font-weight:600}
+.ill p{font-size:12.5px;color:var(--text-dim);line-height:1.62}
+.ill code{font-family:var(--font);font-size:11.5px;background:var(--hover);padding:1px 5px;border-radius:5px}
+
+/* ---------- 施工图 ---------- */
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.segbtn{display:inline-flex;background:var(--panel-solid);border:1px solid var(--line);
+  border-radius:10px;padding:3px;box-shadow:var(--shadow-sm)}
+.segbtn button{font-family:var(--font-ui);font-size:12.5px;border:0;background:transparent;color:var(--text-dim);
+  padding:6px 15px;border-radius:8px;cursor:pointer;transition:all .2s var(--ease)}
+.segbtn button.on{background:var(--accent);color:#1a1400;font-weight:600;box-shadow:var(--shadow-sm)}
+.searchbox{margin-left:auto;position:relative;flex:none}
+.searchbox input{font-family:var(--font);font-size:12px;padding:7px 11px 7px 29px;width:230px;
+  border:1px solid var(--line);border-radius:9px;background:var(--panel-solid);color:var(--text);outline:none;
+  transition:border-color .2s}
+.searchbox input:focus{border-color:var(--accent)}
+.searchbox input::placeholder{color:var(--text-faint)}
+.searchbox svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);opacity:.4}
+
+/* 文件树 */
+.ftree{padding:6px 0}
+.fnode{display:grid;grid-template-columns:1fr 66px 92px;gap:12px;align-items:center;
+  padding:8px 16px;font-size:12.5px;transition:background .15s;border-bottom:1px solid var(--line)}
+.fnode:last-child{border-bottom:0}
+.fnode:hover{background:var(--hover)}
+.fnode .p{font-family:var(--font);font-size:12px;display:flex;align-items:center;gap:9px}
+.fnode .p .ico{width:13px;text-align:center;opacity:.5;font-size:11px}
+.fnode .p .grp{color:var(--text-faint)}
+.fnode .ln{font-family:var(--font);font-size:11.5px;text-align:right;font-weight:600}
+.fnode .note{font-size:11.5px;color:var(--text-faint);text-align:right}
+.fnode.done .p{color:var(--text-faint)}
+.fnode.done .ln{color:var(--text-faint);font-weight:400}
+.fnode.new .p .ico{color:var(--accent);opacity:.9}
+.fnode.hi{background:var(--accent-soft)}
+.fnode.old{background:var(--hover)}
+
+/* 路由表 */
+.rtable{max-height:430px;overflow-y:auto}
+.rrow{display:grid;grid-template-columns:58px 1fr 54px 128px;gap:10px;align-items:center;
+  padding:7px 16px;border-bottom:1px solid var(--line);font-size:12px;transition:background .15s}
+.rrow:hover{background:var(--hover)}
+.rrow:last-child{border-bottom:0}
+.rrow .m{font-family:var(--font);font-size:10.5px;font-weight:700;letter-spacing:.3px;text-align:center;
+  padding:2px 0;border-radius:5px;color:#fff}
+.m.GET{background:#0ea5a5}.m.POST{background:#2fa863}.m.PUT{background:#f0a020}.m.DELETE{background:#e5533c}
+.m.ANY{background:#8b5cf6}
+.rrow .p{font-family:var(--font);font-size:11.5px;color:var(--text);word-break:break-all}
+.rrow .l{font-family:var(--font);font-size:11px;color:var(--text-faint);text-align:right}
+.rrow .t{font-family:var(--font);font-size:11px;color:var(--text-dim);text-align:right}
+.rrow.group-head{background:var(--bg-2);font-weight:600;cursor:default}
+.rrow.group-head:hover{background:var(--bg-2)}
+.rrow.group-head .p{font-family:var(--font-ui);font-weight:640;font-size:12.5px;color:var(--text)}
+.hidden{display:none !important}
+
+/* ---------- 里程碑 ---------- */
+.miles{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.mile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 17px;box-shadow:var(--shadow-sm)}
+.mile.now{border-color:var(--accent-soft-2);background:linear-gradient(180deg,var(--accent-soft),transparent 60%),var(--panel)}
+.mile .mh{font-size:13px;font-weight:640;margin-bottom:9px;display:flex;align-items:center;gap:8px}
+.mile .badge{font-family:var(--font);font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:6px;
+  background:var(--accent);color:#1a1400}
+.mile .badge.gray{background:var(--hover);color:var(--text-dim)}
+.mile .flow{font-family:var(--font);font-size:12px;line-height:2;color:var(--text-dim)}
+.mile .flow b{color:var(--text);font-weight:600}
+.mile .flow .arrow{color:var(--accent);margin:0 5px}
+.mile .res{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12px;color:var(--text-dim)}
+.mile .res b{font-family:var(--font);color:var(--ok);font-size:13px}
+.warnbox{background:var(--accent-soft);border:1px solid var(--accent-soft-2);border-radius:12px;
+  padding:13px 16px;font-size:12.5px;color:var(--text-dim);line-height:1.7;margin-top:14px}
+.warnbox b{color:var(--text)}
+.warnbox code{font-family:var(--font);font-size:11.5px;background:var(--panel-solid);padding:1px 5px;border-radius:5px}
+
+/* ---------- 门禁 ---------- */
+.gates{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.gate{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 17px;box-shadow:var(--shadow-sm)}
+.gate .cmd{font-family:var(--font);font-size:11.5px;color:var(--text-dim);background:var(--hover);
+  padding:4px 9px;border-radius:7px;display:inline-block;margin-bottom:9px}
+.gate .out{font-size:13px;font-weight:600;color:var(--ok);display:flex;align-items:center;gap:7px}
+.gate .out .ck{width:15px;height:15px;border-radius:50%;background:var(--ok);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:10px;flex:none}
+.gate .note{font-size:11.5px;color:var(--text-faint);margin-top:7px;line-height:1.6}
+
+footer{text-align:center;color:var(--text-faint);font-size:11.5px;font-family:var(--font);
+  margin-top:44px;padding-top:20px;border-top:1px solid var(--line)}
+
+@media (max-width:900px){
+  .kpis,.ills,.gates,.miles{grid-template-columns:1fr 1fr}
+  .rrow{grid-template-columns:52px 1fr 46px;}.rrow .t{display:none}
+  .zrow{grid-template-columns:18px 1fr 74px 52px;}.zrow .pc{display:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1><span class="dot"></span>架构拆分 · 批 1 竣工报告<span class="done-badge">✓ 已完成</span></h1>
+      <div class="sub">
+        <code>server.js</code> 1964 → <b>1218 行</b> · 45 条路由拆进 9 个域文件 · <b>71 条接口探针逐条一致</b>
+      </div>
+    </div>
+    <button class="theme-btn" onclick="toggleTheme()">切换深色</button>
+  </header>
+
+  <!-- ============ 关键数字 ============ -->
+  <div class="kpis">
+    <div class="kpi"><div class="v"><span class="old">1964</span><span class="arw">→</span>1218</div><div class="l">server.js 行数</div><div class="n">-746 行 · -38%</div></div>
+    <div class="kpi ok"><div class="v">0</div><div class="l">handleApi 剩余行数</div><div class="n">703 行 → 45 条路由</div></div>
+    <div class="kpi"><div class="v">45</div><div class="l">路由条目（9 个域文件）</div><div class="n">覆盖 46 个方法+路径</div></div>
+    <div class="kpi ok"><div class="v"><span class="old">34</span><span class="arw">→</span>1</div><div class="l">重复字符类</div><div class="n">唯一残留属批 2 区域</div></div>
+  </div>
+
+  <!-- ============ 1. 现状剖面 ============ -->
+  <section>
+    <h2><span class="idx">01</span>现状剖面<span class="tag">按行数等比 · 点击查看</span></h2>
+    <div class="desc">1964 行里真正混在一起的是 <b>六类职责</b>。红色那块是主犯：路由判定和业务逻辑挤在同一个函数里，没有一个路由能独立测试。</div>
+
+    <div class="card" style="padding:16px">
+      <div class="bar" id="bar"></div>
+      <div class="legend" id="legend"></div>
+      <div class="zonelist" id="zonelist"></div>
+    </div>
+  </section>
+
+  <!-- ============ 2. 病灶 ============ -->
+  <section>
+    <h2><span class="idx">02</span>三个病灶<span class="tag">拆分前实测 · 现已修复</span></h2>
+    <div class="desc">不是「代码风格不好」这种虚的，是三个会实际咬人的具体问题。</div>
+    <div class="ills">
+      <div class="ill">
+        <div class="t">路由与业务混装 <em>703 行</em></div>
+        <p>43 条路由写成一条线性 <code>if</code> 链，每条路由的判定、参数提取、业务逻辑、响应拼装全揉在一起。想给某条路由加测试，得先把整个 <code>handleApi</code> 跑起来（而它依赖 <code>memory</code>、<code>app</code>、<code>fs</code> 全局）。</p>
+      </div>
+      <div class="ill">
+        <div class="t">单函数超长 <em>250 行</em></div>
+        <p><code>adminToolSchemas</code> 250 行、<code>runAdminTool</code> 190 行、<code>chatWithBot</code> 161 行。三个函数加起来 <b>601 行</b>，都超过任何编辑器的可读窗口，改动全靠上下翻找。</p>
+      </div>
+      <div class="ill">
+        <div class="t">字符类复制粘贴 <em>34 处</em></div>
+        <p><code>/^[\w\u4e00-\u9fa5-]{1,64}$/</code> 这个 ID 校验规则在文件里出现 34 次。<code>ID_RE</code> 和 <code>ADMIN_ID_RE</code> 是两份内容完全相同的常量 —— 改校验规则必须改 34 个地方，漏一个就是入口不一致。</p>
+      </div>
+    </div>
+    <div class="warnbox">
+      <b>顺带发现（批 0 基线已记录）：</b>
+      <code>if (p === '/api/state')</code> 写在 1286 行，<b>没有方法校验</b> —— <code>POST /api/state</code>、<code>DELETE /api/state</code> 都会走进同一分支并返回 200。
+      另外 <code>POST /api/bots/:id/chat</code>（1738 行）<b>没有前置实体校验</b>，带任意 id 请求就能在 <code>memory/</code> 下凭空造出目录和会话记录。这两个都在批 2 一并修。
+    </div>
+  </section>
+
+  <!-- ============ 3. 施工图 ============ -->
+  <section>
+    <h2><span class="idx">03</span>拆分前后对照<span class="tag">45 条路由 · 46 个方法+路径</span></h2>
+    <div class="desc">原则只有一条：<b>只搬家，不改逻辑</b>。每搬完一块立刻跑一次 <code>baseline:check</code>，71 条探针必须逐条一致。<br>
+      <span style="color:var(--text-faint)">左表是拆分前 46 条「方法+路径」及其在 <code>server.js</code> 中的原行号；右表是拆分后的实际落点与实测行数。</span></div>
+
+    <div class="toolbar">
+      <div class="segbtn">
+        <button id="btnBefore" class="on" onclick="setView('before')">拆分前</button>
+        <button id="btnAfter" onclick="setView('after')">拆分后</button>
+      </div>
+      <div class="searchbox">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4">
+          <circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>
+        </svg>
+        <input id="q" placeholder="筛选路由，如 memory / bots" oninput="filterRoutes()">
+      </div>
+    </div>
+
+    <!-- 前 -->
+    <div class="card" id="viewBefore">
+      <div class="rtable" id="routeTable"></div>
+    </div>
+
+    <!-- 后 -->
+    <div class="card hidden" id="viewAfter">
+      <div class="ftree" id="ftree"></div>
+    </div>
+  </section>
+
+  <!-- ============ 4. 里程碑 ============ -->
+  <section>
+    <h2><span class="idx">04</span>里程碑<span class="tag">批 1 已完成 · 数字为实测</span></h2>
+    <div class="desc">方案原文写「批 1：<code>server.js</code> → &lt;150 行」。核对真实行数后发现 <b>单靠批 1 达不到</b> —— <code>handleApi</code> 只占 36%，剩下的对话内核与 AI 助手还有 1127 行。据此把验收拆成两段，批 1 的实际结果如下。</div>
+
+    <div class="miles">
+      <div class="mile now">
+        <div class="mh"><span class="badge">批 1 ✓ 已完成</span>搬出 HTTP 层与路由层</div>
+        <div class="flow">
+          <b>1964</b> <span class="arrow">→</span> 搬走 <b>746</b> 行 <span class="arrow">→</span>
+          <b>1218 行</b>
+        </div>
+        <div class="res">
+          搬出：<code>applyCors</code> + <code>createServer</code> + <code>handleApi</code> 703 行<br>
+          产出：<code>lib/http/*</code> 3 个 + <code>lib/routes/*</code> 9 个 + <code>lib/ids.js</code> + 13 条路由测试<br>
+          验收：<b>71 条探针逐条一致</b> · <b>30 条路由正则逐字符一致</b><br>
+          这一步 <b>风险最低</b>：纯搬运，不动任何业务逻辑
+        </div>
+      </div>
+      <div class="mile">
+        <div class="mh"><span class="badge gray">批 2 · 待启动</span>搬出对话内核与 AI 助手</div>
+        <div class="flow">
+          <b>1218</b> <span class="arrow">→</span> 搬走 <b>约 1140</b> 行 <span class="arrow">→</span>
+          <b>约 78 行</b> ✅
+        </div>
+        <div class="res">
+          搬迁：<code>chatWithBot</code> 161 + 去重 70 + 心跳 144 + JSON 30 + admin 722<br>
+          产出：<code>lib/chat/*</code> 3 个 + <code>lib/admin/*</code> 3 个 + <code>lib/util/json.js</code><br>
+          顺带补 <code>/api/state</code> 方法校验与 <code>/api/bots/:id/chat</code> 实体校验（两项都要改契约，需与基线同批更新）
+        </div>
+      </div>
+    </div>
+
+    <div class="warnbox">
+      <b>结论：</b>「<code>server.js</code> &lt; 150 行」是 <b>批 1 + 批 2 的联合终点</b>，不是批 1 单独能达成的。
+      批 1 实测落到 <b>1218 行</b>（预估 1193，差 25 行来自路由表、依赖注入与显式导出），批 2 搬完对话内核与 AI 助手后才能到 150 行以下。
+      这样每一批都有可交付的中间态，不会出现「推到一半既不绿也没完成」的悬空状态。
+    </div>
+  </section>
+
+  <!-- ============ 5. 门禁 ============ -->
+  <section>
+    <h2><span class="idx">05</span>门禁<span class="tag">批 1 收工时实测</span></h2>
+    <div class="desc">这三道门禁是批 0 建好的。批 1 每搬一个文件都重跑一次，任何一条变红就立刻回滚那一块 —— 全程只有一次变红，见下。</div>
+    <div class="gates">
+      <div class="gate">
+        <div class="cmd">npm run baseline:check</div>
+        <div class="out"><span class="ck">✓</span>71 条探针逐条一致</div>
+        <div class="note">200×45 · 204×1 · 400×9 · 404×16。这是拆分的<b>唯一硬验收</b> —— 只要它绿，就证明接口行为没变。</div>
+      </div>
+      <div class="gate">
+        <div class="cmd">npm run lint</div>
+        <div class="out"><span class="ck">✓</span>0 errors</div>
+        <div class="note">92 条 warning 全是 onclick 静态盲区（函数声明挂 window 供内联调用），不是真冗余 —— <b>与拆分前条数完全相同</b>。</div>
+      </div>
+      <div class="gate">
+        <div class="cmd">npm test</div>
+        <div class="out"><span class="ck">✓</span>27 通过 · 0 失败 · 2 todo</div>
+        <div class="note">29 条：16 条前端（真跑 Chromium）+ <b>13 条新增路由测试</b>。2 条 todo 是 <code>md()</code> 链接嵌套 bug，留到批 4。</div>
+      </div>
+    </div>
+    <div class="warnbox">
+      <b>唯一一次变红（基线抓到的真 bug）：</b>把 <code>moments</code> 路由搬进 <code>lib/routes/moments.js</code> 时漏了捕获括号，
+      正则写成 <code>^/api/moments/[…]{1,64}$</code> 而不是 <code>(…)</code>，导致 <code>momentsM[1]</code> 为 <code>undefined</code>，
+      错误信息从「机器人不存在: __nope__」退化成「机器人不存在: undefined」。
+      <b>71 条探针里有 2 条精确命中</b>，定位到行，5 分钟修完。这就是批 0 那套基线存在的意义。
+    </div>
+  </section>
+
+  <footer>
+    MoonChatBot · 架构拆分批 1 竣工报告 · server.js 1964 → 1218 行 · 45 条路由 / 9 个域文件 · 34 → 1 处重复字符类<br>
+    验收：71 条接口探针逐条一致 · 30 条路由正则逐字符一致 · lint 0 error · 29 条测试全绿（2 todo）
+  </footer>
+</div>
+
+<script>
+/* ==================== 数据：全部取自真实源码 ==================== */
+const CATS = {
+  infra : { label:'基建（依赖/常量/CORS/启动）', color:'#64748b' },
+  chat  : { label:'对话内核（模型调用/去重/心跳）', color:'#f5b301' },
+  http  : { label:'HTTP 入口（静态资源/分发）',   color:'#0ea5a5' },
+  util  : { label:'工具函数（JSON 提取）',        color:'#94a3b8' },
+  admin : { label:'AI 助手（人格/工具/流式）',    color:'#8b5cf6' },
+  routes: { label:'路由 + 业务（handleApi）',     color:'#e5533c' }
+};
+
+const ZONES = [
+  { name:'依赖 + 常量 + MIME',      from:1,    to:46,   cat:'infra'  },
+  { name:'applyCors（跨域放行）',   from:47,   to:70,   cat:'infra'  },
+  { name:'makeChatFn + chatWithBot（对话内核）', from:71, to:231, cat:'chat' },
+  { name:'streamEnabled + isDupMsg（流式判定与去重）', from:232, to:301, cat:'chat' },
+  { name:'心跳调度 hbConfigs…hbTick', from:302, to:445,  cat:'chat'   },
+  { name:'HTTP 入口 createServer',  from:447,  to:490,  cat:'http'   },
+  { name:'extractJsonObjects',      from:492,  to:521,  cat:'util'   },
+  { name:'buildAdminSystem + adminChat（人格与基础对话）', from:522, to:633, cat:'admin' },
+  { name:'adminToolSchemas + runAdminTool（工具集）', from:634, to:1115, cat:'admin' },
+  { name:'adminStreamRound 等（流式 Agent）', from:1116, to:1243, cat:'admin' },
+  { name:'handleApi（路由判定 + 全部业务）', from:1244, to:1946, cat:'routes' },
+  { name:'启动 / 优雅退出',         from:1947, to:1964, cat:'infra'  }
+];
+ZONES.forEach(z => z.lines = z.to - z.from + 1);
+
+// [method, path, line, target]
+const ROUTES = [
+  ['POST','/api/upload-avatar',1265,'routes/avatar.js'],
+  ['ANY','/api/state',1286,'routes/meta.js'],
+  ['PUT','/api/config',1303,'routes/meta.js'],
+  ['GET','/api/usage',1380,'routes/meta.js'],
+  ['GET','/api/global/files',1339,'routes/global.js'],
+  ['POST','/api/global/files',1341,'routes/global.js'],
+  ['PUT','/api/global/files/:name/enabled',1355,'routes/global.js'],
+  ['PUT','/api/global/files/:name',1365,'routes/global.js'],
+  ['DELETE','/api/global/files/:name',1373,'routes/global.js'],
+  ['GET','/api/memory/:botId/files',1384,'routes/memory.js'],
+  ['POST','/api/memory/:botId/files',1388,'routes/memory.js'],
+  ['POST','/api/memory/:botId/upload',1401,'routes/memory.js'],
+  ['PUT','/api/memory/:botId/files/order',1422,'routes/memory.js'],
+  ['PUT','/api/memory/:botId/files/:name/tier',1433,'routes/memory.js'],
+  ['PUT','/api/memory/:botId/files/:name',1443,'routes/memory.js'],
+  ['DELETE','/api/memory/:botId/files/:name',1453,'routes/memory.js'],
+  ['PUT','/api/memory/:botId/files/:name/enabled',1460,'routes/memory.js'],
+  ['PUT','/api/memory/:botId/files/:name/desc',1470,'routes/memory.js'],
+  ['PUT','/api/memory/:botId/key-events',1480,'routes/memory.js'],
+  ['GET','/api/memory/:botId/layers',1490,'routes/memory.js'],
+  ['PUT','/api/memory/:botId/core',1494,'routes/memory.js'],
+  ['POST','/api/memory/:botId/seed-from-core',1504,'routes/memory.js'],
+  ['POST','/api/memory/:botId/distill',1512,'routes/memory.js'],
+  ['DELETE','/api/memory/:botId/events/:ts',1539,'routes/memory.js'],
+  ['DELETE','/api/memory/:botId/events',1547,'routes/memory.js'],
+  ['DELETE','/api/memory/:botId/events-summary',1555,'routes/memory.js'],
+  ['GET','/api/memory/:botId/sessions',1563,'routes/memory.js'],
+  ['DELETE','/api/memory/:botId/sessions',1567,'routes/memory.js'],
+  ['DELETE','/api/memory/:botId/sessions/:ts',1574,'routes/memory.js'],
+  ['POST','/api/memory/:botId/sessions/branch',1582,'routes/memory.js'],
+  ['GET','/api/memory/:botId/branches',1592,'routes/memory.js'],
+  ['POST','/api/memory/:botId/branches/restore',1596,'routes/memory.js'],
+  ['POST','/api/models/:id/test',1607,'routes/models.js'],
+  ['POST','/api/bots/:id/restart',1628,'routes/bots.js'],
+  ['POST','/api/bots/:id/send',1641,'routes/bots.js'],
+  ['POST','/api/bots/:id/open-folder',1658,'routes/bots.js'],
+  ['POST','/api/bots/:id/ingest',1672,'routes/bots.js'],
+  ['POST','/api/bots/:id/chat',1738,'routes/bots.js'],
+  ['POST','/api/admin/chat/stream',1769,'routes/admin.js'],
+  ['POST','/api/admin/chat',1832,'routes/admin.js'],
+  ['GET','/api/admin/sessions',1873,'routes/admin.js'],
+  ['GET','/api/admin/sessions/:id',1878,'routes/admin.js'],
+  ['DELETE','/api/admin/sessions/:id',1882,'routes/admin.js'],
+  ['GET','/api/heartbeat/status',1888,'routes/heartbeat.js'],
+  ['POST','/api/moments/:id',1914,'routes/moments.js'],
+  ['DELETE','/api/moments/:id',1914,'routes/moments.js']
+];
+
+// 拆分后目标文件树（批 1 已完成，行数为实测值）
+const TREE = [
+  { p:'server.js',            grp:'',                 ln:1218, note:'-746 行（-38%）', batch:1 },
+  { p:'lib/ids.js',           grp:'',                 ln:25,   note:'34 → 1 处重复',   batch:1 },
+  { p:'lib/http/',            grp:'router.js',        ln:85,   note:'有序路由表',       batch:1 },
+  { p:'lib/http/',            grp:'context.js',       ln:33,   note:'send / readBody',  batch:1 },
+  { p:'lib/http/',            grp:'static.js',        ln:93,   note:'MIME / CORS / 静态',batch:1 },
+  { p:'lib/routes/',          grp:'avatar.js',        ln:34,   note:'1 路由',           batch:1 },
+  { p:'lib/routes/',          grp:'meta.js',          ln:80,   note:'3 路由',           batch:1 },
+  { p:'lib/routes/',          grp:'global.js',        ln:74,   note:'5 路由',           batch:1 },
+  { p:'lib/routes/',          grp:'memory.js',        ln:328,  note:'23 路由',          batch:1 },
+  { p:'lib/routes/',          grp:'models.js',        ln:33,   note:'1 路由',           batch:1 },
+  { p:'lib/routes/',          grp:'bots.js',          ln:165,  note:'5 路由',           batch:1 },
+  { p:'lib/routes/',          grp:'admin.js',         ln:153,  note:'5 路由',           batch:1 },
+  { p:'lib/routes/',          grp:'heartbeat.js',     ln:39,   note:'1 路由',           batch:1 },
+  { p:'lib/routes/',          grp:'moments.js',       ln:53,   note:'2 路由 / 1 条目',  batch:1 },
+  { p:'tests/',               grp:'router.test.mjs',  ln:176,  note:'13 条新测试',      batch:1 }
+];
+
+/* ==================== 1. 剖面渲染 ==================== */
+const TOTAL = 1964;
+let activeCat = null;
+
+function renderBar(){
+  const bar = document.getElementById('bar');
+  bar.innerHTML = '';
+  ZONES.forEach((z, i) => {
+    const d = document.createElement('div');
+    d.className = 'seg' + (z.lines / TOTAL < 0.045 ? ' tiny' : '');
+    d.style.flexGrow = z.lines;
+    d.style.background = CATS[z.cat].color;
+    d.dataset.i = i;
+    d.innerHTML = `<span>${z.lines / TOTAL > 0.075 ? z.lines : ''}</span>`;
+    d.title = `${z.name}\n${z.from}–${z.to} 行 · 共 ${z.lines} 行 (${(z.lines/TOTAL*100).toFixed(1)}%)`;
+    d.onmouseenter = () => highlight(i, true);
+    d.onmouseleave = () => highlight(i, false);
+    d.onclick = () => {
+      document.querySelectorAll('.zrow')[i+1].scrollIntoView({behavior:'smooth', block:'center'});
+      highlight(i, true);
+      setTimeout(() => highlight(i, false), 1400);
+    };
+    bar.appendChild(d);
+  });
+}
+
+function renderLegend(){
+  const el = document.getElementById('legend');
+  el.innerHTML = '';
+  Object.entries(CATS).forEach(([k, c]) => {
+    const sum = ZONES.filter(z => z.cat === k).reduce((a, z) => a + z.lines, 0);
+    const d = document.createElement('div');
+    d.className = 'lg';
+    d.dataset.cat = k;
+    d.innerHTML = `<span class="sw" style="background:${c.color}"></span>${c.label} · ${sum} 行`;
+    d.onclick = () => {
+      activeCat = activeCat === k ? null : k;
+      document.querySelectorAll('.lg').forEach(x =>
+        x.classList.toggle('off', activeCat && x.dataset.cat !== activeCat));
+      document.querySelectorAll('.seg').forEach((s, i) =>
+        s.style.opacity = (!activeCat || ZONES[i].cat === activeCat) ? '1' : '.16');
+    };
+    el.appendChild(d);
+  });
+}
+
+function renderZones(){
+  const el = document.getElementById('zonelist');
+  el.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'zrow head';
+  head.innerHTML = `<span></span><span>区块</span><span style="text-align:right">行范围</span>
+                    <span style="text-align:right">行数</span><span style="text-align:right">占比</span>`;
+  el.appendChild(head);
+
+  ZONES.forEach((z, i) => {
+    const r = document.createElement('div');
+    r.className = 'zrow';
+    r.dataset.i = i;
+    r.innerHTML = `
+      <span class="mk" style="background:${CATS[z.cat].color}"></span>
+      <span class="nm">${z.name}</span>
+      <span class="ln">${z.from}–${z.to}</span>
+      <span class="ct">${z.lines}</span>
+      <span class="pc">${(z.lines/TOTAL*100).toFixed(1)}%</span>`;
+    r.onmouseenter = () => highlight(i, true);
+    r.onmouseleave = () => highlight(i, false);
+    el.appendChild(r);
+  });
+}
+
+function highlight(i, on){
+  const seg = document.querySelectorAll('.seg')[i];
+  const row = document.querySelectorAll('.zrow')[i+1];
+  if (seg) seg.classList.toggle('on', on);
+  if (row) row.classList.toggle('hi', on);
+}
+
+/* ==================== 2. 路由表 ==================== */
+const GROUP_NAMES = {
+  'routes/avatar.js'   : '头像上传 · 1 条',
+  'routes/meta.js'     : '元信息（state / config / usage）· 3 条',
+  'routes/global.js'   : '全局记忆文件 · 5 条',
+  'routes/memory.js'   : '机器人记忆（最大一块）· 23 条',
+  'routes/models.js'   : '模型连通性测试 · 1 条',
+  'routes/bots.js'     : '机器人控制（重启/发送/归档/对话）· 5 条',
+  'routes/admin.js'    : 'AI 助手会话（含流式）· 5 条',
+  'routes/heartbeat.js': '心跳状态 · 1 条',
+  'routes/moments.js'  : '朋友圈文案（POST/DELETE 同 id）· 2 条'
+};
+
+function renderRoutes(){
+  const el = document.getElementById('routeTable');
+  el.innerHTML = '';
+  let last = null;
+  ROUTES.forEach(r => {
+    if (r[3] !== last){
+      last = r[3];
+      const h = document.createElement('div');
+      h.className = 'rrow group-head';
+      h.innerHTML = `<span></span><span>${GROUP_NAMES[r[3]] || r[3]}</span><span></span><span></span>`;
+      el.appendChild(h);
+    }
+    const d = document.createElement('div');
+    d.className = 'rrow';
+    d.dataset.k = (r[0] + ' ' + r[1] + ' ' + r[3]).toLowerCase();
+    d.innerHTML = `
+      <span class="m ${r[0]}">${r[0]}</span>
+      <span class="p">${r[1]}</span>
+      <span class="l">L${r[2]}</span>
+      <span class="t">${r[3]}</span>`;
+    el.appendChild(d);
+  });
+  const tail = document.createElement('div');
+  tail.className = 'rrow';
+  tail.dataset.k = 'fallback 404 router.js';
+  tail.innerHTML = `<span class="m" style="background:#475569">404</span>
+    <span class="p">任意未匹配路径 → send(404)</span>
+    <span class="l">L1945</span><span class="t">router.js</span>`;
+  el.appendChild(tail);
+}
+
+function filterRoutes(){
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  if (document.getElementById('viewBefore').classList.contains('hidden')) return;
+  document.querySelectorAll('#routeTable .rrow:not(.group-head)').forEach(r => {
+    r.classList.toggle('hidden', !!q && !r.dataset.k.includes(q));
+  });
+  document.querySelectorAll('#routeTable .group-head').forEach(h => {
+    let n = h.nextElementSibling, any = false;
+    while (n && !n.classList.contains('group-head')){
+      if (!n.classList.contains('hidden')) { any = true; break; }
+      n = n.nextElementSibling;
+    }
+    h.classList.toggle('hidden', !any);
+  });
+}
+
+/* ==================== 3. 文件树 ==================== */
+function renderTree(){
+  const el = document.getElementById('ftree');
+  el.innerHTML = '';
+  TREE.forEach(f => {
+    const d = document.createElement('div');
+    const isRoot = f.p === 'server.js';
+    d.className = 'fnode new' + (isRoot ? ' old' : '');
+    d.innerHTML = `
+      <span class="p">
+        <span class="ico">${isRoot ? '◆' : '▪'}</span>
+        <span>${f.p}</span>${f.grp ? `<span class="grp">${f.grp}</span>` : ''}
+      </span>
+      <span class="ln">${f.ln} 行</span>
+      <span class="note">${f.note} · 批 ${f.batch}</span>`;
+    el.appendChild(d);
+  });
+  const sumNew = TREE.filter(f => f.p !== 'server.js').reduce((a, f) => a + f.ln, 0);
+  const serverLn = (TREE.find((f) => f.p === 'server.js') || {}).ln || 0;
+  const nowTotal = serverLn + sumNew;
+  const tail = document.createElement('div');
+  tail.className = 'fnode done';
+  tail.innerHTML = `<span class="p"><span class="ico">Σ</span>
+      <span>新增 ${TREE.length - 1} 个文件合计（实测）</span></span>
+      <span class="ln">${sumNew} 行</span>
+      <span class="note">原 1964 → 现 ${nowTotal} 行 · 净增 ${nowTotal - 1964} 行胶水</span>`;
+  el.appendChild(tail);
+}
+
+function setView(v){
+  const after = v === 'after';
+  document.getElementById('viewBefore').classList.toggle('hidden', after);
+  document.getElementById('viewAfter').classList.toggle('hidden', !after);
+  document.getElementById('btnBefore').classList.toggle('on', !after);
+  document.getElementById('btnAfter').classList.toggle('on', after);
+  document.getElementById('q').disabled = after;
+  document.getElementById('q').placeholder = after ? '拆分后视图无路由明细' : '筛选路由，如 memory / bots';
+}
+
+function toggleTheme(){
+  const h = document.documentElement;
+  const dark = h.dataset.theme === 'dark';
+  h.dataset.theme = dark ? 'light' : 'dark';
+  document.querySelector('.theme-btn').textContent = dark ? '切换深色' : '切换浅色';
+}
+
+/* ==================== 启动 ==================== */
+renderBar(); renderLegend(); renderZones(); renderRoutes(); renderTree();
+</script>
+</body>
+</html>

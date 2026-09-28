@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "test": "node --test \"tests/**/*.test.mjs\"",
     "baseline": "node scripts/api-baseline.mjs",
-    "baseline:check": "node scripts/api-baseline.mjs --check"
+    "baseline:check": "node scripts/api-baseline.mjs --check",
+    "audit:regex": "node scripts/regex-audit.mjs"
   },
   "dependencies": {
     "playwright": "^1.62.1",
