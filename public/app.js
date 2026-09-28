@@ -364,16 +364,17 @@ function renderChatTabHtml(b) {
   _chatTid = tid;
   const cur = t.threads.find(x => x.id === tid) || t.threads[0];
 
+  const open = threadBarOpen();
   return `
     <div class="chat-page">
-      <div class="chat-threads">
-        <div class="ct-head">
-          <span class="ct-title">对话</span>
-          <span class="ct-count">${t.threads.length}</span>
-          <span class="spacer"></span>
-          <button class="add-btn" onclick="newThread('${id}')" title="新建对话">＋</button>
-        </div>
-        <div class="ct-list" id="thread-list">${threadRowsHtml(id, tid)}</div>
+      <div class="thread-bar ${open ? '' : 'collapsed'}" id="thread-bar">
+        <button class="tb-toggle" onclick="toggleThreadBar()" title="收起 / 展开对话列表">
+          <span class="tb-caret">${open ? '▾' : '▸'}</span>
+        </button>
+        <span class="tb-count">${t.threads.length}</span>
+        <span class="tb-current">${esc(cur.title || '新对话')}</span>
+        <div class="thread-tabs" id="thread-list">${threadTabsHtml(id, tid)}</div>
+        <button class="tb-add" onclick="newThread('${id}')" title="新建对话">＋</button>
       </div>
 
       <div class="card session-card chat-main">
@@ -407,26 +408,60 @@ function fmtAgo(ts) {
   return new Date(Number(ts)).toLocaleDateString();
 }
 
-// 线程条行 HTML（对话页左侧 + 发消息后局部重绘共用）
-function threadRowsHtml(botId, tid) {
-  return threadsOf(botId).threads.map(x => `
-        <div class="thread-item ${x.id === tid ? 'active' : ''}" onclick="switchThread('${botId}','${x.id}')">
-          <span class="ti-title">${esc(x.title || '新对话')}</span>
-          <span class="ti-meta">${x.msgCount || 0} 条 · ${fmtAgo(x.updatedAt)}</span>
-          <span class="ti-ops">
+// 线程横排标签（对话页顶部 + 发消息后局部重绘共用）
+// ✎ / ✕ 只在当前标签上渲染：一种是「opacity:0 但可点」的隐性误触 ——
+// 鼠标悬停标签时按钮显形，点在标签中心就可能落到重命名/删除上。
+// 收进当前标签既零误触，也符合「先选中再操作」的标签页惯例。
+function threadTabsHtml(botId, tid) {
+  return threadsOf(botId).threads.map(x => {
+    const active = x.id === tid;
+    const ops = active ? `
+          <span class="tt-ops">
             <button title="重命名" onclick="event.stopPropagation();renameThreadUI('${botId}','${x.id}')">✎</button>
             <button class="del" title="删除这条对话" onclick="event.stopPropagation();delThread('${botId}','${x.id}')">✕</button>
-          </span>
-        </div>`).join('');
+          </span>` : '';
+    return `
+        <span class="thread-tab ${active ? 'active' : ''}" onclick="switchThread('${botId}','${x.id}')"
+              title="${esc(x.title || '新对话')} · ${x.msgCount || 0} 条 · ${fmtAgo(x.updatedAt)}">
+          <span class="tt-title">${esc(x.title || '新对话')}</span>
+          <span class="tt-count">${x.msgCount || 0}</span>${ops}
+        </span>`;
+  }).join('');
 }
 
-// 只重绘线程条 + 侧栏（发完消息后刷新消息数与活跃时间，不重建整个视图，
+// 对话标签条的展开 / 收起（默认展开；记住上次选择）
+// 放在 localStorage 而不是内存变量：跨会话、跨刷新都保持用户习惯。
+const THREAD_BAR_KEY = 'qqbot-thread-bar';
+function threadBarOpen() {
+  try { return localStorage.getItem(THREAD_BAR_KEY) !== '0'; } catch { return true; }
+}
+function toggleThreadBar() {
+  const open = !threadBarOpen();
+  try { localStorage.setItem(THREAD_BAR_KEY, open ? '1' : '0'); } catch {}
+  // 只切 class 不重建视图 —— 重建会让输入框失焦、消息滚动位置被重置
+  const bar = $('#thread-bar');
+  if (!bar) return;
+  bar.classList.toggle('collapsed', !open);
+  const caret = bar.querySelector('.tb-caret');
+  if (caret) caret.textContent = open ? '▾' : '▸';
+}
+
+// 只重绘线程标签 + 侧栏（发完消息后刷新消息数与活跃时间，不重建整个视图，
 // 避免输入框失焦、消息滚动位置被重置）
 async function refreshThreadsUI(botId, tid) {
   await loadThreads();
   const el = $('#thread-list');
-  if (el && inChatTab(botId)) el.innerHTML = threadRowsHtml(botId, tid);
+  if (el && inChatTab(botId)) {
+    el.innerHTML = threadTabsHtml(botId, tid);
+    scrollActiveThreadTab();
+  }
   renderSidebar();
+}
+
+// 标签多到横向溢出时，让当前对话自动进入视野（否则重绘后滚动位置归零）
+function scrollActiveThreadTab() {
+  const el = $('#thread-list .thread-tab.active');
+  if (el && el.scrollIntoView) el.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }
 
 // 切换当前对话线程（同角色内切换不重建视图框架，直接重绘）
@@ -576,6 +611,8 @@ function renderBotDetail(id) {
         if (inChatTab(id) && _chatTid === tid && !document.hidden && !_streaming.has(id)) loadSessions(id, tid);
       }, 4000);
     }
+    // 标签条重绘后（此时布局刚落定）把当前对话滚进视野
+    requestAnimationFrame(scrollActiveThreadTab);
   } else if (tab === 'memory') {
     loadMemoryFiles(id);
     loadMemLayers(id);

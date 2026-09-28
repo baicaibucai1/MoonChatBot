@@ -75,7 +75,8 @@
   --field-inset: inset 0 1.5px 2.5px rgba(0,0,0,.28);
   --lift-shadow: 0 1px 2px rgba(0,0,0,.25), 0 8px 20px -8px rgba(0,0,0,.5);
 }
-[data-theme="dark"] .session.user .bubble { background: color-mix(in srgb, var(--accent) 7%, transparent); border-color: color-mix(in srgb, var(--accent) 42%, transparent); }
+[data-theme="dark"] .session .bubble { background: rgba(255,255,255,.045); border-color: rgba(255,255,255,.09); }
+[data-theme="dark"] .session.user .bubble { background: color-mix(in srgb, var(--accent) 13%, transparent); border-color: color-mix(in srgb, var(--accent) 42%, transparent); }
 [data-theme="dark"] .add-btn, [data-theme="dark"] .foot-btn { background: var(--hover); }
 [data-theme="dark"] .switch .slider { box-shadow: inset 0 1px 2px rgba(0,0,0,.4); }
 [data-theme="dark"] .switch .slider::before { background: linear-gradient(180deg, #e8e9ec 0%, #ccced3 100%); }
@@ -203,7 +204,12 @@ body::after {
   50% { box-shadow: 0 1px 2px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.5), 0 0 4px 3px transparent, 0 0 14px 2px var(--accent-glow); }
   100% { box-shadow: 0 1px 2px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.5), 0 0 8px 0 var(--accent-glow); }
 }
-.logo-text { font-size: 14px; font-weight: 700; letter-spacing: .12em; color: var(--text); font-family: var(--font); }
+.logo-text {
+  font-size: 13px; font-weight: 700; letter-spacing: .02em;
+  color: var(--text);
+  font-family: var(--font-ui);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 .side-group {
   flex: 1; min-height: 0;
@@ -685,40 +691,51 @@ textarea { resize: vertical; min-height: 40px; line-height: 1.7; }
 label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bottom: 5px; letter-spacing: .04em; }
 .frm-row { margin-bottom: 12px; }
 
-/* 会话流 */
-.session-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; }
+/* ---- 会话流 ----
+   核心原则：用户消息靠右、AI 消息靠左，气泡收缩到内容宽度（封顶 76%），
+   一眼可分谁在说话，而不是两堵通栏文字墙 */
+.session-list { display: flex; flex-direction: column; gap: 10px; min-height: 0; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent; padding: 4px 2px; }
 .session-list::-webkit-scrollbar { width: 6px; }
 .session-list::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
 .session {
   display: flex; gap: 10px; align-items: flex-start;
-  font-size: 12.5px; line-height: 1.65;
+  font-size: 13.5px; line-height: 1.75;
   animation: bubbleIn .35s var(--ease) both;
 }
 @keyframes bubbleIn {
   from { opacity: 0; transform: translateY(8px) scale(.985); }
   to { opacity: 1; transform: none; }
 }
-.session .who { flex-shrink: 0; width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 13px; transition: box-shadow .2s; }
-.session .who img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; }
+.session .who { flex-shrink: 0; width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: box-shadow .2s; }
+.session .who img { width: 100%; height: 100%; object-fit: cover; border-radius: 9px; }
 .session.user .who { background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent); }
 .session.bot .who { background: color-mix(in srgb, var(--ok) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 30%, transparent); }
 .session .bubble {
-  background: var(--input-bg);
+  background: color-mix(in srgb, var(--text) 3%, var(--panel-solid));  /* AI 气泡：浅灰底，与白卡片拉开层次 */
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 8px 12px;
-  flex: 1;
-  /* 内容已由 md() 转换为 <p>/<pre> 等块级标签，无需 pre-wrap；
-     pre-wrap 会把模板字符串里的换行缩进渲染成空行，导致气泡内大片空白 */
+  border-radius: 12px;
+  border-top-left-radius: 4px;   /* AI 气泡：左上收角，指向说话者头像 */
+  padding: 10px 14px;
+  flex: 0 1 auto;                 /* 收缩到内容宽度，不再通栏 */
+  max-width: min(76%, 760px);     /* 长文封顶，保持可读行长 */
+  /* 内容已由 md() 转换为块级标签，严禁改回 pre-wrap（模板缩进会渲染成空行） */
   white-space: normal;
   word-break: break-word;
   transition: background-color .3s ease, border-color .2s ease, box-shadow .25s var(--ease);
 }
 .session .bubble:hover { border-color: var(--line-2); box-shadow: var(--shadow-sm); }
-.session.user .bubble { border-color: color-mix(in srgb, var(--accent) 42%, transparent); background: color-mix(in srgb, var(--accent) 6%, #fff); }
-.session .time { font-family: var(--font); font-size: 10px; color: var(--text-faint); margin-top: 4px; }
-/* 气泡内小操作按钮（删除/分支）：紧凑内联，不占空间 */
-.session .time .s-ops { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: middle; }
+/* 用户消息：整行镜像（头像+气泡靠右），主题色底一眼可辨 */
+.session.user { flex-direction: row-reverse; }
+.session.user .bubble {
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, #fff);
+  border-top-left-radius: 12px;
+  border-top-right-radius: 4px;  /* 右上收角，指向右侧头像 */
+}
+.session .time { font-family: var(--font); font-size: 10px; color: var(--text-faint); margin-top: 5px; }
+/* 气泡内小操作按钮（删除/分支）：默认隐藏，悬停本条时浮现，降低视觉噪音 */
+.session .time .s-ops { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: middle; opacity: 0; transition: opacity .16s; }
+.session:hover .time .s-ops { opacity: 1; }
 .session .s-ops button {
   padding: 0; width: 16px; height: 16px; border-radius: 4px;
   font-size: 10px; line-height: 1; display: inline-flex;
@@ -890,7 +907,9 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .core-edit-modal textarea { width: 100%; margin-bottom: 8px; }
 
 /* 会话气泡内 Markdown 元素 */
-.bubble p { margin: 2px 0; }
+.bubble p { margin: 3px 0; }
+.bubble p:first-child { margin-top: 0; }
+.bubble p:last-child { margin-bottom: 0; }
 .bubble h1, .bubble h2, .bubble h3, .bubble h4, .bubble h5, .bubble h6 { margin: 7px 0 4px; line-height: 1.4; }
 .bubble h1 { font-size: 16px; }
 .bubble h2 { font-size: 15px; }
@@ -1289,6 +1308,9 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .bc-sep { opacity: .5; }
 .bc-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .bc-actions { flex: none; display: flex; align-items: center; gap: 6px; }
+/* 角色卡「删除」：平时淡显，悬停卡片才亮起，避免常驻红字抢视线 */
+.bc-actions .ghost-del { opacity: .5; transition: opacity .18s, background .16s, color .16s; }
+.bot-card:hover .bc-actions .ghost-del, .bc-actions .ghost-del:hover { opacity: 1; }
 
 /* 标签页：贴着角色卡下沿，像卡片自带的一排页签 */
 .bot-tabs {
@@ -1323,88 +1345,120 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 }
 .bot-tab-body { min-height: 0; }
 
-/* 线程条上的对话条数角标 */
-.ct-count {
+/* 设置弹窗（角色卡旁的「⚙ 设置」） */
+.bot-settings-modal { width: min(920px, 94vw); }
+
+/* =========================================================
+   对话页（多线程）
+   线程选取器：C8 前是 250px 固定左栏 —— 只有一条对话时也白占掉
+   约四分之一宽度。现在收成角色卡下沿的一条横排标签带：
+   默认展开、可折叠、展开状态记在 localStorage。
+   角色配置项一律不在这里，对话视线里只有对话。
+   ========================================================= */
+.chat-page { display: flex; flex-direction: column; gap: 10px; }
+
+/* 标签带：一行高度，视觉上是角色卡下挂的第二层「页签」 */
+.thread-bar {
+  display: flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 4px 8px 4px 6px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; box-shadow: var(--shadow);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.tb-toggle {
+  width: 22px; height: 22px; flex-shrink: 0; padding: 0;
+  border: none; background: transparent; border-radius: 6px;
+  color: var(--text-faint); cursor: pointer; font-size: 10px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .14s, color .14s;
+}
+.tb-toggle:hover { background: var(--hover); color: var(--text); }
+.tb-count {
+  flex-shrink: 0;
   font-family: var(--font); font-size: 10.5px;
   padding: 1px 6px; border-radius: 8px;
   background: color-mix(in srgb, var(--text) 10%, transparent);
   color: var(--text-faint);
 }
-
-/* 设置弹窗（角色卡旁的「⚙ 设置」） */
-.bot-settings-modal { width: min(920px, 94vw); }
-
-/* =========================================================
-   对话页（多线程 C2）—— 对话与角色设置分离
-   左列 = 线程条（该角色的多条对话），右列 = 消息流与输入框。
-   角色配置项一律不在这里，避免对话视线被 AppID / 密钥 之类的设置挤占。
-   ========================================================= */
-.chat-page { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: stretch; }
-@media (max-width: 1000px) { .chat-page { grid-template-columns: 1fr; } }
-
-.chat-threads {
-  display: flex; flex-direction: column;
-  height: min(58vh, 580px);
-  min-height: 380px;
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: var(--radius); box-shadow: var(--shadow);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  overflow: hidden;
-}
-.ct-head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 11px 12px 10px; border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.ct-head .side-avatar { width: 24px; height: 24px; }
-.ct-title {
-  font-size: 13px; font-weight: 700; color: var(--text);
+/* 收起态才有意义：用当前对话标题替掉整排标签 */
+.tb-current {
+  display: none; min-width: 0;
+  font-size: 12.5px; font-weight: 600; color: var(--text);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ct-list {
-  flex: 1; min-height: 0; overflow-y: auto;
-  padding: 8px; display: flex; flex-direction: column; gap: 3px;
+.tb-add {
+  width: 22px; height: 22px; flex-shrink: 0; padding: 0;
+  border: 1px dashed var(--line-2); background: transparent; border-radius: 999px;
+  color: var(--text-faint); cursor: pointer; font-size: 12px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .14s, color .14s, border-color .14s;
+}
+.tb-add:hover {
+  background: var(--accent-soft); color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* 收起：标签排整体隐去，只留「▸ 对话 <当前标题> ＋」 */
+.thread-bar.collapsed .thread-tabs { display: none; }
+.thread-bar.collapsed .tb-count { display: none; }
+.thread-bar.collapsed .tb-current { display: block; }
+
+/* 标签排：横向滚动，溢出时也不换行 */
+.thread-tabs {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 4px;
+  overflow-x: auto; overflow-y: hidden;
+  padding: 2px 4px;
   scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
 }
-.ct-list::-webkit-scrollbar { width: 6px; }
-.ct-list::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
-.ct-foot { padding: 8px; border-top: 1px solid var(--line); flex-shrink: 0; }
-.ct-foot .ghost { width: 100%; justify-content: center; }
+.thread-tabs::-webkit-scrollbar { height: 5px; }
+.thread-tabs::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 3px; }
 
-.thread-item {
-  position: relative; padding: 8px 10px;
-  border: 1px solid transparent; border-radius: 10px;
-  cursor: pointer; flex-shrink: 0;
-  transition: background .16s var(--ease), border-color .16s var(--ease);
+/* 单个对话标签 */
+.thread-tab {
+  position: relative; flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 5px;
+  max-width: 190px; padding: 4px 10px;
+  border: 1px solid var(--line-2); border-radius: 999px;
+  cursor: pointer; font-size: 12px; color: var(--text-dim);
+  transition: background .16s var(--ease), border-color .16s var(--ease), color .16s;
 }
-.thread-item:hover { background: var(--hover); }
-.thread-item.active {
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
-}
-.ti-title {
-  display: block; font-size: 12.5px; color: var(--text-dim);
+.thread-tab:hover { background: var(--hover); color: var(--text); }
+.thread-tab.active {
+  font-weight: 600; color: var(--text);
   padding-right: 46px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
-.thread-item.active .ti-title { color: var(--text); font-weight: 600; }
-.ti-meta {
-  display: block; margin-top: 3px;
-  font-family: var(--font); font-size: 10px; color: var(--text-faint);
+/* 当前对话的左侧小竖条：比只靠底色更容易扫到 */
+.thread-tab.active::before {
+  content: '';
+  position: absolute; left: -1px; top: 50%;
+  width: 3px; height: 13px; transform: translateY(-50%);
+  border-radius: 2px; background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
 }
-.ti-ops { position: absolute; top: 6px; right: 6px; display: flex; gap: 1px; opacity: 0; transition: opacity .16s; }
-.thread-item:hover .ti-ops, .thread-item.active .ti-ops { opacity: 1; }
-.ti-ops button {
-  width: 20px; height: 20px; padding: 0; border: none; background: transparent;
+.tt-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-count { flex-shrink: 0; font-family: var(--font); font-size: 10px; color: var(--text-faint); }
+
+/* 当前标签上的 ✎ / ✕：绝对定位在预留区里，不占位也不挤动相邻标签。
+   只渲染在当前标签上 —— 非当前标签没有按钮，点它的任何位置都只是切换。 */
+.tt-ops {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: flex; gap: 1px;
+}
+.tt-ops button {
+  width: 18px; height: 18px; padding: 0; border: none; background: transparent;
   color: var(--text-faint); border-radius: 6px; cursor: pointer;
-  font-size: 11px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 10.5px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
   transition: background .14s, color .14s;
 }
-.ti-ops button:hover { background: var(--hover); color: var(--text); }
-.ti-ops button.del:hover { color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
+.tt-ops button:hover { background: var(--hover); color: var(--text); }
+.tt-ops button.del:hover { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
 
-/* 右侧对话主体：沿用原会话卡内部样式，仅补标题栏细节 */
-.chat-main { height: min(58vh, 580px); min-height: 380px; }
+/* 对话主体：标签带之下的消息流与输入框，沿用原会话卡内部样式 */
+.chat-main { height: calc(100vh - 308px); min-height: 420px; }
 .chat-main .card-title { gap: 8px; }
 .chat-title-text {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
