@@ -1997,6 +1997,25 @@ async function streamBotChat(id, content, tid, onDelta) {
   throw e;
 }
 
+// 乐观渲染「自己刚发的那条」：点发送就立刻上屏，不等角色回答完。
+// 不这么做的话，从点发送到角色开口之间只有一颗「正在思考」，说话人看不到自己说了什么，
+// 会以为没发出去。
+//
+// 结构与 loadSessions 的渲染刻意保持一致（收尾重绘时无视觉跳变）；
+// 不带 ✕ / ⑂ 操作按钮 —— 这条消息此刻还没有服务端时间戳，等落库后的重绘再出现。
+function appendUserBubble(container, content) {
+  if (!container) return;
+  // 首条消息进来时把「暂无会话记录」摘掉，否则空态提示会和新气泡同框
+  container.querySelectorAll('.empty-hint').forEach((n) => n.remove());
+  const el = document.createElement('div');
+  el.className = 'session user';
+  el.innerHTML = `
+    <div class="who">👤</div>
+    <div class="bubble md">${md(content)}<div class="time">${new Date().toLocaleString()}</div></div>`;
+  container.appendChild(el);
+  container.scrollTop = container.scrollHeight;
+}
+
 // 流式气泡的绘制器：先当「思考中」占位，收到首字后原地变成逐字增长的 md 气泡。
 // 返回 { paint, el }，paint(累积全文, 是否还在流) 可反复调用。
 function makeStreamBubble(container, bot) {
@@ -2005,7 +2024,11 @@ function makeStreamBubble(container, bot) {
   el.innerHTML = `
     <div class="who">${bot ? avatarInner(bot) : '🤖'}</div>
     <div class="bubble thinking"><span class="tp"></span>正在思考输出…</div>`;
-  if (container) { container.appendChild(el); container.scrollTop = container.scrollHeight; }
+  if (container) {
+    container.querySelectorAll('.empty-hint').forEach((n) => n.remove());
+    container.appendChild(el);
+    container.scrollTop = container.scrollHeight;
+  }
   const bubble = el.querySelector('.bubble');
   const paint = (text, streaming) => {
     bubble.className = 'bubble md' + (streaming ? ' streaming' : '');
@@ -2035,17 +2058,24 @@ async function directChat(id) {
 
   const listEl = $('#session-list');
   const bot = (state.bots || []).find(x => x.id === id);
+  // 自己说的那句立刻上屏 + 立即清空输入框（看起来就是「发出去了」）。
+  // 失败且确实没发出去时再填回，见下 restoreInput。
+  appendUserBubble(listEl, content);
+  if (ta) ta.value = '';
   const { paint } = makeStreamBubble(listEl, bot);
   let acc = '';
+
+  // 只有「请求根本没打到服务端」才把原文填回输入框：一旦建流成功，
+  // 服务端就已落库（流式路由是先写 user 消息再调模型），这时填回去
+  // 只会诱导用户把同一句重发一遍。
+  const restoreInput = () => { if (ta && !ta.value) ta.value = content; };
 
   try {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
-      if (ta && ta.value) ta.value = '';   // 首字到达即清空输入框（失败时保留原文，见下）
       paint(acc, true);
     });
     if (r && r.ok) {
-      if (ta) ta.value = '';
       paint(r.reply, false);
       toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok');
     }
@@ -2053,8 +2083,8 @@ async function directChat(id) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat，保住「流式不可用的环境仍能对话」
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
-      if (r.ok) { if (ta) ta.value = ''; toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok'); }
-      else toast('对话失败: ' + r.err, 'err');
+      if (r.ok) toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok');
+      else { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
       toast('对话失败: ' + err.message, 'err');
     }
@@ -2118,27 +2148,28 @@ async function modalChat(id, tid) {
   renderSidebar();
 
   // 弹窗内容区尾部追加气泡（流式渲染；收尾时整块重绘，被真实记录替换）
+  // 同样的乐观渲染：自己说的那句先上屏，再等角色开口
   const bodyEl = document.querySelector('#session-modal .modal-body');
   const bot = (state.bots || []).find(x => x.id === id);
+  appendUserBubble(bodyEl, content);
+  if (ta) ta.value = '';
   const { paint } = makeStreamBubble(bodyEl, bot);
   let acc = '';
+
+  // 同 directChat：只有请求压根没到服务端时才把原文填回
+  const restoreInput = () => { if (ta && !ta.value) ta.value = content; };
 
   try {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
-      if (ta) ta.value = '';
       paint(acc, true);
     });
-    if (r && r.ok) {
-      if (ta) ta.value = '';
-      paint(r.reply, false);
-    }
+    if (r && r.ok) paint(r.reply, false);
   } catch (err) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
-      if (r.ok) { if (ta) ta.value = ''; }
-      else toast('对话失败: ' + r.err, 'err');
+      if (!r.ok) { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
       toast('对话失败: ' + err.message, 'err');
     }
