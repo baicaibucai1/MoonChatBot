@@ -1444,6 +1444,8 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   display: inline-block; animation: tp-blink 1s infinite;
   box-shadow: 0 0 8px 1px var(--accent-glow);
 }
+/* 流式输出中的气泡：主题色描边，让「正在逐字生成」与「已定稿」一眼可分 */
+.session .bubble.streaming { border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
 @keyframes tp-blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
 /* 会话完整记录弹窗 */

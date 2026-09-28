@@ -166,6 +166,11 @@ function buildProbes(botId) {
     // 后果是一条带任意 id 的请求就会在 memory/ 下凭空造出目录和会话记录。
     // 副本内无害，但这是真实的纵深防御缺口，已记入本基线（预期 200 而非 404）。
     { id: 'api:bot-chat-nope', kind: 'probe', method: 'POST', path: `/api/bots/${N}/chat`, json: { content: 'x' }, capture: ['ok', 'err'], note: '无前置实体校验：会写 memory/<id>/ 后返回 200 {ok:false}' },
+    // 流式对话（C6）。同样无前置实体校验，所以响应是 SSE 而不是 JSON：
+    //   bodyKind 记 'text'，只留长度量级，正文不入基线（含可变的时间/内容迟早会漂）。
+    // 这里刻意只验证「路由命中 + 参数提取 + 事件流形态（start→err 两帧）」，不碰真模型。
+    { id: 'api:bot-chat-stream-nope', kind: 'probe', method: 'POST', path: `/api/bots/${N}/chat/stream`, json: { content: 'x' }, headers: { Accept: 'text/event-stream' }, note: 'SSE：start 后因「机器人不存在」发 err 帧并收尾，HTTP 仍为 200' },
+    { id: 'api:bot-chat-stream-empty', kind: 'reject', method: 'POST', path: `/api/bots/${N}/chat/stream`, json: {}, capture: ['err'], note: '缺 content → 在写 SSE 头之前就 400 早退，不落库' },
     { id: 'api:model-test-404', kind: 'probe', method: 'POST', path: `/api/models/${N}/test`, capture: ['err'], note: '不存在的 id，避免真实调用模型' },
     { id: 'api:mem-distill-404', kind: 'probe', method: 'POST', path: `/api/memory/${N}/distill`, capture: ['err'], note: '不存在的 id，避免真实调用模型' },
     { id: 'api:moments-post-404', kind: 'probe', method: 'POST', path: `/api/moments/${N}`, capture: ['err'] },

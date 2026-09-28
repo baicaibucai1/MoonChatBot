@@ -55,8 +55,8 @@ let router;
 before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
-  test('条目总数稳定在 52（批 1 的 45 条 + C1 的 6 条线程路由 + C2 的 1 条清空路由）', () => {
-    assert.equal(router.routes.length, 52);
+  test('条目总数稳定在 53（批 1 的 45 条 + C1 的 6 条线程路由 + C2 的 1 条清空路由 + C6 的 1 条流式对话）', () => {
+    assert.equal(router.routes.length, 53);
   });
 
   test('每条路由只声明 exact 或 re 之一，且方法字段合法', () => {

@@ -532,9 +532,9 @@ function renderBotDetail(id) {
     if (_chatTid) {
       const tid = _chatTid;
       loadSessions(id, tid);
-      // 当前线程的消息轮询（离开该 tab 或切线程即停）
+      // 当前线程的消息轮询（离开该 tab 或切线程即停；流式输出中暂缓，见 _streaming）
       _sessionTimer = setInterval(() => {
-        if (inChatTab(id) && _chatTid === tid && !document.hidden) loadSessions(id, tid);
+        if (inChatTab(id) && _chatTid === tid && !document.hidden && !_streaming.has(id)) loadSessions(id, tid);
       }, 4000);
     }
   } else if (tab === 'memory') {
@@ -1818,46 +1818,115 @@ async function loadSessions(id, tid) {
   }
 }
 
-// ---- 面板直接对话（在对话页的当前线程里说话） ----
+// ---- 与角色流式对话（SSE） ----
+// 后端 POST /api/bots/:id/chat/stream 的客户端。抽成独立函数，是因为「对话页」与
+// 「完整记录弹窗」要用同一套流式协议（事件 start / text / done / err）。
+//
+// ⚠️ onDelta 拿到的是**累积全文**而非增量（chatWithBot 的 onDelta 语义，见
+// lib/routes/bots.js 该路由的头部注释 —— 逐轮回调 streamClean(前几轮 + 本轮累积)），
+// 所以调用方一律「整体替换气泡内容」，不要 += 拼接。
+//
+// 抛错分两种语义，调用方必须区别对待：
+//   noFallback 为假（默认）：连响应头都没拿到 → 服务端大概率没处理这次请求，
+//                            可安全回落一次性 POST /api/bots/:id/chat
+//   noFallback 为真        ：请求已经打到服务端（user 消息已落库，回复可能也已生成）
+//                            → 绝不能重放，否则同一条 user 消息会被写两遍
+async function streamBotChat(id, content, tid, onDelta) {
+  let resp;
+  try {
+    resp = await fetch(API_BASE + `/api/bots/${id}/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(tid ? { content, threadId: tid } : { content }),
+    });
+  } catch (e) {
+    throw new Error((e && e.message) || '无法连接后端服务');
+  }
+  if (!resp.ok || !resp.body) throw new Error('流式接口不可用（HTTP ' + resp.status + '）');
+
+  let saw = false, done = null, srvErr = '';
+  await readAdminSSE(resp.body, (ev) => {
+    saw = true;
+    if (ev.type === 'text') { if (onDelta) onDelta(String(ev.d || '')); }
+    else if (ev.type === 'done') done = ev;
+    else if (ev.type === 'err') srvErr = ev.err || '调用失败';
+  }, () => { /* 传输层异常：交由下面的「零事件」判定统一处理 */ });
+
+  if (done) return { ok: true, reply: done.reply || '', pushed: !!done.pushed, threadId: done.threadId };
+  const e = new Error(srvErr || (saw ? '流式响应不完整（连接被中断）' : '流式连接无响应'));
+  e.noFallback = true;
+  throw e;
+}
+
+// 流式气泡的绘制器：先当「思考中」占位，收到首字后原地变成逐字增长的 md 气泡。
+// 返回 { paint, el }，paint(累积全文, 是否还在流) 可反复调用。
+function makeStreamBubble(container, bot) {
+  const el = document.createElement('div');
+  el.className = 'session bot';
+  el.innerHTML = `
+    <div class="who">${bot ? avatarInner(bot) : '🤖'}</div>
+    <div class="bubble thinking"><span class="tp"></span>正在思考输出…</div>`;
+  if (container) { container.appendChild(el); container.scrollTop = container.scrollHeight; }
+  const bubble = el.querySelector('.bubble');
+  const paint = (text, streaming) => {
+    bubble.className = 'bubble md' + (streaming ? ' streaming' : '');
+    bubble.innerHTML = (text ? md(text) : '<span class="lay-dim">正在生成…</span>') + (streaming ? '<span class="caret"></span>' : '');
+    // 只在用户本就贴着底部时才跟随，不打断向上翻阅历史
+    if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 90) {
+      container.scrollTop = container.scrollHeight;
+    }
+  };
+  return { paint, el };
+}
+
+// ---- 面板直接对话（在对话页的当前线程里说话）----
 async function directChat(id) {
-  const content = $('#f-chat').value.trim();
+  const ta = $('#f-chat');
+  const content = ta ? ta.value.trim() : '';
   if (!content) return toast('请输入内容', 'err');
   // 定位当前线程：在对话标签页时用 _chatTid；否则不传，由后端回退到默认线程
   const tid = inChatTab(id) ? _chatTid : null;
   const btn = document.querySelector('.chat-input .primary');
   if (btn) { btn.disabled = true; btn.textContent = '思考中…'; }
 
-  // 标记该角色「正在对话」→ 侧栏黄点
+  // 标记该角色「正在对话」→ 侧栏黄点；并暂停当前线程轮询，避免重绘抹掉流式气泡
   _chatting.add(id);
+  _streaming.add(id);
   renderSidebar();
 
-  // 会话列表尾部插入「正在思考输出」占位气泡（AI 未返回前可见）
   const listEl = $('#session-list');
   const bot = (state.bots || []).find(x => x.id === id);
-  const thinkEl = document.createElement('div');
-  thinkEl.className = 'session bot thinking-item';
-  thinkEl.innerHTML = `
-    <div class="who">${bot ? avatarInner(bot) : '🤖'}</div>
-    <div class="bubble thinking"><span class="tp"></span>正在思考输出…</div>`;
-  if (listEl) listEl.appendChild(thinkEl);
-  if (listEl) listEl.scrollTop = listEl.scrollHeight;
+  const { paint } = makeStreamBubble(listEl, bot);
+  let acc = '';
 
   try {
-    const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
-    if (r.ok) {
-      $('#f-chat').value = '';
+    const r = await streamBotChat(id, content, tid, (t) => {
+      acc = t;
+      if (ta && ta.value) ta.value = '';   // 首字到达即清空输入框（失败时保留原文，见下）
+      paint(acc, true);
+    });
+    if (r && r.ok) {
+      if (ta) ta.value = '';
+      paint(r.reply, false);
       toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok');
-      await loadSessions(id, tid);
-      // 消息数与活跃时间变了 → 局部刷新线程条与侧栏（不重建视图，保住输入焦点）
-      if (tid) await refreshThreadsUI(id, tid);
+    }
+  } catch (err) {
+    if (!err.noFallback) {
+      // 请求没打到服务端 → 安全回落一次性 /chat，保住「流式不可用的环境仍能对话」
+      const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
+      if (r.ok) { if (ta) ta.value = ''; toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok'); }
+      else toast('对话失败: ' + r.err, 'err');
     } else {
-      toast('对话失败: ' + r.err, 'err');
+      toast('对话失败: ' + err.message, 'err');
     }
   } finally {
     _chatting.delete(id);
+    _streaming.delete(id);
     renderSidebar();
-    // 移除思考占位（loadSessions 会重绘真实记录；此处直接移除避免残留）
-    if (thinkEl && thinkEl.parentNode) thinkEl.parentNode.removeChild(thinkEl);
+    // 无论成败都以服务端记录为准重绘：流式气泡只是预览，落库的那份才是真相
+    await loadSessions(id, tid);
+    // 消息数与活跃时间变了 → 局部刷新线程条与侧栏（不重建视图，保住输入焦点）
+    if (tid) await refreshThreadsUI(id, tid);
     if (btn) { btn.disabled = false; btn.textContent = '发送'; }
   }
 }
@@ -1898,7 +1967,7 @@ function expandSessions(id, tid) {
   document.body.appendChild(overlay);
 }
 
-// 弹窗内直接对话：发送后刷新弹窗内容（保留弹窗，含思考占位）
+// 弹窗内直接对话：流式逐字输出，结束后用服务端记录刷新弹窗内容
 async function modalChat(id, tid) {
   const ta = $('#m-chat');
   const content = ta && ta.value.trim();
@@ -1906,27 +1975,51 @@ async function modalChat(id, tid) {
   const btnEl = document.querySelector('.modal-foot .primary');
   if (btnEl) { btnEl.disabled = true; btnEl.textContent = '思考中…'; }
   _chatting.add(id);
+  _streaming.add(id);
   renderSidebar();
-  // 弹窗内追加气泡（AI 回复后由刷新替换）
+
+  // 弹窗内容区尾部追加气泡（流式渲染；收尾时整块重绘，被真实记录替换）
+  const bodyEl = document.querySelector('#session-modal .modal-body');
+  const bot = (state.bots || []).find(x => x.id === id);
+  const { paint } = makeStreamBubble(bodyEl, bot);
+  let acc = '';
+
   try {
-    const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
-    if (r.ok) {
+    const r = await streamBotChat(id, content, tid, (t) => {
+      acc = t;
       if (ta) ta.value = '';
-      if (tid) {
-        const x = await api(`/api/memory/${id}/threads/${tid}`);
-        _sessionsCache[cacheKey(id, tid)] = (x && x.messages) || [];
-      } else {
-        _sessionsCache[id] = (await api(`/api/memory/${id}/sessions`)).sessions || [];
-      }
-      // 刷新弹窗内容并保持底部输入条
-      expandSessions(id, tid);
-      if (tid) refreshThreadsUI(id, tid);
+      paint(acc, true);
+    });
+    if (r && r.ok) {
+      if (ta) ta.value = '';
+      paint(r.reply, false);
+    }
+  } catch (err) {
+    if (!err.noFallback) {
+      // 请求没打到服务端 → 安全回落一次性 /chat
+      const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
+      if (r.ok) { if (ta) ta.value = ''; }
+      else toast('对话失败: ' + r.err, 'err');
     } else {
-      toast('对话失败: ' + r.err, 'err');
+      toast('对话失败: ' + err.message, 'err');
     }
   } finally {
     _chatting.delete(id);
+    _streaming.delete(id);
     renderSidebar();
+    if (tid) {
+      const x = await api(`/api/memory/${id}/threads/${tid}`);
+      _sessionsCache[cacheKey(id, tid)] = (x && x.messages) || [];
+    } else {
+      _sessionsCache[id] = (await api(`/api/memory/${id}/sessions`)).sessions || [];
+    }
+    // 用户中途关掉弹窗就别再把它弹回来（expandSessions 会重新 appendChild）
+    if ($('#session-modal')) {
+      expandSessions(id, tid);
+      const mb = document.querySelector('#session-modal .modal-body');
+      if (mb) mb.scrollTop = mb.scrollHeight;
+      if (tid) refreshThreadsUI(id, tid);
+    }
     if (btnEl) { btnEl.disabled = false; btnEl.textContent = '发送'; }
   }
 }
@@ -2025,6 +2118,10 @@ let _adminHistory = [];      // 当前会话消息 [{role, content}]
 let _adminModelId = '';      // 对话框选用的模型 id
 let _adminBusy = false;
 let _chatting = new Set();   // 正在对话的机器人 id 集合（侧栏黄点提示）
+// 正在流式输出的机器人 id 集合：流式期间必须掐掉「当前线程」的 4s 轮询，
+// 否则每 4 秒一次的 loadSessions 会把 #session-list 整个重绘，正在逐字增长的气泡
+// 会被当场抹掉（轮询拿到的还是落库前的旧记录），表现为「字打一半消失」。
+let _streaming = new Set();
 let _adminSessions = [];     // 会话列表缓存（右侧历史）
 let _adminSessionId = '';    // 当前会话 id（'' = 下次发送时新建）
 // 流式输出：默认普通模式（部分内嵌预览/WebView 会掐断 SSE 长连接，导致 net::ERR_ABORTED）。
