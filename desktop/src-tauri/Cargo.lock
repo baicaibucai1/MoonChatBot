@@ -2365,8 +2365,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "qqbot-console"
-version = "0.1.0"
+name = "moonchatbot"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",

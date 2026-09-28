@@ -1,8 +1,8 @@
 [package]
-# 这个 name 决定主程序的文件名（qqbot-console.exe），
+# 这个 name 决定主程序的文件名（moonchatbot.exe），
 # 与界面上的 productName 是两回事 —— 后者在 tauri.conf.json 里。
-name = "qqbot-console"
-version = "0.1.0"
+name = "moonchatbot"
+version = "0.2.0"
 description = "QQ 机器人管理面板的桌面壳（后端服务独立运行）"
 edition = "2021"
 rust-version = "1.77.2"

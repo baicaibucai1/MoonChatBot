@@ -1,4 +1,4 @@
-# QQBOT Console · 桌面壳
+# MoonChatBot · 桌面壳
 
 把 QQ 机器人管理面板装进一个独立的 Windows 桌面窗口。
 
@@ -25,7 +25,7 @@ QQ 机器人服务仍由 `node server.js` 在后台独立运行。
 ### 日常使用（已装好之后）
 
 1. **先启动服务**：在项目根目录双击 `启动面板.bat`（或 `node server.js`）
-2. **再打开壳**：开始菜单里的「QQBOT Console」
+2. **再打开壳**：开始菜单里的「MoonChatBot」
 
 > 顺序反了也没关系 —— 壳会显示「无法连接后端服务」的提示，
 > 并给出命令和「重试连接」按钮。
@@ -39,7 +39,7 @@ desktop/打包桌面版.bat     ← 双击，产出安装包
 产物位置：
 ```
 desktop/src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/
-    QQBOT Console_0.1.0_x64-setup.exe
+    MoonChatBot_0.2.0_x64-setup.exe
 ```
 
 也可以在 `desktop/` 下跑 `node scripts/pack.mjs`。
@@ -165,15 +165,15 @@ const CORS_ORIGINS = new Set([
 
 ### 安装包内容（7/7 PASS）
 
-`qqbot-console.exe` 在清单里、`WebView2Loader.dll` 已装入、卸载项完整。
+`moonchatbot.exe` 在清单里、`WebView2Loader.dll` 已装入、卸载项完整。
 
 ### 桌面壳加载（决定性证据）
 
-WebView2 数据目录 `%LOCALAPPDATA%\com.baicaibucai.qqbot-console\EBWebView`
-已创建，缓存中命中 **`index.html` / `app.js` / `style.css` / `tauri.localhost` / `QQBOT`**
+WebView2 数据目录 `%LOCALAPPDATA%\com.baicaibucai.moonchatbot\EBWebView`
+已创建，缓存中命中 **`index.html` / `app.js` / `style.css` / `tauri.localhost` / `MoonChatBot`**
 全部 5 个关键词，163 个缓存文件，时间戳与启动时刻吻合。
 
-窗口标题正确显示 `QQBOT 控制台`，窗口尺寸 1280×820（符合配置）。
+窗口标题正确显示 `MoonChatBot 控制台`，窗口尺寸 1280×820（符合配置）。
 
 > **注意**：用命令行启动壳时，若进程落在非交互式会话，
 > 窗口会处于最小化状态（坐标 -25600、客户区 0×0、无 WebView2 子进程）。
