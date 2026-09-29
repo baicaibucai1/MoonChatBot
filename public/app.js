@@ -528,6 +528,29 @@ function avatarInner(b) {
 // 角色卡「精彩时刻」：由 AI 从记忆档案 + 最近对话中提炼的高光片段
 // 挂在卡片内的第二行（见 renderBotCard）——卡片是窄条横幅，所以这里用
 // 紧凑的横排高光条，而不是三列大卡，避免把对话视线往下挤。
+// 点击某条 → 在该条下方就地展开摘要 / 台词；同一时刻只展开一条。
+let _openMoment = null;   // 当前展开的条目索引（null = 全部收起）
+let _openMomentBot = null; // 上面那个索引属于哪个角色（切角色即重置）
+
+function momentsBodyHtml(b, arr) {
+  return `
+    <div class="mi-items">
+      ${arr.map((m, i) => `
+      <span class="mi-item ${_openMoment === i ? 'open' : ''}" data-mi="${i}">
+        <span class="mi-head" onclick="toggleMoment(${i})" title="${_openMoment === i ? '收起' : '展开查看摘要与台词'}">
+          <span class="mi-idx">${i + 1}</span>
+          <span class="mi-title">${esc(m.title || '无题时刻')}</span>
+          <span class="mi-caret">▾</span>
+        </span>
+        <button class="mi-del" onclick="event.stopPropagation();momentDel('${b.id}', ${i})" title="删除该条">✕</button>
+        <span class="mi-detail">
+          ${m.summary ? `<span class="mi-sum">${esc(m.summary)}</span>` : ''}
+          ${m.quote ? `<span class="mi-quote">“${esc(m.quote)}”</span>` : ''}
+        </span>
+      </span>`).join('')}
+    </div>`;
+}
+
 function renderMomentsInline(b) {
   const arr = Array.isArray(b.moments) && b.moments.length ? b.moments : null;
   const gen = `<button class="ghost sm moments-inline-gen" onclick="momentsGen('${b.id}')"
@@ -543,16 +566,20 @@ function renderMomentsInline(b) {
   return `
     <div class="moments-inline" id="moments">
       <span class="mi-label">✨ 精彩时刻</span>
-      <div class="mi-items">
-        ${arr.map((m, i) => `
-        <span class="mi-item" title="${esc([m.title, m.summary, m.quote ? '“' + m.quote + '”' : ''].filter(Boolean).join(' — '))}">
-          <span class="mi-idx">${i + 1}</span>
-          <span class="mi-title">${esc(m.title || '无题时刻')}</span>
-          <button class="mi-del" onclick="momentDel('${b.id}', ${i})" title="删除该条">✕</button>
-        </span>`).join('')}
-      </div>
+      ${momentsBodyHtml(b, arr)}
       ${gen}
     </div>`;
+}
+
+// 展开 / 收起一条精彩时刻（纯前端类切换，不重渲染，避免丢展开态）
+function toggleMoment(i) {
+  _openMoment = (_openMoment === i) ? null : i;
+  document.querySelectorAll('#moments .mi-item').forEach((el) => {
+    const on = Number(el.dataset.mi) === _openMoment;
+    el.classList.toggle('open', on);
+    const h = el.querySelector('.mi-head');
+    if (h) h.title = on ? '收起' : '展开查看摘要与台词';
+  });
 }
 
 // 提炼/重新提炼（AI 生成并落盘）
@@ -584,6 +611,8 @@ function renderBotDetail(id) {
     main.innerHTML = `<div class="card"><div class="empty-hint">选择一个角色，或点击左侧 ＋ 添加。</div></div>`;
     return;
   }
+  // 切到别的角色时收起精彩时刻的展开态（索引只对当前角色有意义）
+  if (_openMomentBot !== id) { _openMoment = null; _openMomentBot = id; }
   const tab = BOT_TABS.some(x => x.id === _botTab) ? _botTab : 'chat';
   _botTab = tab;
   const body = tab === 'chat' ? renderChatTabHtml(b)

@@ -1212,21 +1212,20 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 
 /* 角色卡「精彩时刻」：AI 提炼的高光片段（卡片内第二行，紧凑横排） */
 .moments-inline {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: flex-start; gap: 10px;
   margin-top: 12px; padding-top: 10px;
   border-top: 1px solid var(--outline, var(--line-2));
   min-width: 0;
 }
 .mi-label {
-  flex: none; font-size: 11.5px; font-weight: 600;
+  flex: none; font-size: 11.5px; font-weight: 600; line-height: 21px;
   color: var(--on-surface-variant, var(--text-dim));
   letter-spacing: .02em; white-space: nowrap;
 }
-.mi-items { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mi-items { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
 .mi-item {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; flex-direction: column;
   flex: 1 1 auto; max-width: 340px; min-width: 0;
-  padding: 4px 8px 4px 6px;
   border: 1px solid var(--outline, var(--line));
   border-radius: var(--r-s, 8px);
   background: var(--surface-1, var(--ctl-bg));
@@ -1235,6 +1234,16 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   transition: border-color .18s, background-color .18s;
 }
 .mi-item:hover { border-color: var(--outline-strong, var(--accent-glow)); background: var(--surface-2, var(--ctl-bg)); }
+.mi-item.open {
+  border-color: var(--outline-strong, var(--accent-glow));
+  background: var(--surface-2, var(--ctl-bg));
+  flex-basis: 100%; max-width: 100%;
+}
+/* 头部行：点击展开 / 收起 */
+.mi-head {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  padding: 4px 8px 4px 6px; cursor: pointer;
+}
 .mi-idx {
   flex: none; width: 15px; height: 15px; border-radius: 4px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -1242,23 +1251,44 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   color: var(--on-surface-variant, var(--text-dim));
   background: var(--surface-3, var(--accent-soft));
 }
-.mi-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mi-title { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mi-caret {
+  flex: none; font-size: 9px; line-height: 1; opacity: .45;
+  transition: transform .2s var(--ease, ease);
+}
+.mi-item.open .mi-caret { transform: rotate(180deg); opacity: .8; }
+/* 展开详情：摘要 + 台词 */
+.mi-detail {
+  display: none;
+  padding: 0 10px 8px 27px;
+  font-size: 11.5px; line-height: 1.6;
+  color: var(--on-surface-variant, var(--text-dim));
+}
+.mi-item.open .mi-detail { display: block; }
+.mi-sum { display: block; }
+.mi-quote {
+  display: block; margin-top: 4px; font-style: italic;
+  color: var(--on-surface-faint, var(--text-faint));
+}
 .mi-del {
-  flex: none; width: 15px; height: 15px; padding: 0; margin-left: 1px;
+  position: absolute; right: 4px; top: 4px;
+  width: 15px; height: 15px; padding: 0;
   border: none; background: transparent; border-radius: 4px;
   font-size: 10px; line-height: 1; color: var(--on-surface-faint, var(--text-faint));
   opacity: 0; cursor: pointer;
   transition: opacity .16s, background-color .16s, color .16s;
 }
-.mi-item:hover .mi-del { opacity: .75; }
+.mi-item:hover .mi-del, .mi-item.open .mi-del { opacity: .75; }
 .mi-del:hover { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); opacity: 1; }
+.mi-item.open .mi-head { padding-right: 24px; }
 .moments-inline-gen { flex: none; margin-left: auto; }
-.moments-inline-empty { gap: 10px; }
+.moments-inline-empty { gap: 10px; align-items: center; }
 .mi-empty-hint { flex: 1; min-width: 0; font-size: 11.5px; color: var(--on-surface-faint, var(--text-faint));
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 900px) {
   .moments-inline { flex-wrap: wrap; }
   .mi-items { flex-basis: 100%; }
+  .mi-item { max-width: 100%; }
 }
 
 .profile-edit-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
