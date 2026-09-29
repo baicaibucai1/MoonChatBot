@@ -55,8 +55,21 @@ let router;
 before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
-  test('条目总数稳定在 53（批 1 的 45 条 + C1 的 6 条线程路由 + C2 的 1 条清空路由 + C6 的 1 条流式对话）', () => {
-    assert.equal(router.routes.length, 53);
+  test('条目总数稳定在 59（... + 工作区的 6 条：列表/注入/读/写/删/改名）', () => {
+    assert.equal(router.routes.length, 59);
+  });
+
+  test('workspace 域守「先具体后通配」：/inject 与 /:key/rename 必须排在 /:key 之前', () => {
+    const idx = (pred) => router.routes.findIndex(pred);
+    const iInject = idx((r) => r.exact === '/api/workspace/inject');
+    const iRename = idx((r) => r.re && clean(r).endsWith('/rename$'));
+    const iWild = idx((r) => r.re && clean(r).startsWith('^/api/workspace/') && clean(r).endsWith(')$')
+      && !clean(r).includes('/rename'));
+    assert.ok(iInject >= 0, '应存在 /api/workspace/inject 条目');
+    assert.ok(iRename >= 0, '应存在 /api/workspace/:key/rename 条目');
+    assert.ok(iWild >= 0, '应存在 /api/workspace/:key 通配条目');
+    assert.ok(iInject < iWild, `/api/workspace/inject 必须排在 /:key 之前（当前 ${iInject} vs ${iWild}）`);
+    assert.ok(iRename < iWild, `/api/workspace/:key/rename 必须排在 /:key 之前（当前 ${iRename} vs ${iWild}）`);
   });
 
   test('每条路由只声明 exact 或 re 之一，且方法字段合法', () => {

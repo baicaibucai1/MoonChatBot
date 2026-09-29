@@ -120,8 +120,31 @@ function buildProbes(botId) {
     { id: 'api:global-create-no-key', kind: 'reject', method: 'POST', path: '/api/global/files', json: {}, capture: ['err'] },
     { id: 'api:global-create', kind: 'write', method: 'POST', path: '/api/global/files', json: { key: K } },
     { id: 'api:global-put', kind: 'write', method: 'PUT', path: `/api/global/files/${K}`, json: { content: 'baseline probe' } },
-    { id: 'api:global-enabled', kind: 'write', method: 'PUT', path: `/api/global/files/${K}/enabled`, json: { enabled: false } },
+    { id: 'api:global-enable', kind: 'write', method: 'PUT', path: `/api/global/files/${K}/enabled`, json: { enabled: false } },
     { id: 'api:global-delete', kind: 'write', method: 'DELETE', path: `/api/global/files/${K}` },
+
+    // ── 工作区（草稿台）：列表 → 写 → 读 → 改名 → 注入 → 边界 → 删 ──────
+    // 顺序敏感：注入依赖前面已写入的文件；改名依赖原名存在。
+    { id: 'api:ws-list-empty', kind: 'read', method: 'GET', path: '/api/workspace', note: '初始应为空列表（副本内 workspace/ 不存在）' },
+    { id: 'api:ws-put', kind: 'write', method: 'PUT', path: `/api/workspace/${K}`, json: { content: 'baseline probe', desc: 'probe' } },
+    { id: 'api:ws-list-after-put', kind: 'read', method: 'GET', path: '/api/workspace', note: '写入后列表应含该文件' },
+    { id: 'api:ws-get', kind: 'read', method: 'GET', path: `/api/workspace/${K}`, note: '读回正文' },
+    { id: 'api:ws-rename', kind: 'write', method: 'POST', path: `/api/workspace/${K}/rename`, json: { to: `${K}_renamed` }, note: '★ 验证 /rename 优先于 /:key 通配匹配' },
+    { id: 'api:ws-rename-old-gone', kind: 'probe', method: 'GET', path: `/api/workspace/${K}`, capture: ['content'], note: '改名前文件应已不存在（content=null）' },
+    // 注入目标 1：全局设定（block 之后要有独立 destKey，避免覆盖别处）
+    { id: 'api:ws-inject-global', kind: 'write', method: 'POST', path: '/api/workspace/inject', json: { key: `${K}_renamed`, targetType: 'global', destKey: `${K}_g` }, note: '★ 验证 /inject 优先于 /:key 通配匹配；写入 global 后需清理' },
+    { id: 'api:ws-inject-global-cleanup', kind: 'write', method: 'DELETE', path: `/api/global/files/${K}_g` },
+    // 注入目标 2：角色记忆库
+    { id: 'api:ws-inject-bot', kind: 'write', method: 'POST', path: '/api/workspace/inject', json: { key: `${K}_renamed`, targetType: 'bot', targetId: B, destKey: `${K}_b` }, note: '注入到角色记忆库' },
+    { id: 'api:ws-inject-bot-cleanup', kind: 'write', method: 'DELETE', path: `/api/memory/${B}/files/${K}_b` },
+    // 拒绝分支
+    { id: 'api:ws-inject-bad-target', kind: 'reject', method: 'POST', path: '/api/workspace/inject', json: { key: `${K}_renamed`, targetType: '__nope__' }, capture: ['err'], note: 'targetType 非法 → 200 {ok:false}' },
+    { id: 'api:ws-inject-bad-key', kind: 'reject', method: 'POST', path: '/api/workspace/inject', json: { key: 'a.b', targetType: 'global' }, capture: ['err'], note: '非法文件名 → 400' },
+    { id: 'api:ws-inject-no-bot', kind: 'reject', method: 'POST', path: '/api/workspace/inject', json: { key: `${K}_renamed`, targetType: 'bot', targetId: N }, capture: ['err'], note: '机器人不存在 → 200 {ok:false}' },
+    { id: 'api:ws-put-bad-key', kind: 'reject', method: 'PUT', path: '/api/workspace/a.b', json: { content: 'x' }, capture: ['err'], note: '★ 非法文件名：正则不命中 → 落 404 兜底（不是 400）' },
+    { id: 'api:ws-rename-bad-to', kind: 'reject', method: 'POST', path: `/api/workspace/${K}_renamed/rename`, json: { to: 'a/b' }, capture: ['err'], note: '非法目标名 → 400' },
+    { id: 'api:ws-delete', kind: 'write', method: 'DELETE', path: `/api/workspace/${K}_renamed` },
+    { id: 'api:ws-list-final', kind: 'read', method: 'GET', path: '/api/workspace', note: '清理后应回到空列表' },
 
     // ── 记忆文件：创建 → 改名备注 → 分层 → 开关 → 删除（顺序敏感）──
     { id: 'api:mem-create-no-key', kind: 'reject', method: 'POST', path: `/api/memory/${B}/files`, json: {}, capture: ['err'] },

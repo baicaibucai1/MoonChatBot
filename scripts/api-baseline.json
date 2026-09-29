@@ -1,9 +1,9 @@
 {
   "meta": {
-    "generatedAt": "2026-09-28T14:03:40.500Z",
+    "generatedAt": "2026-09-29T02:10:23.595Z",
     "node": "v22.22.2",
     "sourceSha": "<unknown>",
-    "probeCount": 83,
+    "probeCount": 100,
     "note": "由 scripts/api-baseline.mjs 在临时副本沙箱中生成。比对时忽略 meta.generatedAt。"
   },
   "results": [
@@ -882,7 +882,7 @@
       ]
     },
     {
-      "id": "api:global-enabled",
+      "id": "api:global-enable",
       "kind": "write",
       "method": "PUT",
       "path": "/api/global/files/__baseline_probe__/enabled",
@@ -914,6 +914,352 @@
       },
       "shape": [
         "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-list-empty",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/workspace",
+      "note": "初始应为空列表（副本内 workspace/ 不存在）",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "dir:string",
+        "files:array",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-put",
+      "kind": "write",
+      "method": "PUT",
+      "path": "/api/workspace/__baseline_probe__",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-list-after-put",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/workspace",
+      "note": "写入后列表应含该文件",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "dir:string",
+        "files:array",
+        "files[].desc:string",
+        "files[].injects:array",
+        "files[].key:string",
+        "files[].mtime:number",
+        "files[].size:number",
+        "files[]:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-get",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/workspace/__baseline_probe__",
+      "note": "读回正文",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "content:string",
+        "key:string",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-rename",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/workspace/__baseline_probe__/rename",
+      "note": "★ 验证 /rename 优先于 /:key 通配匹配",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "key:string",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-rename-old-gone",
+      "kind": "probe",
+      "method": "GET",
+      "path": "/api/workspace/__baseline_probe__",
+      "note": "改名前文件应已不存在（content=null）",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "content:string",
+        "key:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "content": ""
+      }
+    },
+    {
+      "id": "api:ws-inject-global",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/workspace/inject",
+      "note": "★ 验证 /inject 优先于 /:key 通配匹配；写入 global 后需清理",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-inject-global-cleanup",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/global/files/__baseline_probe___g",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-inject-bot",
+      "kind": "write",
+      "method": "POST",
+      "path": "/api/workspace/inject",
+      "note": "注入到角色记忆库",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-inject-bot-cleanup",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/memory/BOT1/files/__baseline_probe___b",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-inject-bad-target",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/workspace/inject",
+      "note": "targetType 非法 → 200 {ok:false}",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "targetType 必须是 bot 或 global"
+      }
+    },
+    {
+      "id": "api:ws-inject-bad-key",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/workspace/inject",
+      "note": "非法文件名 → 400",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "非法的文件名: a.b"
+      }
+    },
+    {
+      "id": "api:ws-inject-no-bot",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/workspace/inject",
+      "note": "机器人不存在 → 200 {ok:false}",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "机器人不存在: __nope__"
+      }
+    },
+    {
+      "id": "api:ws-put-bad-key",
+      "kind": "reject",
+      "method": "PUT",
+      "path": "/api/workspace/a.b",
+      "note": "★ 非法文件名：正则不命中 → 落 404 兜底（不是 400）",
+      "status": 404,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "接口不存在: /api/workspace/a.b"
+      }
+    },
+    {
+      "id": "api:ws-rename-bad-to",
+      "kind": "reject",
+      "method": "POST",
+      "path": "/api/workspace/__baseline_probe___renamed/rename",
+      "note": "非法目标名 → 400",
+      "status": 400,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "err:string",
+        "ok:boolean"
+      ],
+      "captured": {
+        "err": "非法的目标文件名: a/b"
+      }
+    },
+    {
+      "id": "api:ws-delete",
+      "kind": "write",
+      "method": "DELETE",
+      "path": "/api/workspace/__baseline_probe___renamed",
+      "note": "",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "ok:boolean"
+      ]
+    },
+    {
+      "id": "api:ws-list-final",
+      "kind": "read",
+      "method": "GET",
+      "path": "/api/workspace",
+      "note": "清理后应回到空列表",
+      "status": 200,
+      "bodyKind": "json",
+      "headers": {
+        "content-type": "application/json; charset=utf-8",
+        "access-control-allow-methods": "GET,POST,PUT,DELETE,OPTIONS",
+        "access-control-allow-origin": "<none>"
+      },
+      "shape": [
+        "$:object",
+        "dir:string",
+        "files:array",
         "ok:boolean"
       ]
     },

@@ -10,6 +10,7 @@ const store = require('./lib/store');
 const memory = require('./lib/memory');
 const models = require('./lib/models');
 const search = require('./lib/search');
+const workspace = require('./lib/workspace');
 const BotManager = require('./lib/bots');
 
 // ---- 拆分后引入的模块（批 1：HTTP 层 + 路由层 + ID 常量）----
@@ -424,6 +425,7 @@ const routeDeps = {
   app, memory, models, fs, path, spawn,
   AVATAR_DIR,
   ID_RE, ADMIN_ID_RE,
+  workspace,
   // 以下目前仍住在 server.js，批 2 迁移
   makeChatFn, chatWithBot, genBotMoments, extractJsonObjects,
   adminPickModel, buildAdminSystem, adminToolSchemas,
@@ -492,12 +494,15 @@ function buildAdminSystem(cfg, botId) {
   lines.push('3. 总结与洞察：总结机器人会话/记忆库，提炼关键信息与待办；回顾你与管理员的既往处理（历史会话）保持工作连续性。');
   lines.push('4. 创作内容：在虚拟创作场景中正常协助生成、总结、润色、扩写（见固定准则，不得拒绝）。');
   lines.push('');
-  lines.push('【权限边界】你只能读取面板配置、记忆/会话/历史记录并提供指导。你绝对不能删除、重命名或修改用户的任何文件与配置，也绝不直接执行任何写操作；一切修改由用户自己确认后在面板中完成。');
+  lines.push('【权限边界】除「工作区」外，你不能修改用户的任何文件与配置，也不能直接执行任何写操作；对记忆库/全局文件/机器人配置的修改，一律只生成「待确认」建议，由用户在面板中确认后才落盘。');
+  lines.push('【工作区】是你唯一的「可写区」：它是面板里的草稿台（workspace/ 目录）。当你要产出一份较长内容（人设补充、世界观设定、事件摘要、提示词），**先写进工作区**，再建议注入给某个机器人或全局。好处是：用户能审阅后再决定、同一份草稿可复用到多个角色、可反复修改。不要直接把长文塞进 propose_memory_edit 的 content 里 —— 那样内容只存在于这一轮对话，确认完就蒸发，无法复用。');
   lines.push('');
   lines.push('【Agent 工具】你有如下工具可用：');
   lines.push('- 读取：list_robots（机器人状态）、get_panel_state（模型/全局设置）、list_memory_files / read_memory_file（机器人记忆库）、read_sessions（最近会话）、search_memory（记忆库关键词搜索）、read_global_files / read_global_file（全局设定）；');
   lines.push('- 回顾自身：list_admin_sessions / read_admin_session（读取面板管理员的既往会话，跨对话保持记忆）；');
   lines.push('- 新增模型：create_model（用户确认服务信息后即可添加，立即生效、无需再确认）；');
+  lines.push('- 工作区（草稿台）：ws_write_file / ws_list_files / ws_read_file / ws_delete_file（写入与读写草稿，免确认，安全操作）；起草前先 ws_list_files 看看有没有现成的，避免重复造轮子；');
+  lines.push('- 注入建议：propose_ws_inject —— 【需确认】把工作区草稿注入到机器人记忆库（targetType=bot + targetId）或全局设定（targetType=global）；这是会真正改动 AI 记忆的一步，务必先说清「注入什么、给谁、为什么」。');
   lines.push('- 编辑建议：propose_memory_edit / propose_memory_tier / propose_core_edit / propose_global_edit / propose_bot_config_edit —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；propose_memory_tier 用于建议记忆文件的层级（1=无条件强制注入 2=摘要索引 3=冷记忆）；propose_core_edit 用于建议人格核心卡（每轮注入的蒸馏人格）的新内容。');
   lines.push('- 联网：web_search / web_fetch（仅在面板开启联网时可用）。');
   lines.push('规则：需要机器人/模型/记忆/会话信息时，先调用对应读取工具获取真实内容，不要凭记忆猜测；判断问题、给建议都基于工具返回的原文。');
@@ -506,6 +511,8 @@ function buildAdminSystem(cfg, botId) {
   lines.push('   - 修改机器人记忆文件：{"editMemory":{"botId":"BOT1","key":"persona","content":"改写后的完整内容"}}');
   lines.push('   - 修改全局文件：{"editGlobal":{"key":"prompt","content":"改写后的完整内容"}}');
   lines.push('   - 更新机器人配置：{"editBot":{"id":"BOT1","modelId":"Agnes","historyLimit":10}}');
+  lines.push('   - 写工作区草稿：{"wsWrite":{"key":"persona_draft","desc":"用途说明","content":"完整正文"}}（免确认，会真正写入工作区）');
+  lines.push('   - 建议注入：{"wsInject":{"key":"persona_draft","targetType":"bot","targetId":"BOT1","destKey":"persona"}}（需确认，targetType 为 bot 或 global）');
   lines.push('   规则：id 只含字母数字或 -；绝不填写 apiKey（密钥由用户自己在模型管理页填写）；JSON 必须严格合法（英文双引号、字段名拼写正确）。');
   lines.push('');
   lines.push('【对话记忆】你与用户的分轮对话会被持久化保存，可在右侧「历史会话」中随时新建/回顾。同一会话内请结合上文连贯作答；需要跨会话信息时使用工具回顾。');
@@ -743,6 +750,75 @@ function adminToolSchemas(webEnabled) {
             webSearch: { type: 'boolean', description: '默认是否允许联网（可选）' },
           },
           required: ['id', 'name', 'baseURL', 'model'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'ws_write_file',
+        description: '【工作区·免确认】把一段内容写进「工作区」草稿台（workspace/<key>.md）。工作区是管理员 AI 的草稿台：想产出一份较长的内容（人设补充、世界观设定、事件摘要、提示词），先写到这里，用户在面板审阅后再决定注入给哪个机器人或全局。可反复覆盖同一文件，可复用到多个目标。写工作区是安全操作，无需确认。',
+        parameters: {
+          type: 'object',
+          properties: {
+            key: { type: 'string', description: '文件名（不带 .md），只含字母数字下划线中文或 -，如 persona_draft' },
+            content: { type: 'string', description: '完整正文（Markdown）' },
+            desc: { type: 'string', description: '一句话说明这份草稿的用途（可选，会显示在列表里）' },
+          },
+          required: ['key', 'content'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'ws_list_files',
+        description: '【工作区·读取】列出工作区当前的全部草稿文件（文件名、字数、备注、已注入到哪些目标）。在生成新草稿前先看这里，避免重复造轮子或覆盖已有内容。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'ws_read_file',
+        description: '【工作区·读取】读取工作区某个草稿文件的完整正文（用于在已有草稿上追加/改写）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            key: { type: 'string', description: '文件名（不带 .md）' },
+          },
+          required: ['key'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'ws_delete_file',
+        description: '【工作区·免确认】删除工作区里的一个草稿文件。仅在确认该草稿已作废时使用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            key: { type: 'string', description: '文件名（不带 .md）' },
+          },
+          required: ['key'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_ws_inject',
+        description: '【写操作·需确认】建议把工作区某个草稿注入到目标 —— 机器人记忆库（targetType=bot，targetId 为机器人 ID）或全局设定（targetType=global）。不落盘，用户确认后才会写入。这一步会真正改动该 AI 的记忆，务必先说清「注入什么、给谁、为什么」。',
+        parameters: {
+          type: 'object',
+          properties: {
+            key: { type: 'string', description: '工作区文件名（不带 .md）' },
+            targetType: { type: 'string', description: 'bot（注入到机器人记忆库）或 global（注入到全局设定）' },
+            targetId: { type: 'string', description: 'targetType=bot 时必填，机器人 ID，如 BOT1' },
+            destKey: { type: 'string', description: '目标文件名（不带 .md，可选；省略则沿用工作区文件名）' },
+          },
+          required: ['key', 'targetType'],
         },
       },
     },
@@ -1004,6 +1080,51 @@ async function runAdminTool(cfg, name, args = {}) {
     return { text: `已新增模型：${args.name || id}（${args.model}）。`, summary: `已新增模型 ${args.name || id}`, pending: null };
   }
 
+  // ---- 工作区（管理员草稿台）：读写免确认，注入才需确认 ----
+  if (name === 'ws_list_files') {
+    const files = workspace.listFiles();
+    if (!files.length) return { text: '【工作区】\n（空）—— 可以用 ws_write_file 在这里起草内容。', summary: '工作区为空', pending: null };
+    const lines = files.map((f) => {
+      const inj = f.injects.length
+        ? '；已注入 → ' + f.injects.map((x) => (x.targetType === 'global' ? `全局/${x.destKey}` : `${x.targetId}/${x.destKey}`)).join('、')
+        : '；未注入';
+      return `- ${f.key}（${f.size} 字）${f.desc ? '：' + f.desc : ''}${inj}`;
+    });
+    return { text: `【工作区】共 ${files.length} 个草稿\n` + lines.join('\n'), summary: `工作区 ${files.length} 个文件`, pending: null };
+  }
+  if (name === 'ws_read_file') {
+    const key = safeKey(args.key);
+    const content = workspace.readFile(key);
+    if (!content) return { text: `工作区文件 ${key}.md 不存在或为空。`, summary: `${key}（空）`, pending: null };
+    return { text: `【工作区 ${key}】\n${String(content).slice(0, 6000)}`, summary: `已读工作区 ${key}.md（${content.length} 字）`, pending: null };
+  }
+  if (name === 'ws_write_file') {
+    const key = safeKey(args.key);
+    const content = String(args.content ?? '');
+    if (!content.trim()) throw new Error('内容为空，不予写入');
+    workspace.writeFile(key, content, args.desc);
+    return { text: `已写入工作区 ${key}.md（${content.length} 字）。用户可在面板「工作区」审阅并注入到目标。`, summary: `写入工作区 ${key}.md`, pending: null };
+  }
+  if (name === 'ws_delete_file') {
+    const key = safeKey(args.key);
+    workspace.deleteFile(key);
+    return { text: `已删除工作区文件 ${key}.md。`, summary: `删除工作区 ${key}.md`, pending: null };
+  }
+  if (name === 'propose_ws_inject') {
+    const key = safeKey(args.key);
+    const targetType = String(args.targetType || '');
+    if (!['bot', 'global'].includes(targetType)) throw new Error('targetType 必须是 bot 或 global');
+    const destKey = args.destKey ? safeKey(args.destKey) : key;
+    if (!workspace.readFile(key)) throw new Error('工作区文件不存在或为空: ' + key);
+    if (targetType === 'bot') {
+      const b = mustBot(args.targetId);
+      const payload = { type: 'ws_inject', payload: { key, targetType, targetId: b.id, destKey } };
+      return { text: `已生成把工作区 ${key}.md 注入到「${b.name || b.id}」记忆库（目标文件 ${destKey}.md）的建议，等待用户确认。`, summary: `待确认：${key} → ${b.name || b.id}/${destKey}`, pending: payload };
+    }
+    const payload = { type: 'ws_inject', payload: { key, targetType: 'global', targetId: '', destKey } };
+    return { text: `已生成把工作区 ${key}.md 注入到「全局设定」（目标文件 ${destKey}.md）的建议，等待用户确认。`, summary: `待确认：${key} → 全局/${destKey}`, pending: payload };
+  }
+
   // ---- 编辑（只生成待确认，不落盘） ----
   if (name === 'propose_memory_edit') {
     const b = mustBot(args.botId);
@@ -1188,12 +1309,12 @@ async function adminChatAgent(cfg, model, messages, apiKey) {
 // 结构化兜底：模型用纯文字描述“修改建议”（含“确认写入”等口头语）但没调用 propose_* 时，
 // 追加一轮提示，要求其改由工具正式提交，保证前端能弹出「是否同意此更改」确认条。
 async function adminEnsureEdits(cfg, model, baseMessages, apiKey, replyText, emit) {
-  if (!/确认写入|确认后才会写入|确认应用|是否同意|建议将|建议把|建议修改/.test(replyText || '')) return false;
+  if (!/确认写入|确认后才会写入|确认应用|是否同意|建议将|建议把|建议修改|建议注入|注入到/.test(replyText || '')) return false;
   const webEnabled = cfg.webSearch === true || model.webSearch === true;
   const tools = adminToolSchemas(webEnabled);
   // 工具过程/待确认事件透传给原 emit；中间的赘述文本不再转发
   const silent = (ev) => { if (ev.type !== 'text') emit(ev); };
-  const tip = { role: 'user', content: '（自动提示）你刚才只是用文字描述了修改建议。请改用 propose_memory_edit / propose_global_edit / propose_bot_config_edit 工具正式提交这条建议（content 必须是可直接替换的完整新正文）。若确实无需修改，请简短回复“无需修改”。' };
+  const tip = { role: 'user', content: '（自动提示）你刚才只是用文字描述了修改/注入建议。请改用工具正式提交：改记忆用 propose_memory_edit、改全局用 propose_global_edit、改机器人配置用 propose_bot_config_edit、把工作区草稿注入用 propose_ws_inject（content 必须是可直接替换的完整新正文；若草稿还没写进工作区，先 ws_write_file）。若确实无需修改，请简短回复“无需修改”。' };
   const m2 = baseMessages.concat([{ role: 'assistant', content: replyText || null }, tip]);
   await streamAdminAgent(cfg, model, m2, apiKey, tools, silent);
   return true;

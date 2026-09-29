@@ -312,6 +312,7 @@ function renderMain() {
   if (view.type === 'model-form') return renderModelForm(view.id);
   if (view.type === 'model') return renderModelDetail(view.id);
   if (view.type === 'settings') return renderSettings();
+  if (view.type === 'workspace') return renderWorkspace();
   return renderBotDetail(view.id);
 }
 
@@ -2679,6 +2680,20 @@ async function adminSend(prompt, botIdOverride) {
     }
     const ed = extractEdit(replyText);
     if (ed) msgs.insertAdjacentHTML('beforeend', renderEditBar(ed));
+    // 工作区草稿（纯文本降级）：写工作区是安全操作，直接落盘，不等确认
+    const ww = scanActionJson(replyText, 'wsWrite');
+    if (ww && ww.key) {
+      api(`/api/workspace/${encodeURIComponent(ww.key)}`, 'PUT', { content: String(ww.content ?? ''), desc: ww.desc ? String(ww.desc) : '' })
+        .then((r) => toast(r.ok ? `已写入工作区 ${ww.key}.md` : (r.err || '写入工作区失败'), r.ok ? 'ok' : 'err'));
+    }
+    // 工作区注入建议（纯文本降级）：需确认，走与工具模式同一套确认条
+    const wi = scanActionJson(replyText, 'wsInject');
+    if (wi && wi.key) {
+      msgs.insertAdjacentHTML('beforeend', renderEditBar({
+        type: 'ws_inject',
+        payload: { key: String(wi.key), targetType: wi.targetType === 'global' ? 'global' : 'bot', targetId: String(wi.targetId || ''), destKey: String(wi.destKey || wi.key) },
+      }));
+    }
   };
 
   let ok = false;
@@ -2845,6 +2860,7 @@ function renderEditBar(ed) {
   else if (ed.type === 'memory_tier') label = `管理员建议调整记忆层级：${p.botId} 的「${p.key}」→ ${tierNames[p.tier] || p.tier}`;
   else if (ed.type === 'core') label = `管理员建议修改人格核心卡：${p.botId}`;
   else if (ed.type === 'global') label = `管理员建议修改全局文件：「${p.key}」`;
+  else if (ed.type === 'ws_inject') label = `管理员建议把工作区草稿「${p.key}」注入到 ${p.targetType === 'global' ? '全局设定' : (p.targetId || '?') + ' 的记忆库'}（目标文件 ${p.destKey || p.key}.md）`;
   else label = `管理员建议更新机器人配置：${p.id || ''}`;
   return `<div class="admin-msg ai"><div class="admin-bubble admin-action admin-write">
     <span class="admin-action-label">🤖 是否同意此更改？<br><span class="admin-action-sub">${esc(label)}</span></span>
@@ -2867,13 +2883,21 @@ function dismissEdit(btn) {
 }
 
 // 预览编辑内容
-function previewEdit(btn) {
+async function previewEdit(btn) {
   let ed = null;
   try { ed = JSON.parse(btn.dataset.json); } catch { return toast('解析失败', 'err'); }
   const p = ed.payload || {};
-  const content = (ed.type === 'bot' || ed.type === 'core') ? JSON.stringify(p, null, 2) : (p.content || '');
+  let content;
+  if (ed.type === 'bot' || ed.type === 'core') content = JSON.stringify(p, null, 2);
+  else if (ed.type === 'ws_inject') {
+    const r = await api(`/api/workspace/${encodeURIComponent(p.key)}`).catch(() => ({ ok: false }));
+    content = r.ok ? (r.content || '（空）') : ('读取失败：' + (r.err || ''));
+  } else content = p.content || '';
   const title = ed.type === 'memory' ? `预览：${p.botId} 记忆「${p.key}」`
-    : ed.type === 'global' ? `预览：全局「${p.key}」` : ed.type === 'core' ? `预览：${p.botId} 人格核心卡` : `预览：机器人「${p.id}」配置`;
+    : ed.type === 'global' ? `预览：全局「${p.key}」`
+      : ed.type === 'core' ? `预览：${p.botId} 人格核心卡`
+        : ed.type === 'ws_inject' ? `预览：工作区「${p.key}」→ ${p.targetType === 'global' ? '全局' : p.targetId}「${p.destKey || p.key}」`
+          : `预览：机器人「${p.id}」配置`;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'edit-preview';
@@ -2898,12 +2922,18 @@ async function confirmEdit(btn) {
   else if (ed.type === 'memory_tier') desc = `将把 ${p.botId} 的「${p.key}」层级调整为「${tierNames[p.tier] || p.tier}」`;
   else if (ed.type === 'core') desc = `将覆盖 ${p.botId} 的人格核心卡`;
   else if (ed.type === 'global') desc = `将覆盖全局文件「${p.key}」的内容`;
+  else if (ed.type === 'ws_inject') desc = `将把工作区草稿「${p.key}」注入到 ${p.targetType === 'global' ? '全局设定' : (p.targetId || '?') + ' 的记忆库'}（写入为「${p.destKey || p.key}」）`;
   else desc = `将更新机器人「${p.id}」的配置`;
   if (!(await uiConfirm({ title: '确认应用更改', message: `${desc}，\n确认应用？`, okText: '确认应用' }))) return;
   let r;
   if (ed.type === 'memory') {
     if (!p.botId || !p.key) return toast('缺少 botId 或 key', 'err');
     r = await api(`/api/memory/${p.botId}/files/${p.key}`, 'PUT', { content: p.content || '' });
+  } else if (ed.type === 'ws_inject') {
+    if (!p.key) return toast('缺少工作区文件名', 'err');
+    r = await api('/api/workspace/inject', 'POST', {
+      key: p.key, targetType: p.targetType, targetId: p.targetId || '', destKey: p.destKey || p.key,
+    });
   } else if (ed.type === 'memory_tier') {
     if (!p.botId || !p.key) return toast('缺少 botId 或 key', 'err');
     r = await api(`/api/memory/${p.botId}/files/${p.key}/tier`, 'PUT', { tier: p.tier });
@@ -3462,6 +3492,144 @@ function backToModels() { view = { type: 'models' }; renderSidebar(); renderMain
 
 // ---------- 底部入口 / 模型管理页 ----------
 function openModels() { view = { type: 'models' }; renderSidebar(); renderMain(); }
+
+// ================= 工作区（管理员 AI 的草稿台） =================
+// 管理员 AI 产出的长文先落到这里，用户在面板审阅后决定注入给哪个角色 / 全局。
+// 同一份草稿可复用到多个目标 —— 这是它存在的意义（二创/复用）。
+let _wsFiles = [];          // 文件列表缓存
+let _wsCur = null;          // 当前打开预览的文件 key
+
+function openWorkspace() { view = { type: 'workspace' }; renderSidebar(); renderMain(); }
+
+async function refreshWorkspace() {
+  const r = await api('/api/workspace');
+  _wsFiles = (r && r.ok && r.files) || [];
+  renderMain();
+}
+
+async function renderWorkspace() {
+  const r = await api('/api/workspace');
+  _wsFiles = (r && r.ok && r.files) || [];
+  if (_wsCur && !_wsFiles.some((f) => f.key === _wsCur)) _wsCur = null;
+
+  let preview = '<div class="empty-hint">从左侧选一个文件查看内容。</div>';
+  if (_wsCur) {
+    const rc = await api(`/api/workspace/${encodeURIComponent(_wsCur)}`).catch(() => ({ ok: false }));
+    const cur = _wsFiles.find((f) => f.key === _wsCur);
+    preview = `
+      <div class="ws-preview-head">
+        <b>${esc(_wsCur)}.md</b>
+        <span class="ws-meta">${cur ? cur.size : 0} 字</span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="wsRename('${esc(_wsCur)}')">改名</button>
+        <button class="ghost sm" onclick="wsInjectUI('${esc(_wsCur)}')">⤓ 注入…</button>
+        <button class="ghost sm ghost-del" onclick="wsDel('${esc(_wsCur)}')">删除</button>
+      </div>
+      ${cur && cur.injects.length ? `<div class="ws-injects">已注入：${cur.injects.map((x) => esc(x.targetType === 'global' ? `全局/${x.destKey}` : `${x.targetId}/${x.destKey}`)).join('、')}</div>` : ''}
+      <pre class="mf-preview ws-preview-body">${esc((rc && rc.content) || '（读取失败或为空）')}</pre>`;
+  }
+
+  main.innerHTML = `
+    <div class="page-head">
+      <h2>▢ 工作区</h2>
+      <span class="page-sub">管理员 AI 的草稿台 —— 生成的内容先落在这里，确认后再注入给角色或全局</span>
+      <span class="spacer"></span>
+      <button class="ghost sm" onclick="wsNew()">＋ 新建文件</button>
+      <button class="ghost sm" onclick="refreshWorkspace()">↻ 刷新</button>
+    </div>
+    <div class="cards-2 ws-layout">
+      <div class="card">
+        <div class="card-title">草稿文件（${_wsFiles.length}）<span class="spacer"></span>
+          <span class="ws-dir-hint" title="文件真实存放位置">workspace/</span>
+        </div>
+        ${_wsFiles.length ? `<div class="ws-list">${_wsFiles.map((f) => `
+          <div class="ws-item ${f.key === _wsCur ? 'active' : ''}" onclick="wsOpen('${esc(f.key)}')">
+            <span class="ws-item-name">${esc(f.key)}</span>
+            <span class="ws-item-meta">${f.size} 字${f.injects.length ? ' · 已注入' : ''}</span>
+            ${f.desc ? `<span class="ws-item-desc">${esc(f.desc)}</span>` : ''}
+          </div>`).join('')}</div>`
+    : '<div class="empty-hint">工作区还没有文件。可以让面板管理员 AI 生成，或点右上角「新建文件」手动写。</div>'}
+      </div>
+      <div class="card ws-preview-card">${preview}</div>
+    </div>`;
+}
+
+function wsOpen(key) { _wsCur = key; renderMain(); }
+
+// 新建 / 编辑 → 走同一个弹窗（内容可编辑）
+async function wsNew() {
+  const name = await uiPrompt({ title: '新建工作区文件', message: '文件名（不带 .md）', placeholder: '如 persona_draft', okText: '创建' });
+  if (!name) return;
+  const key = String(name).trim();
+  if (!/^[\w\u4e00-\u9fa5-]{1,64}$/.test(key)) return toast('文件名只允许字母数字下划线中文或 -', 'err');
+  const r = await api(`/api/workspace/${encodeURIComponent(key)}`, 'PUT', { content: '' });
+  if (!r.ok) return toast(r.err || '创建失败', 'err');
+  _wsCur = key; toast('已创建 ' + key + '.md', 'ok'); renderMain();
+}
+
+async function wsRename(key) {
+  const to = await uiPrompt({ title: '重命名', message: '新文件名（不带 .md）', value: key, okText: '重命名' });
+  if (!to || to === key) return;
+  const r = await api(`/api/workspace/${encodeURIComponent(key)}/rename`, 'POST', { to: String(to).trim() });
+  if (!r.ok) return toast(r.err || '重命名失败', 'err');
+  if (_wsCur === key) _wsCur = r.key;
+  toast('已重命名', 'ok'); renderMain();
+}
+
+async function wsDel(key) {
+  if (!(await uiConfirm({ title: '删除工作区文件', message: `确定删除「${key}.md」？`, okText: '删除', danger: true }))) return;
+  const r = await api(`/api/workspace/${encodeURIComponent(key)}`, 'DELETE');
+  if (!r.ok) return toast(r.err || '删除失败', 'err');
+  if (_wsCur === key) _wsCur = null;
+  toast('已删除', 'ok'); renderMain();
+}
+
+// 手动注入：选目标（角色 / 全局）+ 目标文件名
+function wsInjectUI(key) {
+  const bots = state.bots || [];
+  const opts = [
+    ...bots.map((b) => `<option value="bot:${esc(b.id)}">角色「${esc(b.name || b.id)}」的记忆库</option>`),
+    '<option value="global:">全局设定（所有开启「采用全局设定」的角色共享）</option>',
+  ].join('');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'ws-inject-modal';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <div class="modal-head"><span>注入「${esc(key)}.md」</span><span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('ws-inject-modal').remove()">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>注入到</label>
+          <select id="ws-inj-target">${opts}</select>
+        </div>
+        <div class="field"><label>目标文件名（不带 .md，留空则沿用「${esc(key)}」）</label>
+          <input id="ws-inj-dest" type="text" placeholder="${esc(key)}">
+        </div>
+        <p class="empty-hint" style="margin-top:10px">注入会写入该角色的记忆库文件（若同名文件已存在将被覆盖）。工作区里的这份草稿会保留，可继续注入给其他角色。</p>
+      </div>
+      <div class="modal-foot">
+        <button class="ghost sm" onclick="document.getElementById('ws-inject-modal').remove()">取消</button>
+        <button class="primary sm" onclick="wsInjectDo('${esc(key)}')">确认注入</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+async function wsInjectDo(key) {
+  const sel = document.getElementById('ws-inj-target');
+  const dest = document.getElementById('ws-inj-dest');
+  if (!sel) return;
+  const [targetType, targetId] = String(sel.value).split(':');
+  const destKey = (dest && dest.value.trim()) || key;
+  const label = targetType === 'global' ? '全局设定' : `「${((state.bots || []).find((b) => b.id === targetId) || {}).name || targetId}」的记忆库`;
+  if (!(await uiConfirm({ title: '确认注入', message: `将把「${key}.md」写入 ${label}（文件「${destKey}.md」），\n同名文件会被覆盖。确认？`, okText: '确认注入' }))) return;
+  const r = await api('/api/workspace/inject', 'POST', { key, targetType, targetId, destKey });
+  const m = document.getElementById('ws-inject-modal'); if (m) m.remove();
+  if (!r.ok) return toast(r.err || '注入失败', 'err');
+  toast('已注入 ✓', 'ok');
+  renderMain();
+}
 
 function renderModelsPage() {
   const models = state.models || [];
