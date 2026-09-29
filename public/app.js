@@ -929,8 +929,7 @@ function hbAddTask(btn) {
   if (list) list.insertAdjacentHTML('beforeend', hbTaskRowHtml('', ''));
 }
 
-// 单张「心跳任务卡」：一张卡 = 一个独立任务，一个机器人最多 MAX_HB 张
-const MAX_HB = 3;
+// 单张「心跳任务卡」：一张卡 = 一个独立任务，数量不限
 function renderHeartBlock(b, h, idx) {
   const def = { enabled: false, mode: 'interval', intervalMin: 60, minMin: 10, maxMin: 120, tone: 'greet', prompt: '', tasks: [] };
   const cfg = Object.assign(def, h || {});
@@ -1014,7 +1013,7 @@ function hbDelBlock(btn) {
 }
 function refreshHbAddBtn() {
   const btn = document.querySelector('.heart-card .card-title .ghost');
-  if (btn && /新增任务/.test(btn.textContent)) btn.disabled = document.querySelectorAll('.hb-card').length >= MAX_HB;
+  if (btn && /新增任务/.test(btn.textContent)) btn.disabled = false;
 }
 function reindexHb() {
   document.querySelectorAll('.hb-card').forEach((c, i) => {
@@ -1030,17 +1029,16 @@ function reindexHb() {
 }
 
 function renderHeartCard(b) {
-  // 兼容旧单对象 → 提升为任务数组；只渲染前 MAX_HB 张
-  let list = Array.isArray(b.heartbeats) && b.heartbeats.length
-    ? b.heartbeats.slice(0, MAX_HB).map(h => Object.assign({}, h))
+  // 兼容旧单对象 → 提升为任务数组；数量不限
+  const list = Array.isArray(b.heartbeats) && b.heartbeats.length
+    ? b.heartbeats.map(h => Object.assign({}, h))
     : [Object.assign({}, b.heartbeat || {})];
-  const full = list.length >= MAX_HB;
   return `
     <div class="card heart-card">
-      <div class="card-title">♥ 心跳任务（机器人主动发言 · 最多 ${MAX_HB} 个）
+      <div class="card-title">♥ 心跳任务（机器人主动发言）
         <span class="spacer"></span>
         <span class="hb-status" id="hb-status" style="font-size:10px;color:var(--text-faint)"></span>
-        <button class="ghost sm" onclick="hbAddBlock('${esc(b.id)}')" ${full ? 'disabled title="每个机器人最多 ' + MAX_HB + ' 个心跳任务"' : ''}>＋ 新增任务</button>
+        <button class="ghost sm" onclick="hbAddBlock('${esc(b.id)}')">＋ 新增任务</button>
         <button class="primary sm" onclick="heartbeatSave('${esc(b.id)}')">保存任务</button>
       </div>
       <div class="hb-blocks">
@@ -1051,7 +1049,6 @@ function renderHeartCard(b) {
 }
 function hbAddBlock() {
   const count = document.querySelectorAll('.hb-card').length;
-  if (count >= MAX_HB) return toast(`每个机器人最多 ${MAX_HB} 个心跳任务`, 'err');
   document.querySelector('.hb-blocks')?.insertAdjacentHTML('beforeend', renderHeartBlock({}, { enabled: false, mode: 'interval', intervalMin: 60, minMin: 10, maxMin: 120, prompt: '', tasks: [] }, count));
   reindexHb();
   refreshHbAddBtn();
@@ -1061,7 +1058,7 @@ async function heartbeatSave(id) {
   const bots = (state.bots || []).slice();
   const i = bots.findIndex(x => x.id === id);
   if (i < 0) return;
-  // 逐张任务卡收集为任务数组（最多 MAX_HB 张）
+  // 逐张任务卡收集为任务数组（数量不限）
   const heartbeats = [];
   document.querySelectorAll('.hb-card').forEach(card => {
     const tasks = [];
@@ -1089,7 +1086,7 @@ async function heartbeatSave(id) {
   });
   if (!heartbeats.length) return toast('请至少保留一个心跳任务', 'err');
   bots[i].heartbeat = undefined;    // 旧单对象字段废弃
-  bots[i].heartbeats = heartbeats.slice(0, MAX_HB);
+  bots[i].heartbeats = heartbeats;
   const r = await api('/api/config', 'PUT', { bots });
   if (r.ok) {
     toast('心跳任务已保存（' + heartbeats.length + ' 个）', 'ok');

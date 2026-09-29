@@ -277,17 +277,16 @@ app.bots = new BotManager(app);
 // 配置：bot.heartbeats = [ 任务数组 ]，每张卡一项：
 //   { enabled, mode: interval|timer|random, intervalMin, minMin, maxMin,
 //     prompt（自定义提示词）, tasks:[{time,prompt}]（定时任务排布）, tone }
-// 一个机器人最多 HB_MAX 个心跳任务；兼容旧版单对象 bot.heartbeat。
+// 兼容旧版单对象 bot.heartbeat。任务数量不限。
 // =========================================================
-const HB_MAX = 3;            // 每机器人心跳任务上限
 const _hb = new Map();       // `${botId}::${slot}` -> { sig, next, prompt, last }
 const _hbBusy = new Set();   // 正在生成中的心跳 key（防并发）
 
-// 汇总一个机器人的全部心跳任务（数组优先，兼容单对象；仅取前 HB_MAX 个）
+// 汇总一个机器人的全部心跳任务（数组优先，兼容单对象）
 function hbConfigs(bot) {
   const out = [];
   if (Array.isArray(bot.heartbeats) && bot.heartbeats.length) {
-    bot.heartbeats.slice(0, HB_MAX).forEach((h, i) => out.push({ slot: i, h: h || {} }));
+    bot.heartbeats.forEach((h, i) => out.push({ slot: i, h: h || {} }));
   } else if (bot.heartbeat && typeof bot.heartbeat === 'object') {
     out.push({ slot: 0, h: bot.heartbeat });
   }
