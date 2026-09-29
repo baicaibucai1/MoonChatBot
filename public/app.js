@@ -525,38 +525,33 @@ function avatarInner(b) {
   return esc((b.name || b.id || 'B').slice(0, 1));
 }
 
-// 机器人卡「精彩时刻」：由 AI 从记忆档案 + 最近对话中提炼的高光片段
-function renderMoments(b) {
+// 角色卡「精彩时刻」：由 AI 从记忆档案 + 最近对话中提炼的高光片段
+// 挂在卡片内的第二行（见 renderBotCard）——卡片是窄条横幅，所以这里用
+// 紧凑的横排高光条，而不是三列大卡，避免把对话视线往下挤。
+function renderMomentsInline(b) {
   const arr = Array.isArray(b.moments) && b.moments.length ? b.moments : null;
+  const gen = `<button class="ghost sm moments-inline-gen" onclick="momentsGen('${b.id}')"
+      title="${arr ? '根据最新记忆与对话重新提炼' : '从记忆与对话里提炼高光片段'}">${arr ? '↻ 重提炼' : '✨ 总结精彩时刻'}</button>`;
   if (!arr) {
     return `
-    <div class="moments moments-empty" id="moments">
-      <span class="moments-e-icon">✨</span>
-      <span class="moments-e-title">精彩时刻</span>
-      <span class="moments-e-desc">还没有总结。让管理员从记忆与对话里提炼高光片段，展示在这个角色的卡片上。</span>
-      <button class="ghost sm" onclick="momentsGen('${b.id}')">✨ 总结精彩时刻</button>
+    <div class="moments-inline moments-inline-empty" id="moments">
+      <span class="mi-label">✨ 精彩时刻</span>
+      <span class="mi-empty-hint">还没有总结 —— 让 AI 从记忆与对话里提炼这个角色的高光片段</span>
+      ${gen}
     </div>`;
   }
   return `
-    <div class="moments" id="moments">
-      <div class="moments-head">
-        <span class="moments-title">✨ 精彩时刻</span>
-        <span class="moments-sub">AI 提炼的高光片段</span>
-        <span class="spacer"></span>
-        <button class="ghost sm" onclick="momentsGen('${b.id}')" title="根据最新记忆与对话重新提炼">↻ 重提炼</button>
+    <div class="moments-inline" id="moments">
+      <span class="mi-label">✨ 精彩时刻</span>
+      <div class="mi-items">
+        ${arr.map((m, i) => `
+        <span class="mi-item" title="${esc([m.title, m.summary, m.quote ? '“' + m.quote + '”' : ''].filter(Boolean).join(' — '))}">
+          <span class="mi-idx">${i + 1}</span>
+          <span class="mi-title">${esc(m.title || '无题时刻')}</span>
+          <button class="mi-del" onclick="momentDel('${b.id}', ${i})" title="删除该条">✕</button>
+        </span>`).join('')}
       </div>
-      <div class="moments-grid">
-      ${arr.map((m, i) => `
-      <div class="moment">
-        <div class="moment-top">
-          <span class="moment-idx">${i + 1}</span>
-          <button class="moment-del" onclick="momentDel('${b.id}', ${i})" title="删除该条">✕</button>
-        </div>
-        <div class="moment-title">${esc(m.title || '无题时刻')}</div>
-        <div class="moment-sum">${esc(m.summary || '')}</div>
-        ${m.quote ? `<div class="moment-quote">“${esc(m.quote)}”</div>` : ''}
-      </div>`).join('')}
-      </div>
+      ${gen}
     </div>`;
 }
 
@@ -665,6 +660,7 @@ function renderBotCard(b) {
           <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
         </div>
       </div>
+      ${renderMomentsInline(b)}
     </div>`;
 }
 
@@ -676,11 +672,9 @@ function renderBotTabs(tab) {
 }
 
 // 「记忆」标签页：AI 蒸馏内容 + 三层记忆文件管理
-// 「精彩时刻」也放在这里 —— 它本来就是 AI 从记忆与对话里蒸馏出来的产物，
-// 留在角色卡上会把对话往下挤。
+// 「精彩时刻」不在这里 —— 它挂在角色卡上（见 renderBotCard → renderMomentsInline）。
 function renderMemoryTabHtml(b) {
   return `
-    ${renderMoments(b)}
     <div class="card mem-card">
       <div class="card-title">记忆管理（memory/${esc(b.id)}/）
           <span class="spacer"></span>
