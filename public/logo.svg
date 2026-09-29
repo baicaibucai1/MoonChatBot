@@ -28,8 +28,4 @@
   <g transform="rotate(-15 32 32)">
     <circle cx="32" cy="32" r="28" fill="url(#moonGrad)" mask="url(#crescent)"/>
   </g>
-
-  <!-- 月亮开口侧的两颗小星：呼应「聊天」的轻快，主形仍然是月亮 -->
-  <circle cx="47" cy="21" r="2.4" fill="#8FC6F7" opacity="0.85"/>
-  <circle cx="52.5" cy="29" r="1.5" fill="#BCE1FB" opacity="0.9"/>
 </svg>
