@@ -189,21 +189,8 @@ body::after {
   0%, 100% { opacity: .35; }
   50% { opacity: 1; }
 }
-.logo-mark {
-  width: 18px; height: 18px; border-radius: 5px;
-  background: linear-gradient(180deg,
-    color-mix(in srgb, var(--accent) 66%, #fff) 0%,
-    var(--accent) 55%,
-    color-mix(in srgb, var(--accent) 82%, #7a5500) 100%);
-  box-shadow: 0 1px 2px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.5), 0 0 12px 1px var(--accent-glow);
-  animation: markPulse 3.6s var(--ease) infinite;
-  transition: box-shadow .35s ease;
-}
-@keyframes markPulse {
-  0% { box-shadow: 0 1px 2px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.5), 0 0 8px 0 var(--accent-glow); }
-  50% { box-shadow: 0 1px 2px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.5), 0 0 4px 3px transparent, 0 0 14px 2px var(--accent-glow); }
-  100% { box-shadow: 0 1px 2px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.5), 0 0 8px 0 var(--accent-glow); }
-}
+/* .logo-mark 的权威样式在 design.css（它加载在后、同优先级胜出）。
+   这里只保留 .logo 底部那条呼吸亮线，方块的渐变底色已随月亮 logo 一并删除。 */
 .logo-text {
   font-size: 13px; font-weight: 700; letter-spacing: .02em;
   color: var(--text);
@@ -293,6 +280,37 @@ body::after {
 }
 .side-item .dot { flex: none; }
 .side-empty { font-size: 11px; color: var(--text-faint); padding: 6px; font-style: italic; }
+
+/* 侧栏：收藏星标 */
+.side-fav {
+  flex: none; align-self: center; margin-left: 2px;
+  display: inline-flex; color: var(--primary, var(--accent));
+}
+.side-fav .ic { width: 13px; height: 13px; }
+.side-item.active .side-fav { color: var(--on-primary-container, var(--primary)); }
+
+/* 侧栏右键菜单（position:fixed + 由 JS 贴鼠标放置） */
+.ctx-menu {
+  position: fixed; z-index: 400; min-width: 170px; padding: 5px;
+  border: 1px solid var(--outline, var(--line));
+  border-radius: var(--r-m, 10px);
+  background: var(--surface-2, var(--panel));
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .22);
+  font-size: 12.5px; color: var(--on-surface, var(--text));
+}
+.ctx-head {
+  padding: 6px 9px 7px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--outline, var(--line));
+  font-size: 10.5px; font-weight: 600;
+  color: var(--on-surface-faint, var(--text-faint));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ctx-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px; border-radius: var(--r-s, 8px); cursor: pointer;
+}
+.ctx-item:hover { background: color-mix(in srgb, var(--on-surface) 8%, transparent); }
+.ctx-item .ic { width: 15px; height: 15px; }
 
 /* 后端未连接提示（桌面壳场景：先开了壳、服务还没起） */
 .offline-card {
@@ -1210,86 +1228,73 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .chip-dot.warn { background: var(--warn); animation: dotPulseWarn 3s var(--ease) infinite; }
 .status-chip .chip-icon { font-size: 10px; opacity: .8; }
 
-/* 角色卡「精彩时刻」：AI 提炼的高光片段（卡片内第二行，紧凑横排） */
-.moments-inline {
-  display: flex; align-items: flex-start; gap: 10px;
-  margin-top: 12px; padding-top: 10px;
-  border-top: 1px solid var(--outline, var(--line-2));
-  min-width: 0;
+/* 记忆画廊（角色标签页）：AI 提炼的精彩时刻 —— 卡片网格，摘要与台词默认全展开 */
+.gal-card { min-height: 240px; }
+.gal-count { font-size: 11.5px; font-weight: 400; color: var(--on-surface-faint, var(--text-faint)); }
+.gal-gen { flex: none; }
+.gal-grid {
+  display: grid; gap: 12px; align-items: start;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
 }
-.mi-label {
-  flex: none; font-size: 11.5px; font-weight: 600; line-height: 21px;
-  color: var(--on-surface-variant, var(--text-dim));
-  letter-spacing: .02em; white-space: nowrap;
-}
-.mi-items { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
-.mi-item {
-  display: inline-flex; flex-direction: column;
-  flex: 1 1 auto; max-width: 340px; min-width: 0;
-  border: 1px solid var(--outline, var(--line));
-  border-radius: var(--r-s, 8px);
-  background: var(--surface-1, var(--ctl-bg));
-  font-size: 11.5px; color: var(--on-surface, var(--text));
+.gal-item {
   position: relative;
+  padding: 11px 13px 12px;
+  border: 1px solid var(--outline, var(--line));
+  border-radius: var(--r-m, 12px);
+  background: var(--surface-1, var(--ctl-bg));
   transition: border-color .18s, background-color .18s;
 }
-.mi-item:hover { border-color: var(--outline-strong, var(--accent-glow)); background: var(--surface-2, var(--ctl-bg)); }
-.mi-item.open {
+.gal-item:hover {
   border-color: var(--outline-strong, var(--accent-glow));
   background: var(--surface-2, var(--ctl-bg));
-  flex-basis: 100%; max-width: 100%;
 }
-/* 头部行：点击展开 / 收起 */
-.mi-head {
-  display: flex; align-items: center; gap: 6px; min-width: 0;
-  padding: 4px 8px 4px 6px; cursor: pointer;
-}
-.mi-idx {
-  flex: none; width: 15px; height: 15px; border-radius: 4px;
+.gal-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.gal-idx {
+  flex: none; width: 18px; height: 18px; border-radius: 5px;
   display: inline-flex; align-items: center; justify-content: center;
-  font-size: 9.5px; font-weight: 700;
+  font-size: 10.5px; font-weight: 700;
   color: var(--on-surface-variant, var(--text-dim));
   background: var(--surface-3, var(--accent-soft));
 }
-.mi-title { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mi-caret {
-  flex: none; font-size: 9px; line-height: 1; opacity: .45;
-  transition: transform .2s var(--ease, ease);
+.gal-title {
+  flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+  color: var(--on-surface, var(--text));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.mi-item.open .mi-caret { transform: rotate(180deg); opacity: .8; }
-/* 展开详情：摘要 + 台词 */
-.mi-detail {
-  display: none;
-  padding: 0 10px 8px 27px;
-  font-size: 11.5px; line-height: 1.6;
-  color: var(--on-surface-variant, var(--text-dim));
-}
-.mi-item.open .mi-detail { display: block; }
-.mi-sum { display: block; }
-.mi-quote {
-  display: block; margin-top: 4px; font-style: italic;
+.gal-del {
+  flex: none; width: 20px; height: 20px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; border-radius: 5px;
   color: var(--on-surface-faint, var(--text-faint));
-}
-.mi-del {
-  position: absolute; right: 4px; top: 4px;
-  width: 15px; height: 15px; padding: 0;
-  border: none; background: transparent; border-radius: 4px;
-  font-size: 10px; line-height: 1; color: var(--on-surface-faint, var(--text-faint));
   opacity: 0; cursor: pointer;
   transition: opacity .16s, background-color .16s, color .16s;
 }
-.mi-item:hover .mi-del, .mi-item.open .mi-del { opacity: .75; }
-.mi-del:hover { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); opacity: 1; }
-.mi-item.open .mi-head { padding-right: 24px; }
-.moments-inline-gen { flex: none; margin-left: auto; }
-.moments-inline-empty { gap: 10px; align-items: center; }
-.mi-empty-hint { flex: 1; min-width: 0; font-size: 11.5px; color: var(--on-surface-faint, var(--text-faint));
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 900px) {
-  .moments-inline { flex-wrap: wrap; }
-  .mi-items { flex-basis: 100%; }
-  .mi-item { max-width: 100%; }
+.gal-del .ic { width: 13px; height: 13px; }
+.gal-item:hover .gal-del { opacity: .7; }
+.gal-del:hover { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); opacity: 1; }
+.gal-sum {
+  margin-top: 9px; font-size: 12.5px; line-height: 1.72;
+  color: var(--on-surface-variant, var(--text-dim));
 }
+.gal-quote {
+  margin-top: 8px; padding-left: 10px;
+  border-left: 2px solid var(--outline-strong, var(--accent-glow));
+  font-size: 12px; line-height: 1.7; font-style: italic;
+  color: var(--on-surface-faint, var(--text-faint));
+}
+/* 空态：没有提炼过任何高光片段 */
+.gal-empty { padding: 48px 20px; text-align: center; }
+.gal-empty-ic { color: var(--on-surface-faint, var(--text-faint)); opacity: .38; }
+.gal-empty-ic .ic { width: 40px; height: 40px; }
+.gal-empty-t {
+  margin-top: 12px; font-size: 13.5px; font-weight: 600;
+  color: var(--on-surface-variant, var(--text-dim));
+}
+.gal-empty-h {
+  margin: 6px auto 0; max-width: 430px;
+  font-size: 12px; line-height: 1.7; color: var(--on-surface-faint, var(--text-faint));
+}
+@media (max-width: 640px) { .gal-grid { grid-template-columns: 1fr; } }
 
 .profile-edit-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
 

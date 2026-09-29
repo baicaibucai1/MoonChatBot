@@ -65,6 +65,7 @@
              -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", ui-monospace,
           Consolas, "Microsoft YaHei", monospace;
+  --font-sym: "Inter", "Segoe UI", "Lucida Sans Unicode", "Cambria Math", "Segoe UI Symbol", var(--font-ui);
 
   /* 动效：M3 时长与缓动 */
   --d-1: 80ms; --d-2: 140ms; --d-3: 200ms; --d-4: 280ms; --d-5: 420ms;
@@ -162,6 +163,10 @@ body::before, body::after { display: none !important; }
   font-weight: var(--btn-fw);
   letter-spacing: .01em;
 }
+
+/* 装饰性符号已全部换成内联 SVG（见第 8 节的图标系统），
+   这条「符号字体锁定」规则随之作废 —— 留着只会让容器里的中文
+   一起去 fallback 到 Inter / Segoe UI Symbol，平白多一次字体切换。 */
 
 button {
   position: relative;
@@ -301,9 +306,12 @@ button.ghost.hb-del:hover, button.hb-del:hover {
 }
 .logo { display: flex; align-items: center; gap: 10px; padding: 16px 16px 12px; border-bottom: 1px solid var(--outline); }
 .logo::after { display: none; }
+/* 月亮 logo —— 图形本身由 public/logo.svg 提供（浅蓝弯月），
+   这里只负责落位：不能给背景色 / 圆角矩形阴影，否则会露出一个方块底衬。
+   SVG 自带月光晕，box-shadow 也一并去掉。 */
 .logo-mark {
-  width: 24px; height: 24px; border-radius: var(--r-s); flex-shrink: 0;
-  background: var(--primary); box-shadow: var(--el-1);
+  width: 24px; height: 24px; flex-shrink: 0;
+  display: block; background: none; box-shadow: none; border-radius: 0;
 }
 .logo-text {
   font-size: 14px; font-weight: 600; letter-spacing: -.01em; color: var(--on-surface);
@@ -427,6 +435,59 @@ button.ghost.hb-del:hover, button.hb-del:hover {
 .card-title button.ghost, .profile-head button.ghost { border-color: transparent; }
 
 /* ---------- 8. 标签页（M3 primary tabs） ---------- */
+/* —— 内联 SVG 图标：全站统一几何 ——
+   16×16 网格、1.5 描边、圆头圆角、currentColor（跟着文字色走）。
+   为什么不用字体符号：字体符号的笔画粗细、字身框、基线随字体变化，
+   并排会出现「有的偏小、有的带内嵌白点、有的像实心块」这种不成套的观感；
+   SVG 的几何是确定的，16/14 两档缩放也不会走形。 */
+.ic {
+  width: 16px; height: 16px; flex: none;
+  /* inline-block 而不是 block：图标不只是按钮里的 flex 子项，
+     还要能嵌进徽标、状态片、纯文本段落里（block 会把它顶到单独一行）。
+     作为 flex 子项时浏览器会自动 blockify，两种场景都成立。 */
+  display: inline-block; vertical-align: middle;
+  overflow: visible;
+}
+.ic svg { width: 100%; height: 100%; display: block; }
+.lb { line-height: 1; }
+
+/* 间距规则：flex 容器靠 gap（下表的 margin 归零），
+   非 flex 的纯文本容器靠这里的 6px —— 两边都只生效一次，不会叠加。 */
+.ic + .lb { margin-left: 6px; }
+button .ic + .lb, .st-tab .ic + .lb, .bt-tab .ic + .lb, .side-item .ic + .lb,
+.card-title .ic + .lb, .mi-label .ic + .lb, .status-chip .ic + .lb,
+.badge .ic + .lb, .fx-chip .ic + .lb, .mini-chip .ic + .lb,
+.modal-head .ic + .lb, .field .value .ic + .lb, .mf-sys .ic + .lb,
+.distill-ok .ic + .lb, .distill-warn .ic + .lb, .lay-dim .ic + .lb,
+.hb-status .ic + .lb, .ph-t .ic + .lb, .admin-title .ic + .lb { margin-left: 0; }
+
+/* 原本不是 flex、但现在要装「图标 + 文字」的容器：补上 flex 让 gap 接管间距 */
+.status-chip, .badge, .fx-chip, .mini-chip,
+.mi-label, .mf-sys, .distill-ok, .distill-warn, .lay-dim,
+.hb-status, .modal-head > span:first-child, .field .value, .ph-t {
+  display: inline-flex; align-items: center; gap: 5px;
+}
+/* 纯文本里单独出现的图标（后面跟的是裸文本节点，没有 .lb） */
+.empty-hint .ic { margin-right: 5px; }
+
+/* 图标与文字的间距统一由容器的 gap 控制，图标自身不留外边距 */
+.settings-btn .ic, .admin-entry .ic { width: 15px; height: 15px; }
+.foot-btn .ic { width: 16px; height: 16px; }
+.add-btn .ic { width: 14px; height: 14px; }
+button .ic { pointer-events: none; }
+
+/* —— 各处图标的档位：16 是基准，小字号容器里降一到两档 —— */
+.status-chip .ic, .chip-icon .ic { width: 12px; height: 12px; }
+.dd-ic .ic, .mi-caret .ic { width: 12px; height: 12px; }
+.mf-handle .ic { width: 14px; height: 14px; }
+.mf-sys .ic, .badge .ic { width: 12px; height: 12px; }
+.distill-ok .ic, .distill-warn .ic, .lay-dim .ic, .hb-status .ic { width: 13px; height: 13px; }
+.session .who .ic { width: 17px; height: 17px; }
+/* 图标夹在小字号正文里：降到 13px 才不会压过 11px 的文字 */
+.mem-global-sub .ic, .frm-hint .ic, .ws-dir-hint .ic { width: 13px; height: 13px; vertical-align: -2px; }
+.offline-icon .ic { width: 34px; height: 34px; }
+.dd-ic, .mi-caret, .chip-icon { display: inline-flex; align-items: center; }
+.mi-caret .ic, .dd-ic .ic { transition: transform var(--d-2) var(--e-std); }
 .bot-tabs {
   display: flex; align-items: stretch; gap: 2px;
   margin: -4px 0 12px;
@@ -453,8 +514,9 @@ button.ghost.hb-del:hover, button.hb-del:hover {
 }
 .bot-tab-body { min-height: 0; }
 
-.settings-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; padding: 0; border-radius: 0; width: auto; }
+.settings-tabs { width: auto; }   /* 详细样式见下方「分段控件」 */
 .st-tab {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   height: 32px; padding: 0 14px; border-radius: var(--r-full);
   font-family: var(--font-ui); font-size: 12.5px; font-weight: 500;
   color: var(--on-surface-variant);
@@ -462,8 +524,26 @@ button.ghost.hb-del:hover, button.hb-del:hover {
   border: 1px solid var(--outline); background: var(--surface); box-shadow: none;
   transition: background-color var(--d-2) var(--e-std), color var(--d-2) var(--e-std), border-color var(--d-2) var(--e-std);
 }
-.st-tab:hover { background: var(--surface-2); color: var(--on-surface); transform: none; }
-.st-tab.active { background: var(--primary-container); color: var(--on-primary-container); border-color: transparent; font-weight: 600; box-shadow: none; }
+/* 标签内的图标略小一号：16px 与 12.5px 文字并排时视觉重量过重 */
+.st-tab .ic { width: 15px; height: 15px; color: currentColor; opacity: .9; }
+
+/* 分段控件：整排一个描边胶囊，选中项是其中的 tonal 段（Apple / M3 segmented 的做法） */
+.settings-tabs {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 3px; margin-bottom: 16px;
+  background: var(--surface-2); border: 1px solid var(--outline);
+  border-radius: var(--r-full);
+}
+.settings-tabs .st-tab {
+  height: 30px; padding: 0 14px;
+  background: transparent; border-color: transparent;
+}
+.settings-tabs .st-tab:hover { background: color-mix(in srgb, var(--on-surface) 6%, transparent); }
+.settings-tabs .st-tab.active {
+  background: var(--surface); color: var(--on-surface);
+  box-shadow: var(--el-1); font-weight: 600;
+}
+.settings-tabs .st-tab.active .ic { opacity: 1; }
 .st-sec { animation: riseIn var(--d-4) var(--e-out) both; }
 .st-sec .card { margin-bottom: 12px; }
 
@@ -1126,7 +1206,7 @@ label.frm { display: block; font-size: 11.5px; color: var(--on-surface-variant);
 
 /* ---------- 19. 面板管理员 ---------- */
 .admin-head-l { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
-.admin-title { font-size: 14px; font-weight: 600; font-family: var(--font-ui); }
+.admin-title { font-size: 14px; font-weight: 600; font-family: var(--font-ui); display: inline-flex; align-items: center; gap: 6px; }
 .admin-sub { font-family: var(--font); font-size: 10.5px; color: var(--on-surface-faint); }
 .admin-target-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -1264,7 +1344,7 @@ label.frm { display: block; font-size: 11.5px; color: var(--on-surface-variant);
   border-radius: var(--r-l); text-align: center; box-shadow: var(--el-2);
   animation: scaleIn var(--d-4) var(--e-out) both;
 }
-.offline-icon { font-size: 34px; line-height: 1; margin-bottom: 14px; }
+.offline-icon { display: flex; justify-content: center; color: var(--on-surface-faint); margin-bottom: 14px; }
 .offline-card h2 { font-size: 17px; font-weight: 600; margin: 0 0 10px; color: var(--on-surface); }
 .offline-desc { font-size: 13px; color: var(--error); margin: 0 0 18px; }
 .offline-hint { font-size: 13px; color: var(--on-surface-variant); margin: 0 0 10px; line-height: 1.65; }

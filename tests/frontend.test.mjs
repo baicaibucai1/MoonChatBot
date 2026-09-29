@@ -255,3 +255,52 @@ test('记忆层级视图能完整渲染（dfCls 回归）', async () => {
   assert.ok(r.hasBlock, '未渲染出任何 distill-block');
   assert.ok(r.hasFolded, 'dfCls 未生效：_dfOpen 为空时初始应全部折叠');
 });
+
+// ─────────────────────────────────────────────────────────────
+// 图标常量：不能被单引号「冻」成字面量
+// ─────────────────────────────────────────────────────────────
+
+test('没有图标常量 ${IC_*} 被普通引号冻结成字面量', async (t) => {
+  // 2026-09-29 真实事故：界面里的 emoji 换内联 SVG 时，有人把
+  //   `${IC_REFRESH}<span class="lb">重提炼</span>`
+  // 用**单引号**包了起来 —— JS 不在单引号里做插值，于是按钮上直接印出
+  // 「${IC_REFRESH}」这串字符（同一批共有 4 处，分散在不同函数里，肉眼很难扫全）。
+  //
+  // 为什么不能简单 grep：模板串本来就到处是引号（HTML 属性用双引号、JS 片段用单引号），
+  // 「统计行内引号奇偶」这类土办法全是误报。唯一可靠的判据在 AST 上 ——
+  // 模板串是 TemplateLiteral 节点，而**值里含 ${IC_ 的字符串字面量**才是病灶。
+  // eslint 已经把 acorn 装进 node_modules，这里零新增依赖直接复用。
+  let parse = null;
+  try { ({ parse } = await import('acorn')); } catch { t.skip('未安装 acorn，跳过静态检查'); return; }
+
+  const { readFileSync } = await import('node:fs');
+  const code = readFileSync(path.join(REPO_ROOT, 'public/app.js'), 'utf8');
+  let ast = null;
+  try {
+    // sourceType: 'script' —— app.js 是原生 <script>，没有 import/export
+    ast = parse(code, { ecmaVersion: 'latest', sourceType: 'script', allowReturnOutsideFunction: true, locations: true });
+  } catch (e) {
+    assert.fail('app.js 语法解析失败，本检查无法进行：' + e.message);
+  }
+
+  const bad = [];
+  const walk = (n) => {
+    if (!n || typeof n !== 'object') return;
+    if (Array.isArray(n)) { for (const x of n) walk(x); return; }
+    if (n.type === 'Literal' && typeof n.value === 'string' && n.value.includes('${IC_')) {
+      bad.push(`第 ${n.loc.start.line} 行：${String(n.value).slice(0, 60)}`);
+    }
+    for (const k of Object.keys(n)) {
+      if (k === 'loc' || k === 'start' || k === 'end') continue;
+      const v = n[k];
+      if (v && typeof v === 'object') walk(v);
+    }
+  };
+  walk(ast);
+
+  assert.deepEqual(
+    bad, [],
+    '以下字符串里的 ${IC_*} 永远不会被插值（多半是用了单引号而不是反引号），'
+    + '界面上会原样印出这串字符：\n' + bad.join('\n'),
+  );
+});

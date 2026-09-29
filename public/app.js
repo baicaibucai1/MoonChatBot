@@ -22,11 +22,71 @@ const _threadBootstrap = new Map();
 // ---- 角色卡上的标签页（多线程改造 C2 第二版） ----
 // 左侧只有角色列表；点进一个角色后，主区顶部常驻角色卡，
 // 标签页挂在角色卡上，「设置」是角色卡旁的按钮（弹窗里改配置）。
+// 图标一律用内联 SVG（不是字体字符）：字体符号的笔画粗细/字身框各家不同，
+// 并排就会出现「有的偏小、有的带内嵌白点、有的像实心块」；SVG 统一 1.5 描边、
+// 统一 16×16 网格、统一 currentColor，几何上完全可控。
+const ICON = (d, extra = '') =>
+  `<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}${extra}</svg>`;
+
+// —— 通用图标（16×16 网格，圆心 8,8，半径 5.5）——
+const IC_CHAT = ICON('<path d="M14 8A6 6 0 0 1 8 14H2.75l1.3-1.75A6 6 0 1 1 14 8z"/>');
+const IC_MEMORY = ICON('<circle cx="8" cy="8" r="5.5"/><path d="M8 5.5v5M5.5 8h5"/>');
+const IC_CHANNEL = ICON('<circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/><path d="M4.6 4.6a4.8 4.8 0 0 0 0 6.8M11.4 4.6a4.8 4.8 0 0 1 0 6.8M2.6 2.6a7.6 7.6 0 0 0 0 10.8M13.4 2.6a7.6 7.6 0 0 1 0 10.8"/>');
+const IC_HEART = ICON('<path d="M8 13.2S2.5 9.8 2.5 6.1A3.1 3.1 0 0 1 8 4.2a3.1 3.1 0 0 1 5.5 1.9c0 3.7-5.5 7.1-5.5 7.1z"/>');
+const IC_PALETTE = ICON('<path d="M8 2.5a5.5 5.5 0 0 0 0 11c.9 0 1.4-.6 1.4-1.2 0-.4-.2-.7-.4-1-.2-.2-.3-.5-.3-.8 0-.6.5-1.1 1.1-1.1H10a3.5 3.5 0 0 0 3.5-3.6A5.6 5.6 0 0 0 8 2.5z"/><circle cx="5.6" cy="7" r=".85" fill="currentColor" stroke="none"/><circle cx="7.8" cy="5.3" r=".85" fill="currentColor" stroke="none"/><circle cx="10.3" cy="6.2" r=".85" fill="currentColor" stroke="none"/>');
+const IC_GLOBE = ICON('<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11"/><ellipse cx="8" cy="8" rx="2.5" ry="5.5"/>');
+const IC_LAYERS = ICON('<path d="M8 2.2 2.4 5.4 8 8.6l5.6-3.2z"/><path d="M2.4 8.2 8 11.4l5.6-3.2"/><path d="M2.4 11 8 14.2 13.6 11"/>');
+const IC_CHART = ICON('<path d="M3 13V8.5M6.3 13V3.5M9.7 13V6.5M13 13V2.5"/>');
+const IC_SETTINGS = ICON('<circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v1.5M8 12.7v1.5M1.8 8h1.5M12.7 8h1.5M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1"/>');
+const IC_CLOSE = ICON('<path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2"/>');
+const IC_CHECK = ICON('<path d="M3.4 8.4l3 3 6.2-6.6"/>');
+const IC_TRASH = ICON('<path d="M2.8 4.4h10.4M6 4.4V3.3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.1M4.2 4.4l.6 8.3a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8.3"/>');
+const IC_PENCIL = ICON('<path d="M11.2 2.6l2.2 2.2L5.6 12.6l-3 .8.8-3z"/>');
+const IC_UPLOAD = ICON('<path d="M8 11V2.8M4.8 5.8 8 2.6l3.2 3.2M2.6 11v1.6a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1V11"/>');
+const IC_DOWNLOAD = ICON('<path d="M8 2.6v8.2M4.8 7.6 8 10.8l3.2-3.2M2.6 11v1.6a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1V11"/>');
+const IC_EXPAND = ICON('<path d="M6.2 2.6H2.6v3.6M9.8 13.4h3.6V9.8M13.4 6.2V2.6H9.8M2.6 9.8v3.6h3.6"/>');
+const IC_INBOX = ICON('<path d="M2.6 9.2 4.2 3.4a1 1 0 0 1 1-.7h5.6a1 1 0 0 1 1 .7l1.6 5.8v2.6a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1z"/><path d="M2.6 9.2h3.1l.9 1.4h2.8l.9-1.4h3.1"/>');
+const IC_EYE = ICON('<path d="M1.6 8S4 3.8 8 3.8 14.4 8 14.4 8 12 12.2 8 12.2 1.6 8 1.6 8z"/><circle cx="8" cy="8" r="1.9"/>');
+const IC_BOT = ICON('<rect x="3.2" y="5.2" width="9.6" height="7.6" rx="2.2"/><path d="M8 2.6v2.6M6 8.6v1.2M10 8.6v1.2"/>');
+const IC_USER = ICON('<circle cx="8" cy="5.6" r="2.6"/><path d="M2.9 13.4a5.1 5.1 0 0 1 10.2 0"/>');
+const IC_SEARCH = ICON('<circle cx="7.2" cy="7.2" r="4.4"/><path d="M10.5 10.5l3 3"/>');
+const IC_FILE = ICON('<path d="M9 2.6H4.6a1 1 0 0 0-1 1v8.8a1 1 0 0 0 1 1h6.8a1 1 0 0 0 1-1V5.6z"/><path d="M9 2.6v3h3.4"/>');
+const IC_FOLDER = ICON('<path d="M2.6 12.2V4.6a1 1 0 0 1 1-1h2.6l1.4 1.6h5.2a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3.6a1 1 0 0 1-1-1z"/>');
+const IC_BULB = ICON('<path d="M8 2.4a3.8 3.8 0 0 0-2.2 6.9c.4.3.6.7.6 1.1v.4h3.2v-.4c0-.4.2-.8.6-1.1A3.8 3.8 0 0 0 8 2.4z"/><path d="M6.6 13h2.8"/>');
+const IC_LINK = ICON('<path d="M7 9.6a2.6 2.6 0 0 0 3.7 0l1.8-1.8a2.6 2.6 0 1 0-3.7-3.7L8 4.9"/><path d="M9 6.4a2.6 2.6 0 0 0-3.7 0L3.5 8.2a2.6 2.6 0 1 0 3.7 3.7L8 11.1"/>');
+const IC_SPARKLE = ICON('<path d="M8 2.2l1.5 4.3L13.8 8l-4.3 1.5L8 13.8 6.5 9.5 2.2 8l4.3-1.5z"/>');
+const IC_STAR = ICON('<path d="M8 1.9l2 4.2 4.6.6-3.4 3.2.9 4.6L8 12.3l-4.1 2.2.9-4.6L1.4 6.7l4.6-.6z"/>');
+const IC_MOON = ICON('<path d="M13.2 9.6A5.7 5.7 0 0 1 6.4 2.8a5.7 5.7 0 1 0 6.8 6.8z"/>');
+const IC_SUN = ICON('<circle cx="8" cy="8" r="3"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.8 3.8l1.1 1.1M11.1 11.1l1.1 1.1M12.2 3.8l-1.1 1.1M4.9 11.1l-1.1 1.1"/>');
+const IC_REFRESH = ICON('<path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M13.4 2.8v3.4H10"/>');
+const IC_PLUS = ICON('<path d="M8 3.4v9.2M3.4 8h9.2"/>');
+const IC_BACK = ICON('<path d="M9.6 3.6 5.2 8l4.4 4.4"/>');
+const IC_FLOW = ICON('<circle cx="8" cy="8" r="5.5"/><path d="M8 5.2v5.6M6.4 8.6 8 10.8l1.6-2.2"/>');
+const IC_RANDOM = ICON('<rect x="2.4" y="2.4" width="11.2" height="11.2" rx="2.4"/><path d="M5.6 5.6h1.4l2 4.8h1.4M11.4 10.4 10 12M11.4 10.4 10 8.8"/>');
+const IC_COLLAPSE = ICON('<path d="M3.4 6h9.2M3.4 10h9.2"/>');
+// —— 第二批：状态 / 操作 / 指示类（同一 16×16 网格、1.5 描边）——
+const IC_BOLT = ICON('<path d="M9.6 1.8 4.2 9h3.3l-.8 5.2L12.4 7H8.9z"/>');
+const IC_CLOCK = ICON('<circle cx="8" cy="8" r="5.5"/><path d="M8 4.9V8l2.4 1.6"/>');
+const IC_TIMER = ICON('<path d="M6.4 2.4h3.2"/><circle cx="8" cy="9.1" r="5.1"/><path d="M8 6.6v2.5l2 1.2"/>');
+const IC_DICE = ICON('<rect x="2.8" y="2.8" width="10.4" height="10.4" rx="2.4"/><circle cx="5.9" cy="5.9" r=".95" fill="currentColor" stroke="none"/><circle cx="10.1" cy="10.1" r=".95" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".95" fill="currentColor" stroke="none"/>');
+const IC_STREAM = ICON('<path d="M2.6 4.2h10.8M2.6 8h7.2M2.6 11.8h4.8"/><path d="M11.6 8v3.4"/>');
+const IC_FORK = ICON('<circle cx="4.4" cy="3.6" r="1.5"/><circle cx="4.4" cy="12.4" r="1.5"/><circle cx="11.6" cy="8" r="1.5"/><path d="M4.4 5.1v5.8M5.9 3.6h2.2a2 2 0 0 1 2 2v.9M5.9 12.4h2.2a2 2 0 0 0 2-2v-.9"/>');
+const IC_RESTORE = ICON('<path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M2.6 2.8v3.4H6"/>');
+const IC_DRAG = ICON('<circle cx="6.2" cy="4.4" r=".95" fill="currentColor" stroke="none"/><circle cx="9.8" cy="4.4" r=".95" fill="currentColor" stroke="none"/><circle cx="6.2" cy="8" r=".95" fill="currentColor" stroke="none"/><circle cx="9.8" cy="8" r=".95" fill="currentColor" stroke="none"/><circle cx="6.2" cy="11.6" r=".95" fill="currentColor" stroke="none"/><circle cx="9.8" cy="11.6" r=".95" fill="currentColor" stroke="none"/>');
+const IC_WARN = ICON('<path d="M8 2.6 14.2 13.2H1.8z"/><path d="M8 6.4v3.1M8 11.3h.01"/>');
+const IC_CARET = ICON('<path d="M4.2 6.4 8 10.2l3.8-3.8"/>');
+const IC_CARET_R = ICON('<path d="M6.4 4.2 10.2 8l-3.8 3.8"/>');
+const IC_ARROW_L = ICON('<path d="M12.4 8H3.6M7.2 3.9 3.6 8l3.6 4.1"/>');
+const IC_GRID = ICON('<rect x="2.6" y="2.6" width="10.8" height="10.8" rx="1.6"/><path d="M2.6 6.4h10.8M2.6 9.6h10.8"/>');
+const IC_WINDOW = ICON('<rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1.6"/><path d="M2.4 6.2h11.2"/>');
+const IC_INJECT = ICON('<path d="M8 2.8v6.8M5.2 6.8 8 9.6l2.8-2.8M3 12.8h10"/>');
+
 const BOT_TABS = [
-  { id: 'chat', n: '💬 对话' },
-  { id: 'memory', n: '🧠 记忆' },
-  { id: 'channel', n: '📡 渠道' },
-  { id: 'heart', n: '💓 心跳' },
+  { id: 'chat', n: '对话', ic: IC_CHAT },
+  { id: 'memory', n: '记忆', ic: IC_MEMORY },
+  { id: 'gallery', n: '画廊', ic: IC_PALETTE },
+  { id: 'channel', n: '渠道', ic: IC_CHANNEL },
+  { id: 'heart', n: '心跳', ic: IC_HEART },
 ];
 let _botTab = 'chat';   // 切角色时保留当前标签页，避免每次点角色都跳回对话
 
@@ -159,9 +219,13 @@ async function loadState(keepView = true) {
   // 校验当前选中项仍存在
   if (view.type === 'bot' && view.id && !(state.bots || []).some(b => b.id === view.id)) view = { type: 'bot', id: null };
   if (view.type === 'model' && view.id && !(state.models || []).some(m => m.id === view.id)) view = { type: 'models' };
-  if (!view.id && view.type === 'bot' && (state.bots || []).length) view = { type: 'bot', id: state.bots[0].id };
   // 侧栏「对话」组要跨角色列线程，先拉齐索引再渲染
   await loadThreads();
+  // 没有选中项（通常是刚打开面板）→ 优先回到上次停的位置，取不到才退回第一个角色。
+  // 放在 loadThreads() 之后：restoreLastView 要拿线程列表校验 tid 是否还活着。
+  if (view.type === 'bot' && !view.id) {
+    if (!restoreLastView() && (state.bots || []).length) view = { type: 'bot', id: state.bots[0].id };
+  }
   renderSidebar();
   renderMain();
 }
@@ -192,14 +256,14 @@ function showOffline(err) {
   $('#bot-list').innerHTML = '<div class="side-empty">后端未连接</div>';
   main.innerHTML = `
     <div class="offline-card">
-      <div class="offline-icon">⚡</div>
+      <div class="offline-icon">${IC_BOLT}</div>
       <h2>无法连接后端服务</h2>
       <p class="offline-desc">${esc(err || '网络错误')}</p>
       <p class="offline-hint">面板只是外壳，QQ 机器人服务需要单独运行。请在项目根目录执行：</p>
       <pre class="offline-cmd">node server.js</pre>
       <p class="offline-hint">或双击 <b>启动面板.bat</b>。服务就绪后点下面的按钮重试。</p>
       <div class="offline-actions">
-        <button class="primary" onclick="retryConnect()">↻ 重试连接</button>
+        <button class="primary" onclick="retryConnect()">${IC_REFRESH}<span class="lb">重试连接</span></button>
       </div>
       <p class="offline-target">连接目标：${esc(target)}</p>
     </div>`;
@@ -213,9 +277,131 @@ async function retryConnect() {
   else toast('已连接', 'ok');
 }
 
+// ---------- 侧栏排序 + 收藏 ----------
+// ★ 为什么收藏存 localStorage 而不是后端 config：它描述的是「**这台电脑上**我在盯谁」，
+//   跟 `_botTab`（上次看到哪个标签页）是一类东西 —— 纯本机界面偏好，换台机器不该同步。
+//   放 localStorage 还能换来一个好处：完全不动后端，API 基线与的后端的存储格式都不受影响。
+const FAV_KEY = 'qqbot-fav-bots';
+
+function favBots() {
+  try {
+    const a = JSON.parse(localStorage.getItem(FAV_KEY) || '[]');
+    return Array.isArray(a) ? a.filter((x) => typeof x === 'string') : [];
+  } catch { return []; }
+}
+function botFavored(id) { return favBots().includes(id); }
+
+// 返回 true = 收藏上了，false = 已取消
+function toggleBotFav(id) {
+  const a = favBots();
+  const i = a.indexOf(id);
+  if (i >= 0) a.splice(i, 1); else a.push(id);
+  try { localStorage.setItem(FAV_KEY, JSON.stringify(a)); } catch {}
+  return i < 0;
+}
+
+// 角色最近一次对话的时间 = 它的所有线程里最大的 updatedAt；一条对话都没有 → 0（排最后）
+function botLastTs(botId) {
+  let m = 0;
+  for (const x of threadsOf(botId).threads) {
+    const u = Number(x.updatedAt) || 0;
+    if (u > m) m = u;
+  }
+  return m;
+}
+
+// 侧栏顺序：**收藏的角色钉在最上面**，其余按「最近对话」降序 —— 刚聊过的人就在手边。
+// 收藏优先于时间：钉住的意义就是不被聊天热度挤下去。
+function sortedBots() {
+  const fav = favBots();
+  return (state.bots || []).slice().sort((a, b) => {
+    const fa = fav.includes(a.id) ? 1 : 0;
+    const fb = fav.includes(b.id) ? 1 : 0;
+    if (fa !== fb) return fb - fa;
+    return botLastTs(b.id) - botLastTs(a.id);
+  });
+}
+
+// 侧栏右键菜单（不用原生 contextmenu：内嵌预览里原生菜单会跟宿主冲突，样式也不可控）
+function sideCtx(ev, id) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  closeCtxMenu();
+  const b = (state.bots || []).find((x) => x.id === id);
+  if (!b) return;
+  const favored = botFavored(id);
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.id = 'side-ctx';
+  menu.innerHTML = `
+    <div class="ctx-head">${esc(b.name || b.id)}</div>
+    <div class="ctx-item" data-a="fav">${IC_STAR}<span class="lb">${favored ? '取消收藏' : '收藏此角色'}</span></div>`;
+  document.body.appendChild(menu);
+  // 贴着鼠标放，但不许溢出视口（先量尺寸再定位，所以得先 append）
+  const pad = 8;
+  menu.style.left = Math.max(pad, Math.min(ev.clientX, innerWidth - menu.offsetWidth - pad)) + 'px';
+  menu.style.top = Math.max(pad, Math.min(ev.clientY, innerHeight - menu.offsetHeight - pad)) + 'px';
+  menu.addEventListener('click', (e) => {
+    const it = e.target.closest('.ctx-item');
+    if (!it || it.dataset.a !== 'fav') return;
+    closeCtxMenu();
+    const on = toggleBotFav(id);
+    toast(on ? `已收藏 ${b.name || b.id}` : `已取消收藏 ${b.name || b.id}`, 'ok');
+    renderSidebar();
+  });
+  // 延后一拍再挂「点外面关闭」：否则这次右键的 mousedown 会立刻把它关掉
+  setTimeout(() => {
+    document.addEventListener('mousedown', _ctxOutside);
+    document.addEventListener('keydown', _ctxEsc);
+  }, 0);
+}
+function _ctxOutside(e) { if (!e.target.closest('#side-ctx')) closeCtxMenu(); }
+function _ctxEsc(e) { if (e.key === 'Escape') closeCtxMenu(); }
+function closeCtxMenu() {
+  document.removeEventListener('mousedown', _ctxOutside);
+  document.removeEventListener('keydown', _ctxEsc);
+  const m = document.querySelector('#side-ctx');
+  if (m) m.remove();
+}
+
+// 为一个角色挑一条该进的对话：wanted 确实属于它就用 wanted，否则退回默认线程，再退回首条。
+// ★ 线程缓存还没拉到时**不要**自作主张清空 wanted —— 只会因为暂时无从判断就把一个
+//   可能有效的 tid 判死；返回原值，等下一次重绘时（那时缓存已就绪）自然会被纠正。
+function pickThreadFor(botId, wanted) {
+  if (!_threadsCache[botId]) return wanted || null;
+  const t = threadsOf(botId);
+  if (wanted && t.threads.some((x) => x.id === wanted)) return wanted;
+  return t.defaultThreadId || (t.threads[0] && t.threads[0].id) || null;
+}
+
+// ---------- 记住上次停在哪（角色 + 标签页 + 线程） ----------
+// 刷新 / 重开面板后直接回到原处，而不是跳回第一个角色、对话标签页的第一条线程。
+const LAST_VIEW_KEY = 'qqbot-last-view';
+
+function rememberLastView() {
+  if (view.type !== 'bot' || !view.id) return;  // 停在设置页等不该覆盖「上次的角色」
+  try {
+    localStorage.setItem(LAST_VIEW_KEY, JSON.stringify({ id: view.id, tab: _botTab, tid: _chatTid }));
+  } catch {}
+}
+
+// 恢复上次的位置。返回是否成功；失败由调用方退回默认选择。
+// ★ 必须在 loadThreads() 之后调用 —— 要拿线程列表校验 tid 还在不在。
+function restoreLastView() {
+  let s = null;
+  try { s = JSON.parse(localStorage.getItem(LAST_VIEW_KEY) || 'null'); } catch {}
+  if (!s || !s.id) return false;
+  if (!(state.bots || []).some((b) => b.id === s.id)) return false;  // 角色已被删除
+  view = { type: 'bot', id: s.id };
+  _botTab = BOT_TABS.some((x) => x.id === s.tab) ? s.tab : 'chat';
+  // 记住的线程可能已被清空 / 删除 —— 那时退回该角色的默认线程，别停在空白对话区
+  _chatTid = pickThreadFor(s.id, s.tid);
+  return true;
+}
+
 // ---------- 左侧导航（只有角色列表；对话/记忆/渠道/心跳都是角色卡上的标签页） ----------
 function renderSidebar() {
-  const bots = state.bots || [];
+  const bots = sortedBots();
   $('#bot-list').innerHTML = bots.length
     ? bots.map(b => {
         const st = String(b.runtime?.status || '').trim();
@@ -228,13 +414,14 @@ function renderSidebar() {
         const m = (state.models || []).find(x => x.id === b.modelId);
         const modelTxt = m ? m.name || m.id : (b.modelId ? b.modelId : '未绑定模型');
         return `
-      <div class="side-item ${view.type === 'bot' && view.id === b.id ? 'active' : ''}" onclick="selectBot('${b.id}')">
+      <div class="side-item ${view.type === 'bot' && view.id === b.id ? 'active' : ''}" onclick="selectBot('${b.id}')" oncontextmenu="sideCtx(event,'${b.id}')" title="${esc(tip)}（右键可收藏）">
         <span class="dot ${dotCls}" title="${esc(tip)}"></span>
         <span class="side-avatar">${avatarInner(b)}</span>
         <span class="side-main">
           <span class="side-name">${esc(b.name || b.id)}${qqOff ? ' <i class="side-off">未连QQ</i>' : ''}</span>
           <span class="side-meta">${esc(b.id)} · ${esc(modelTxt)}</span>
         </span>
+        ${botFavored(b.id) ? `<span class="side-fav" title="已收藏 · 右键可取消">${IC_STAR}</span>` : ''}
       </div>`;
       }).join('')
     : '<div class="side-empty">暂无角色</div>';
@@ -254,6 +441,9 @@ async function createThread(botId, title) {
 
 // 进入「角色」工作区 —— 顶部角色卡 + 标签页（对话 / 记忆 / 渠道 / 心跳）
 function selectBot(id, tab) {
+  // ★ 线程 id 只对**它所属的那个角色**有意义。切到别的角色时若还带着上一个角色的 tid，
+  //   loadSessions(新角色, 旧tid) 就会拉错（甚至拉空）—— 这里把它校正到这个角色自己的对话。
+  if (view.id !== id) _chatTid = pickThreadFor(id, _chatTid);
   view = { type: 'bot', id };
   if (tab) _botTab = tab;
   renderSidebar(); renderMain();
@@ -264,10 +454,8 @@ function selectBot(id, tab) {
 // 保留这个入口是为了让「发消息后跳回对话」「fork 后跳过去」之类的调用不必关心 tab 机制
 async function openChat(id, tid) {
   if (!_threadsCache[id]) await loadThreads();
-  const t = threadsOf(id);
-  const fallback = t.defaultThreadId || (t.threads[0] && t.threads[0].id) || null;
   _botTab = 'chat';
-  _chatTid = tid || fallback || null;
+  _chatTid = pickThreadFor(id, tid) || null;
   view = { type: 'bot', id };
   renderSidebar(); renderMain();
   updateAdminNow();
@@ -306,6 +494,9 @@ function clearSessionTimer() {
 }
 
 function renderMain() {
+  // 记录「现在停在哪」供下次打开时恢复。放在所有分支之前 —— 停在设置/模型页时
+  // rememberLastView 内部会跳过，上次那个角色的位置不会被冲掉。
+  rememberLastView();
   clearSessionTimer(); // 切换视图时停止旧的会话轮询
   if (view.type === 'bot-form') return renderBotForm(view.id);
   if (view.type === 'models') return renderModelsPage();
@@ -340,7 +531,7 @@ function emptyThreadsCard(id, pending) {
   if (pending) return '<div class="card"><div class="empty-hint">正在准备第一条对话…</div></div>';
   return `<div class="card">
       <div class="empty-hint">这个角色还没有对话。</div>
-      <div class="empty-thread-actions"><button class="primary sm" onclick="newThread('${id}')">＋ 新建对话</button></div>
+      <div class="empty-thread-actions"><button class="primary sm" onclick="newThread('${id}')">${IC_PLUS}<span class="lb">新建对话</span></button></div>
     </div>`;
 }
 
@@ -370,12 +561,12 @@ function renderChatTabHtml(b) {
     <div class="chat-page">
       <div class="thread-bar ${open ? '' : 'collapsed'}" id="thread-bar">
         <button class="tb-toggle" onclick="toggleThreadBar()" title="收起 / 展开对话列表">
-          <span class="tb-caret">${open ? '▾' : '▸'}</span>
+          <span class="tb-caret">${open ? IC_CARET : IC_CARET_R}</span>
         </button>
         <span class="tb-count">${t.threads.length}</span>
         <span class="tb-current">${esc(cur.title || '新对话')}</span>
         <div class="thread-tabs" id="thread-list">${threadTabsHtml(id, tid)}</div>
-        <button class="tb-add" onclick="newThread('${id}')" title="新建对话">＋</button>
+        <button class="tb-add" onclick="newThread('${id}')" title="新建对话">${IC_PLUS}</button>
       </div>
 
       <div class="card session-card chat-main">
@@ -383,9 +574,9 @@ function renderChatTabHtml(b) {
           <span class="chat-title-text">${esc(cur.title || '新对话')}</span>
           <span class="chat-title-sub">${cur.msgCount || 0} 条</span>
           <span class="spacer"></span>
-          <button class="ghost sm" onclick="expandSessions('${id}','${tid}')" title="弹出完整记录">⛶ 展开</button>
-          <button class="ghost sm" onclick="listBranchModals('${id}')" title="历史分支归档（旧版切分支留下的备份）">⑂ 归档</button>
-          <button class="ghost sm" onclick="exportSessions('${id}','${tid}')" title="导出本条对话为纯文本">⬇ 导出</button>
+          <button class="ghost sm" onclick="expandSessions('${id}','${tid}')" title="弹出完整记录">${IC_EXPAND}<span class="lb">展开</span></button>
+          <button class="ghost sm" onclick="listBranchModals('${id}')" title="历史分支归档（旧版切分支留下的备份）">${IC_FORK}<span class="lb">归档</span></button>
+          <button class="ghost sm" onclick="exportSessions('${id}','${tid}')" title="导出本条对话为纯文本">${IC_DOWNLOAD}<span class="lb">导出</span></button>
           <button class="danger sm" onclick="clearThread('${id}','${tid}')">清空</button>
         </div>
         <div class="session-list" id="session-list"><div class="empty-hint">加载中…</div></div>
@@ -418,8 +609,8 @@ function threadTabsHtml(botId, tid) {
     const active = x.id === tid;
     const ops = active ? `
           <span class="tt-ops">
-            <button title="重命名" onclick="event.stopPropagation();renameThreadUI('${botId}','${x.id}')">✎</button>
-            <button class="del" title="删除这条对话" onclick="event.stopPropagation();delThread('${botId}','${x.id}')">✕</button>
+            <button title="重命名" onclick="event.stopPropagation();renameThreadUI('${botId}','${x.id}')">${IC_PENCIL}</button>
+            <button class="del" title="删除这条对话" onclick="event.stopPropagation();delThread('${botId}','${x.id}')">${IC_CLOSE}</button>
           </span>` : '';
     return `
         <span class="thread-tab ${active ? 'active' : ''}" onclick="switchThread('${botId}','${x.id}')"
@@ -444,7 +635,7 @@ function toggleThreadBar() {
   if (!bar) return;
   bar.classList.toggle('collapsed', !open);
   const caret = bar.querySelector('.tb-caret');
-  if (caret) caret.textContent = open ? '▾' : '▸';
+  if (caret) caret.innerHTML = open ? IC_CARET : IC_CARET_R;
 }
 
 // 只重绘线程标签 + 侧栏（发完消息后刷新消息数与活跃时间，不重建整个视图，
@@ -526,72 +717,54 @@ function avatarInner(b) {
   return esc((b.name || b.id || 'B').slice(0, 1));
 }
 
-// 角色卡「精彩时刻」：由 AI 从记忆档案 + 最近对话中提炼的高光片段
-// 挂在卡片内的第二行（见 renderBotCard）——卡片是窄条横幅，所以这里用
-// 紧凑的横排高光条，而不是三列大卡，避免把对话视线往下挤。
-// 点击某条 → 在该条下方就地展开摘要 / 台词；同一时刻只展开一条。
-let _openMoment = null;   // 当前展开的条目索引（null = 全部收起）
-let _openMomentBot = null; // 上面那个索引属于哪个角色（切角色即重置）
-
-function momentsBodyHtml(b, arr) {
-  return `
-    <div class="mi-items">
-      ${arr.map((m, i) => `
-      <span class="mi-item ${_openMoment === i ? 'open' : ''}" data-mi="${i}">
-        <span class="mi-head" onclick="toggleMoment(${i})" title="${_openMoment === i ? '收起' : '展开查看摘要与台词'}">
-          <span class="mi-idx">${i + 1}</span>
-          <span class="mi-title">${esc(m.title || '无题时刻')}</span>
-          <span class="mi-caret">▾</span>
-        </span>
-        <button class="mi-del" onclick="event.stopPropagation();momentDel('${b.id}', ${i})" title="删除该条">✕</button>
-        <span class="mi-detail">
-          ${m.summary ? `<span class="mi-sum">${esc(m.summary)}</span>` : ''}
-          ${m.quote ? `<span class="mi-quote">“${esc(m.quote)}”</span>` : ''}
-        </span>
-      </span>`).join('')}
-    </div>`;
-}
-
-function renderMomentsInline(b) {
+// ================= 记忆画廊（角色标签页） =================
+// 「精彩时刻」由 AI 从记忆档案 + 最近对话里提炼的高光片段。原先挂在角色卡第二行、
+// 挤成横排小条（因为角色卡是窄条横幅，怕把对话视线往下挤）；现在独立成标签页，
+// 空间充裕 → 改成卡片网格，摘要与台词**默认全展开**（画廊是用来浏览的，不该再藏一层）。
+function renderGalleryTabHtml(b) {
   const arr = Array.isArray(b.moments) && b.moments.length ? b.moments : null;
-  const gen = `<button class="ghost sm moments-inline-gen" onclick="momentsGen('${b.id}')"
-      title="${arr ? '根据最新记忆与对话重新提炼' : '从记忆与对话里提炼高光片段'}">${arr ? '↻ 重提炼' : '✨ 总结精彩时刻'}</button>`;
+  const gen = `<button class="ghost sm gal-gen" onclick="momentsGen('${b.id}')"
+      title="${arr ? '根据最新记忆与对话重新提炼' : '从记忆与对话里提炼高光片段'}">${arr ? IC_REFRESH + '<span class="lb">重提炼</span>' : IC_SPARKLE + '<span class="lb">总结精彩时刻</span>'}</button>`;
+  const head = `<div class="card-title">记忆画廊<span class="spacer"></span>${arr ? `<span class="gal-count">${arr.length} 条精彩时刻</span>` : ''}${gen}</div>`;
   if (!arr) {
     return `
-    <div class="moments-inline moments-inline-empty" id="moments">
-      <span class="mi-label">✨ 精彩时刻</span>
-      <span class="mi-empty-hint">还没有总结 —— 让 AI 从记忆与对话里提炼这个角色的高光片段</span>
-      ${gen}
+    <div class="card gal-card" id="moments">
+      ${head}
+      <div class="gal-empty">
+        <div class="gal-empty-ic">${IC_SPARKLE}</div>
+        <div class="gal-empty-t">还没有精彩时刻</div>
+        <div class="gal-empty-h">让 AI 从这个角色的记忆档案与最近对话里，提炼出值得留存的高光片段</div>
+      </div>
     </div>`;
   }
   return `
-    <div class="moments-inline" id="moments">
-      <span class="mi-label">✨ 精彩时刻</span>
-      ${momentsBodyHtml(b, arr)}
-      ${gen}
+    <div class="card gal-card" id="moments">
+      ${head}
+      <div class="gal-grid">
+        ${arr.map((m, i) => `
+        <div class="gal-item" data-gi="${i}">
+          <div class="gal-head">
+            <span class="gal-idx">${i + 1}</span>
+            <span class="gal-title" title="${esc(m.title || '无题时刻')}">${esc(m.title || '无题时刻')}</span>
+            <button class="gal-del" onclick="momentDel('${b.id}', ${i})" title="删除这条精彩时刻">${IC_CLOSE}</button>
+          </div>
+          ${m.summary ? `<div class="gal-sum">${esc(m.summary)}</div>` : ''}
+          ${m.quote ? `<div class="gal-quote">“${esc(m.quote)}”</div>` : ''}
+        </div>`).join('')}
+      </div>
     </div>`;
-}
-
-// 展开 / 收起一条精彩时刻（纯前端类切换，不重渲染，避免丢展开态）
-function toggleMoment(i) {
-  _openMoment = (_openMoment === i) ? null : i;
-  document.querySelectorAll('#moments .mi-item').forEach((el) => {
-    const on = Number(el.dataset.mi) === _openMoment;
-    el.classList.toggle('open', on);
-    const h = el.querySelector('.mi-head');
-    if (h) h.title = on ? '收起' : '展开查看摘要与台词';
-  });
 }
 
 // 提炼/重新提炼（AI 生成并落盘）
 async function momentsGen(id) {
-  const btn = document.querySelector('#moments .ghost');
-  const prev = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ 总结中…'; }
+  // 按钮内含 SVG 图标 → 存/还原必须走 innerHTML，textContent 会把图标抹成纯文字
+  const btn = document.querySelector('#moments .gal-gen');
+  const prev = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = IC_CLOCK + '<span class="lb">总结中…</span>'; }
   const r = await api(`/api/moments/${id}`, 'POST');
-  if (btn) { btn.disabled = false; btn.textContent = prev; }
+  if (btn) { btn.disabled = false; btn.innerHTML = prev; }
   if (!r.ok) return toast(r.err || '提炼失败', 'err');
-  toast(`已提炼 ${r.moments.length} 条精彩时刻 ✨`, 'ok');
+  toast(`已提炼 ${r.moments.length} 条精彩时刻`, 'ok');
   loadState();
 }
 
@@ -609,17 +782,16 @@ async function momentDel(id, index) {
 function renderBotDetail(id) {
   const b = (state.bots || []).find(x => x.id === id);
   if (!b) {
-    main.innerHTML = `<div class="card"><div class="empty-hint">选择一个角色，或点击左侧 ＋ 添加。</div></div>`;
+    main.innerHTML = `<div class="card"><div class="empty-hint">选择一个角色，或点击左侧 ${IC_PLUS} 添加。</div></div>`;
     return;
   }
-  // 切到别的角色时收起精彩时刻的展开态（索引只对当前角色有意义）
-  if (_openMomentBot !== id) { _openMoment = null; _openMomentBot = id; }
   const tab = BOT_TABS.some(x => x.id === _botTab) ? _botTab : 'chat';
   _botTab = tab;
   const body = tab === 'chat' ? renderChatTabHtml(b)
     : tab === 'memory' ? renderMemoryTabHtml(b)
-      : tab === 'channel' ? renderChannelTabHtml(b)
-        : renderHeartTabHtml(b);
+      : tab === 'gallery' ? renderGalleryTabHtml(b)
+        : tab === 'channel' ? renderChannelTabHtml(b)
+          : renderHeartTabHtml(b);
 
   main.innerHTML = `
     ${renderBotCard(b)}
@@ -662,7 +834,7 @@ function renderBotCard(b) {
   // 这种从头到尾无从生效的标签，只留一个诚实的「未连 QQ」。
   const qqChips = b.enabled
     ? `${badge(b.runtime?.status)}<span class="status-chip ${b.sandbox === false ? 'ok' : 'warn'}"><span class="chip-dot ${b.sandbox === false ? 'on' : 'warn'}"></span>${b.sandbox === false ? '正式发布' : '沙箱测试'}</span>`
-    : '<span class="status-chip"><span class="chip-dot off"></span>📡 未连 QQ</span>';
+    : `<span class="status-chip"><span class="chip-dot off"></span>${IC_CHANNEL}<span class="lb">未连 QQ</span></span>`;
   return `
     <div class="card bot-card">
       <canvas class="pixel-wave" data-accent="" data-effect="${esc(cardEffectId())}"></canvas>
@@ -680,45 +852,44 @@ function renderBotCard(b) {
           </div>
           <div class="bc-chips">
             ${qqChips}
-            ${webEnabled(b) ? '<span class="status-chip ok"><span class="chip-dot on"></span>🌐 联网</span>' : '<span class="status-chip"><span class="chip-dot off"></span>🌐 未联网</span>'}
-            <span class="status-chip"><span class="chip-icon">⚡</span>搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</span>
-            ${streamOn ? '<span class="status-chip ok"><span class="chip-icon">⌨</span>流式</span>' : ''}
+            ${webEnabled(b) ? `<span class="status-chip ok"><span class="chip-dot on"></span>${IC_GLOBE}<span class="lb">联网</span></span>` : `<span class="status-chip"><span class="chip-dot off"></span>${IC_GLOBE}<span class="lb">未联网</span></span>`}
+            <span class="status-chip"><span class="chip-icon">${IC_SEARCH}</span>搜索 ${modeLabel(b.searchMode || state.searchMode || 'auto')}</span>
+            ${streamOn ? `<span class="status-chip ok"><span class="chip-icon">${IC_STREAM}</span>流式</span>` : ''}
           </div>
         </div>
         <div class="bc-actions">
-          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑角色信息：名称 / 头像 / 模型 / 记忆条数 / 联网 / 流式">⚙ 设置</button>
+          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑角色信息：名称 / 头像 / 模型 / 记忆条数 / 联网 / 流式">${IC_SETTINGS}<span class="lb">设置</span></button>
           <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
         </div>
       </div>
-      ${renderMomentsInline(b)}
     </div>`;
 }
 
 // 角色卡上的标签页
 function renderBotTabs(tab) {
   return `<div class="bot-tabs" role="tablist">
-    ${BOT_TABS.map(t => `<span class="bt-tab ${t.id === tab ? 'active' : ''}" role="tab" onclick="switchBotTab('${t.id}')">${t.n}</span>`).join('')}
+    ${BOT_TABS.map(t => `<span class="bt-tab ${t.id === tab ? 'active' : ''}" role="tab" onclick="switchBotTab('${t.id}')">${t.ic}<span class="lb">${t.n}</span></span>`).join('')}
   </div>`;
 }
 
 // 「记忆」标签页：AI 蒸馏内容 + 三层记忆文件管理
-// 「精彩时刻」不在这里 —— 它挂在角色卡上（见 renderBotCard → renderMomentsInline）。
+// 「记忆画廊」不在这里 —— 它是独立标签页（见 renderGalleryTabHtml）。
 function renderMemoryTabHtml(b) {
   return `
     <div class="card mem-card">
       <div class="card-title">记忆管理（memory/${esc(b.id)}/）
           <span class="spacer"></span>
-          <button class="ghost sm" onclick="distillNow('${b.id}')" title="蒸馏人格核心卡 + 生成剧情/内容摘要 + 压缩事件流">↻ 立即蒸馏</button>
-          <button class="ghost sm" onclick="openUploadModal('${b.id}')">⬆ 上传</button>
+          <button class="ghost sm" onclick="distillNow('${b.id}')" title="蒸馏人格核心卡 + 生成剧情/内容摘要 + 压缩事件流">${IC_REFRESH}<span class="lb">立即蒸馏</span></button>
+          <button class="ghost sm" onclick="openUploadModal('${b.id}')">${IC_UPLOAD}<span class="lb">上传</span></button>
           <button class="ghost sm" onclick="openFolder('${b.id}')">打开文件夹</button>
-          <button class="ghost sm" onclick="newMemoryFile('${b.id}')">＋ 新增文件</button>
+          <button class="ghost sm" onclick="newMemoryFile('${b.id}')">${IC_PLUS}<span class="lb">新增文件</span></button>
         </div>
         <div class="mem-global">
           <label class="switch" title="勾选后读取设置中的全局用户设定与全局提示词">
             <input type="checkbox" ${b.useGlobal !== false ? 'checked' : ''} onchange="toggleGlobalSetting('${b.id}', this.checked)">
             <span class="slider"></span>
           </label>
-          <span class="mem-global-text">采用全局设定<span class="mem-global-sub">勾选后，对话时先读取「⚙ 设置」中的全局用户设定与全局提示词，再读取下方记忆文件；取消勾选则仅使用下方记忆库文件</span></span>
+          <span class="mem-global-text">采用全局设定<span class="mem-global-sub">勾选后，对话时先读取「${IC_SETTINGS}<span class="lb">设置</span>」中的全局用户设定与全局提示词，再读取下方记忆文件；取消勾选则仅使用下方记忆库文件</span></span>
         </div>
         <div id="mem-layers" class="mem-lay-bar"><div class="empty-hint">分层状态加载中…</div></div>
         <div class="mem-mgr">
@@ -745,7 +916,7 @@ function renderMemoryTabHtml(b) {
         <div id="mem-distill" class="mem-distill"><div class="empty-hint">加载中…</div></div>
         <div class="ingest-box">
           <textarea id="f-ingest" rows="1" placeholder="概述新剧情 / 内容，AI 自动归类写入对应记忆文件…"></textarea>
-          <button class="primary sm" onclick="ingestMemory('${b.id}')">✉ AI 归档</button>
+          <button class="primary sm" onclick="ingestMemory('${b.id}')">${IC_INBOX}<span class="lb">AI 归档</span></button>
         </div>
       </div>`;
 }
@@ -810,7 +981,7 @@ function renderChannelTabHtml(b) {
       </div>
       <div class="chan-foot">
         <button class="primary" onclick="saveChannel('${b.id}')">${on ? '保存并重连' : '保存'}</button>
-        ${on ? `<button class="ghost" onclick="restartBot('${b.id}')">↻ 仅重连</button>` : ''}
+        ${on ? `<button class="ghost" onclick="restartBot('${b.id}')">${IC_REFRESH}<span class="lb">仅重连</span></button>` : ''}
         <span class="chan-hint">AppSecret 可写 <code>env:变量名</code> 引用 .env，密钥就不必落在 config.json 里。</span>
       </div>
     </div>
@@ -846,7 +1017,7 @@ function renderHeartTabHtml(b) {
   return renderHeartCard(b);
 }
 
-// ---------- 设置弹窗（角色卡旁的「⚙ 设置」）----------
+// ---------- 设置弹窗（角色卡旁的「${IC_SETTINGS}<span class="lb">设置</span>」）----------
 // 配置项集中收在弹窗里，不占标签页 —— 对话视线里只有对话本身。
 function openBotSettings(id) {
   const b = (state.bots || []).find(x => x.id === id);
@@ -864,16 +1035,16 @@ function openBotSettings(id) {
       <div class="modal-head">
         <span>设置角色 — ${esc(b.name || b.id)}</span>
         <span class="spacer"></span>
-        <button class="ghost sm" onclick="closeBotSettings()">✕ 关闭</button>
+        <button class="ghost sm" onclick="closeBotSettings()">${IC_CLOSE}<span class="lb">关闭</span></button>
       </div>
       <div class="modal-body">
         <div class="profile-edit-head">
           <div class="avatar avatar-preview" id="avatar-preview">${avatarInner(b)}</div>
           <div class="frm-row" style="flex:1;margin:0">
             <label class="frm">头像：图片 URL / emoji / 本地图片（上传后保存到项目 avatars/ 目录）</label>
-            <input id="f-avatar" type="text" value="${esc(b.avatar || '')}" placeholder="https://... 或 🤖 或点击选择本地图片">
+            <input id="f-avatar" type="text" value="${esc(b.avatar || '')}" placeholder="图片 URL，或点击下方「选择本地图片」上传">
             <div style="margin-top:6px;display:flex;gap:8px">
-              <button class="sm" type="button" onclick="pickAvatarFile()">📁 选择本地图片</button>
+              <button class="sm" type="button" onclick="pickAvatarFile()">${IC_FOLDER}<span class="lb">选择本地图片</span></button>
             </div>
           </div>
           <input type="file" id="f-avatar-file" accept="image/*" style="display:none" onchange="uploadAvatar('${b.id}')">
@@ -895,7 +1066,7 @@ function openBotSettings(id) {
             <option value="light" ${b.searchMode === 'light' ? 'selected' : ''}>仅轻量</option>
             <option value="browser" ${b.searchMode === 'browser' ? 'selected' : ''}>仅浏览器</option>
           </select></div>
-          <div class="field"><label>联网状态</label><div class="value">${webEnabled(b) ? '✅ 已开启' : '❌ 关闭'}</div></div>
+          <div class="field"><label>联网状态</label><div class="value">${webEnabled(b) ? IC_CHECK + '<span class="lb">已开启</span>' : IC_CLOSE + '<span class="lb">关闭</span>'}</div></div>
         </div>
         <div class="grid-3" style="margin-top:12px">
           <div class="field"><label>流式回复（打字机效果，仅单聊）</label><select id="f-stream">
@@ -906,7 +1077,7 @@ function openBotSettings(id) {
           <div class="field"><label>Markdown 回复</label><div class="value">自动启用，失败回退文本</div></div>
           <div class="field"><label>流式可用性</label><div class="value">${b.streamReply === false ? '已关闭' : '需要官方 Markdown/流式权限'}</div></div>
         </div>
-        <div class="frm-hint">这里只管角色本体。QQ 连接（AppID / AppSecret / 运行环境）在角色卡下的「📡 渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
+        <div class="frm-hint">这里只管角色本体。QQ 连接（AppID / AppSecret / 运行环境）在角色卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
       </div>
       <div class="modal-foot cf-foot">
         <button class="ghost" onclick="closeBotSettings()">取消</button>
@@ -950,7 +1121,7 @@ function hbTaskRowHtml(time, prompt) {
   return `<div class="hb-task-row">
     <input class="hb-t-time" type="text" placeholder="HH:MM" value="${esc(time)}">
     <input class="hb-t-prompt" type="text" placeholder="该时间点要机器人做的事 / 提示词" value="${esc(prompt)}">
-    <button class="ghost sm" onclick="this.closest('.hb-task-row').remove()" title="删除该时间点">✕</button>
+    <button class="ghost sm" onclick="this.closest('.hb-task-row').remove()" title="删除该时间点">${IC_CLOSE}</button>
   </div>`;
 }
 function hbAddTask(btn) {
@@ -968,9 +1139,9 @@ function renderHeartBlock(b, h, idx) {
     : String(cfg.times || '').split(/[,，]/).map(s => s.trim()).filter(Boolean).map(time => ({ time, prompt: '' }));
   if (!tasks.length) tasks = [{ time: '09:00', prompt: '' }];
   const modes = [
-    { v: 'interval', n: '⏱ 间隔', d: '每隔 N 分钟说一句' },
-    { v: 'timer', n: '🕘 定时', d: '按时间点排布任务' },
-    { v: 'random', n: '🎲 随机', d: '随机间隔主动发言' },
+    { v: 'interval', n: IC_CLOCK + '<span class="lb">间隔</span>', d: '每隔 N 分钟说一句' },
+    { v: 'timer', n: IC_TIMER + '<span class="lb">定时</span>', d: '按时间点排布任务' },
+    { v: 'random', n: IC_DICE + '<span class="lb">随机</span>', d: '随机间隔主动发言' },
   ];
   const cur = modes.find(m => m.v === cfg.mode) || modes[0];
   const show = (m) => (cfg.mode === m ? '' : 'none');
@@ -1006,7 +1177,7 @@ function renderHeartBlock(b, h, idx) {
         <label class="frm" style="display:flex;align-items:center;gap:6px">
           <span>任务排布（每天循环 · 可加多个时间点）</span>
           <span class="spacer"></span>
-          <span class="mini-chip" onclick="hbAddTask(this)">＋ 加时间点</span>
+          <span class="mini-chip" onclick="hbAddTask(this)">${IC_PLUS}<span class="lb">加时间点</span></span>
         </label>
         <div class="hb-task-list" style="display:flex;flex-direction:column;gap:6px">
           ${tasks.map(t => hbTaskRowHtml(t.time, t.prompt)).join('')}
@@ -1020,7 +1191,7 @@ function renderHeartBlock(b, h, idx) {
     <div class="hb-foot">
       <span class="hb-foot-hint">独立调度 · 与其它任务互不影响</span>
       <span class="spacer"></span>
-      <button class="ghost sm hb-del" onclick="hbDelBlock(this)" ${idx === 0 ? 'style="visibility:hidden"' : ''}>🗑 删除此任务</button>
+      <button class="ghost sm hb-del" onclick="hbDelBlock(this)" ${idx === 0 ? 'style="visibility:hidden"' : ''}>${IC_TRASH}<span class="lb">删除此任务</span></button>
     </div>
   </div>`;
 }
@@ -1065,10 +1236,10 @@ function renderHeartCard(b) {
     : [Object.assign({}, b.heartbeat || {})];
   return `
     <div class="card heart-card">
-      <div class="card-title">♥ 心跳任务（机器人主动发言）
+      <div class="card-title">${IC_HEART}<span class="lb">心跳任务（机器人主动发言）</span>
         <span class="spacer"></span>
         <span class="hb-status" id="hb-status" style="font-size:10px;color:var(--text-faint)"></span>
-        <button class="ghost sm" onclick="hbAddBlock('${esc(b.id)}')">＋ 新增任务</button>
+        <button class="ghost sm" onclick="hbAddBlock('${esc(b.id)}')">${IC_PLUS}<span class="lb">新增任务</span></button>
         <button class="primary sm" onclick="heartbeatSave('${esc(b.id)}')">保存任务</button>
       </div>
       <div class="hb-blocks">
@@ -1135,7 +1306,7 @@ async function refreshHeartNext(id) {
   const soonest = enabled.reduce((a, b) => (a.secondsLeft <= b.secondsLeft ? a : b));
   const min = Math.max(1, Math.round(soonest.secondsLeft / 60));
   const sec = soonest.secondsLeft % 60;
-  el.textContent = `♥ 已启用 ${enabled.length} 个 · 最近一次约 ${min} 分 ${sec} 秒后`;
+  el.innerHTML = IC_HEART + `<span class="lb">已启用 ${enabled.length} 个 · 最近一次约 ${min} 分 ${sec} 秒后</span>`;
   const m = $('#hb-master');
   if (m) m.textContent = rows[0] && rows[0].master ? `主 ID：${rows[0].master.slice(0, 18)}` : '（暂无主 ID，需先有用户对话）';
 }
@@ -1151,10 +1322,10 @@ function openSettings() {
 let _gFiles = [];    // 全局文件列表缓存（含内容）
 let _gKey = '';      // 当前正在编辑的全局文件 key
 const SETTING_TABS = [
-  { id: 'appearance', n: '🎨 外观' },
-  { id: 'general', n: '🌐 联网' },
-  { id: 'global', n: '📚 全局设定' },
-  { id: 'stats', n: '📊 用量统计' },
+  { id: 'appearance', n: '外观', ic: IC_PALETTE },
+  { id: 'general', n: '联网', ic: IC_GLOBE },
+  { id: 'global', n: '全局设定', ic: IC_LAYERS },
+  { id: 'stats', n: '用量统计', ic: IC_CHART },
 ];
 function settingsTabId() {
   let t = 'appearance';
@@ -1176,7 +1347,7 @@ function renderSettings() {
     <div class="card">
       <div class="card-title">全局设定（机器人勾选「采用全局设定」时生效）
         <span class="spacer"></span>
-        <button class="ghost sm" onclick="newGlobalFile()">＋ 新增文件</button>
+        <button class="ghost sm" onclick="newGlobalFile()">${IC_PLUS}<span class="lb">新增文件</span></button>
       </div>
       <div class="mem-files" id="g-files"><div class="empty-hint">加载中…</div></div>
       <div class="g-edit">
@@ -1197,10 +1368,10 @@ function renderSettings() {
     <div class="page-head">
       <h2>设置</h2>
       <span class="spacer"></span>
-      <button class="ghost sm" onclick="backFromSettings()">← 返回</button>
+      <button class="ghost sm" onclick="backFromSettings()">${IC_BACK}<span class="lb">返回</span></button>
     </div>
     <div class="settings-tabs">
-      ${SETTING_TABS.map(x => `<span class="st-tab ${x.id === tab ? 'active' : ''}" data-t="${x.id}" onclick="switchSettingsTab('${x.id}')">${x.n}</span>`).join('')}
+      ${SETTING_TABS.map(x => `<span class="st-tab ${x.id === tab ? 'active' : ''}" data-t="${x.id}" role="tab" onclick="switchSettingsTab('${x.id}')">${x.ic}<span class="lb">${x.n}</span></span>`).join('')}
     </div>
     <div class="st-sec" data-sec="appearance"${show('appearance')}>${renderAppearance()}</div>
     <div class="st-sec" data-sec="general"${show('general')}>${renderGeneral()}${renderAdminSetting()}</div>
@@ -1221,7 +1392,7 @@ function renderAdminSetting() {
     <div class="card admin-setting-card">
       <div class="card-title">面板管理员（AI 助手）
         <span class="spacer"></span>
-        <span class="badge tag">◈ 已启用</span>
+        <span class="badge tag">${IC_CHECK}<span class="lb">已启用</span></span>
       </div>
       <div class="admin-perm">
         <div class="perm-title">权限说明</div>
@@ -1255,7 +1426,7 @@ async function loadGlobalFiles() {
 function renderGlobalFiles() {
   const el = $('#g-files');
   if (!el) return;
-  if (!_gFiles.length) { el.innerHTML = '<div class="empty-hint">暂无全局文件，点击右上角 ＋ 新增</div>'; return; }
+  if (!_gFiles.length) { el.innerHTML = `<div class="empty-hint">暂无全局文件，点击右上角 ${IC_PLUS} 新增</div>`; return; }
   el.innerHTML = _gFiles.map(f => `
     <div class="mem-file ${f.enabled ? '' : 'disabled'} ${_gKey === f.key ? 'active' : ''}" onclick="selectGlobalFile('${f.key}')">
       <label class="switch" onclick="event.stopPropagation()" title="${f.enabled ? '点击禁用' : '点击启用'}">
@@ -1265,7 +1436,7 @@ function renderGlobalFiles() {
       <span class="mf-name">${esc(f.name)}</span>
       <span class="mf-desc">${esc(f.desc)}</span>
       <span class="mf-state">${f.enabled ? '启用' : '已禁用'}</span>
-      <button class="ghost sm" onclick="event.stopPropagation();delGlobalFile('${f.key}')" title="删除文件">✕</button>
+      <button class="ghost sm" onclick="event.stopPropagation();delGlobalFile('${f.key}')" title="删除文件">${IC_CLOSE}</button>
     </div>`).join('');
 }
 
@@ -1401,24 +1572,24 @@ const TIER_LABEL = { 1: '强制', 2: '摘要', 3: '冷' };
 function renderMemFiles(id, files) {
   const el = $('#mem-files');
   if (!el) return;
-  if (!files.length) { el.innerHTML = '<div class="empty-hint">暂无记忆文件，点击右上角 ＋ 新增</div>'; return; }
+  if (!files.length) { el.innerHTML = `<div class="empty-hint">暂无记忆文件，点击右上角 ${IC_PLUS} 新增</div>`; return; }
   el.innerHTML = files.map((f, i) => `
     <div class="mem-file ${f.enabled ? '' : 'disabled'}" data-key="${esc(f.key)}" draggable="true"
-         onclick="openMemFile('${id}','${f.key}')" title="点击概览内容 / 编辑备注；拖动 ⠿ 调整重要性" style="animation-delay:${Math.min(i * 45, 300)}ms"
+         onclick="openMemFile('${id}','${f.key}')" title="点击概览内容 / 编辑备注；拖动左侧手柄调整重要性" style="animation-delay:${Math.min(i * 45, 300)}ms"
          ondragstart="memDragStart(event,'${id}','${esc(f.key)}')" ondragover="memDragOver(event)"
          ondrop="memDrop(event,'${id}')" ondragend="memDragEnd(event)">
-      <span class="mf-handle" title="拖动调整重要性（越靠前越重要）">⠿</span>
+      <span class="mf-handle" title="拖动调整重要性（越靠前越重要）">${IC_DRAG}</span>
       <label class="switch" onclick="event.stopPropagation()" title="${f.enabled ? '点击禁用' : '点击启用'}">
         <input type="checkbox" ${f.enabled ? 'checked' : ''} onchange="toggleFile('${id}','${f.key}',this.checked)">
         <span class="slider"></span>
       </label>
       <span class="mf-name">${esc(f.name)}</span>
       ${f.sys
-        ? '<span class="mf-sys" title="由系统自动生成与维护，对应下方「AI 蒸馏内容」">🤖 系统</span>'
+        ? `<span class="mf-sys" title="由系统自动生成与维护，对应下方「AI 蒸馏内容」">${IC_SPARKLE}<span class="lb">系统</span></span>`
         : `<span class="mf-tier t${f.tier}" title="记忆层级：拖动卡片到左侧层级桶，或点击卡片在弹窗中修改">${TIER_LABEL[f.tier] || '摘要'}</span>`}
       <span class="mf-desc">${esc(f.desc) || '无备注'}</span>
       <span class="mf-state">${f.enabled ? '启用' : '已禁用'}</span>
-      <button class="ghost sm mf-del" onclick="event.stopPropagation();delMemoryFile('${id}','${f.key}')" title="删除文件">✕</button>
+      <button class="ghost sm mf-del" onclick="event.stopPropagation();delMemoryFile('${id}','${f.key}')" title="删除文件">${IC_CLOSE}</button>
     </div>`).join('');
 }
 
@@ -1511,7 +1682,7 @@ async function tierDrop(ev, id, tier) {
 
 async function saveTier(id, key, tier) {
   const r = await api(`/api/memory/${id}/files/${key}/tier`, 'PUT', { tier });
-  if (r.ok) { toast(`「${key}」→ ${ { 1: '无条件强制注入', 2: '摘要索引', 3: '冷记忆' }[tier] }`, 'ok'); loadMemoryFiles(id); }
+  if (r.ok) { toast(`「${key}」已改为「${ { 1: '无条件强制注入', 2: '摘要索引', 3: '冷记忆' }[tier] }」`, 'ok'); loadMemoryFiles(id); }
   else toast(r.err || '层级设置失败', 'err');
 }
 
@@ -1535,7 +1706,7 @@ async function loadMemLayers(id) {
 }
 
 function layStatText(s) {
-  const coreStat = s.core ? (s.coreFresh ? '核心卡 ✓' : '核心卡 ⚠待蒸馏') : (s.seedEmpty ? '核心卡（无用户文件）' : '核心卡 未蒸馏');
+  const coreStat = s.core ? (s.coreFresh ? '核心卡 ' + IC_CHECK : '核心卡 ' + IC_WARN + '<span class="lb">待蒸馏</span>') : (s.seedEmpty ? '核心卡（无用户文件）' : '核心卡 未蒸馏');
   const vals = Object.values(s.summaries || {});
   const created = vals.filter((x) => x && x.exists).length;
   return `${coreStat} · 事件 ${s.eventCount} 条 · 摘要 ${created}/${vals.length}`;
@@ -1552,30 +1723,30 @@ function renderMemDistill(id) {
   const el = $('#mem-distill');
   if (!el || !_layState) return;
   const s = _layState;
-  const badge = (state) => state === true ? '<span class="distill-ok">✓ 与源同步</span>'
-    : state === false ? '<span class="distill-warn">⚠ 待更新</span>' : '';
+  const badge = (state) => state === true ? `<span class="distill-ok">${IC_CHECK}<span class="lb">与源同步</span></span>`
+    : state === false ? `<span class="distill-warn">${IC_WARN}<span class="lb">待更新</span></span>` : '';
   const coreRows = s.core ? [['身份', s.core.core.identity], ['语气', s.core.core.tone], ['边界', s.core.core.boundaries], ['关系现状', s.core.core.relationship_state], ['演化备注', s.core.core.evolved_notes]]
     .map(([k, v]) => `<div class="dc-row"><span class="dc-k">${k}</span><span class="dc-v">${esc(v || '—')}</span></div>`).join('') : '';
   const coreBody = s.core
     ? `<div class="distill-core">${coreRows}</div>`
-    : `<span class="lay-dim">${s.seedEmpty ? '尚无用户文件——点「↻ 立即蒸馏」，AI 将依据近期经历与对话归纳人格' : '尚未蒸馏——对话后自动生成，或点右上「↻ 立即蒸馏」'}</span>`;
+    : `<span class="lay-dim">${s.seedEmpty ? '尚无用户文件——点「立即蒸馏」，AI 将依据近期经历与对话归纳人格' : '尚未蒸馏——对话后自动生成，或点右上「立即蒸馏」'}</span>`;
   const secBody = (x) => x.sections.length
     ? x.sections.map((t) => '· ' + esc(t)).join('<br>')
     : '<span class="lay-dim">源文件为空，暂无可摘要内容（填写源文件后点「生成/更新」）</span>';
   const secBadge = (x) => !x.exists ? '<span class="distill-warn">未创建</span>'
-    : x.empty ? '<span class="distill-ok">✓ 已创建（源为空）</span>'
-    : (x.fresh ? '<span class="distill-ok">✓ 与源同步</span>' : '<span class="distill-warn">⚠ 源已变更，待更新</span>');
+    : x.empty ? `<span class="distill-ok">${IC_CHECK}<span class="lb">已创建（源为空）</span></span>`
+    : (x.fresh ? `<span class="distill-ok">${IC_CHECK}<span class="lb">与源同步</span></span>` : `<span class="distill-warn">${IC_WARN}<span class="lb">源已变更，待更新</span></span>`);
   const sumBlocks = Object.entries(s.summaries || {}).map(([k, x]) => `
-    <div class="distill-block"><div class="distill-label">${esc(x.name || k)}摘要 ${secBadge(x)}<span class="spacer"></span><button class="ghost sm" onclick="distillNow('${id}')">↻ 生成/更新</button></div><div class="distill-body">${secBody(x)}</div></div>`).join('');
+    <div class="distill-block"><div class="distill-label">${esc(x.name || k)}摘要 ${secBadge(x)}<span class="spacer"></span><button class="ghost sm" onclick="distillNow('${id}')">${IC_REFRESH}<span class="lb">生成/更新</span></button></div><div class="distill-body">${secBody(x)}</div></div>`).join('');
   const evBody = s.summary
     ? esc(s.summary).replace(/\n/g, '<br>')
-    : (s.summaryFileExists ? '<span class="lay-dim">✓ 文件已创建（暂无经历可压缩）</span>' : '<span class="lay-dim">未创建（点「生成/更新」立即创建）</span>');
+    : (s.summaryFileExists ? `<span class="lay-dim">${IC_CHECK}<span class="lb">文件已创建（暂无经历可压缩）</span></span>` : '<span class="lay-dim">未创建（点「生成/更新」立即创建）</span>');
   const evPreview = s.eventCount
     ? s.events.slice(-3).reverse().map((e) => `· [${fmtShortTs(e.ts)}] ${esc(e.event)}`).join('<br>')
     : `<span class="lay-dim">暂无事件（对话中自动提炼，或使用「AI 归档」记录剧情）</span>`;
   // 「从核心卡还原种子」：种子（persona.md）丢失/清空后一键恢复；需已有核心卡
   const coreSeedBtn = s.core
-    ? `<button class="ghost sm" onclick="seedFromCore('${id}')" title="把核心卡内容写回 persona.md（种子丢失/清空后一键恢复）">☰ 还原种子</button>`
+    ? `<button class="ghost sm" onclick="seedFromCore('${id}')" title="把核心卡内容写回 persona.md（种子丢失/清空后一键恢复）">${IC_COLLAPSE}<span class="lb">还原种子</span></button>`
     : '';
   // 折叠态 class：_dfOpen 记录「处于展开状态」的块，不在集合里即为折叠。
   // 修复：此前 dfCls 被调用但从未定义，el.innerHTML 赋值时抛 ReferenceError，
@@ -1583,10 +1754,10 @@ function renderMemDistill(id) {
   // 所以重绘/切页后用户的选择得以保持。
   const dfCls = (k) => (_dfOpen.has(id + '::' + k) ? '' : 'folded');
   el.innerHTML = `
-    <div class="distill-block span2 ${dfCls('core')}"><div class="distill-label" onclick="distillFold(event,'${id}','core')" title="点击展开/收起正文"><span class="dd-ic">▾</span>人格核心卡 ${badge(s.core ? s.coreFresh : null)}${s.core && s.core.manual ? '<span class="distill-ok">手动编辑</span>' : ''}<span class="spacer"></span>${coreSeedBtn}<button class="ghost sm" onclick="openCoreEditModal('${id}')">✎ 编辑</button></div><div class="distill-body">${coreBody}</div></div>
+    <div class="distill-block span2 ${dfCls('core')}"><div class="distill-label" onclick="distillFold(event,'${id}','core')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>人格核心卡 ${badge(s.core ? s.coreFresh : null)}${s.core && s.core.manual ? '<span class="distill-ok">手动编辑</span>' : ''}<span class="spacer"></span>${coreSeedBtn}<button class="ghost sm" onclick="openCoreEditModal('${id}')">${IC_PENCIL}<span class="lb">编辑</span></button></div><div class="distill-body">${coreBody}</div></div>
     ${sumBlocks}
-    <div class="distill-block ${dfCls('events')}"><div class="distill-label" onclick="distillFold(event,'${id}','events')" title="点击展开/收起正文"><span class="dd-ic">▾</span>经历事件流<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">⚙ 管理</button></div><div class="distill-body">${evPreview}</div></div>
-    <div class="distill-block ${dfCls('evsum')}"><div class="distill-label" onclick="distillFold(event,'${id}','evsum')" title="点击展开/收起正文"><span class="dd-ic">▾</span>经历摘要（旧事件压缩）<span class="spacer"></span><button class="ghost sm" onclick="regenEventsSummary('${id}')">生成/更新</button>${(s.summary || s.summaryFileExists) ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
+    <div class="distill-block ${dfCls('events')}"><div class="distill-label" onclick="distillFold(event,'${id}','events')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>经历事件流<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">${IC_SETTINGS}<span class="lb">管理</span></button></div><div class="distill-body">${evPreview}</div></div>
+    <div class="distill-block ${dfCls('evsum')}"><div class="distill-label" onclick="distillFold(event,'${id}','evsum')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>经历摘要（旧事件压缩）<span class="spacer"></span><button class="ghost sm" onclick="regenEventsSummary('${id}')">生成/更新</button>${(s.summary || s.summaryFileExists) ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
 }
 
 // AI 蒸馏内容块展开状态：key = `${botId}::${块标识}`；重绘/切页后保持用户选择
@@ -1607,7 +1778,7 @@ async function regenEventsSummary(id) {
   const r = await api(`/api/memory/${id}/distill`, 'POST', {});
   if (!r.ok) return toast(r.err || '生成失败', 'err');
   const ev = r.results && r.results.events;
-  toast(`经历摘要: ${ev && ev.ok ? '✓ 已生成/更新' : '✗ ' + ((ev && ev.err) || '失败')}`, ev && ev.ok ? 'ok' : 'err');
+  toast(`经历摘要：${ev && ev.ok ? '已生成/更新' : '失败：' + ((ev && ev.err) || '未知错误')}`, ev && ev.ok ? 'ok' : 'err');
   loadMemLayers(id);
 }
 
@@ -1629,13 +1800,13 @@ function openEventManage(id) {
       <div class="ev-row">
         <span class="ev-ts">[${fmtShortTs(e.ts)}] P${e.importance} ${e.source === 'mark' ? '·记录' : e.source === 'auto' ? '·自动' : '·手动'}</span>
         <span class="ev-text">${esc(e.event)}</span>
-        <button class="ghost sm" onclick="delEvent('${id}',${e.ts},this)">✕</button>
+        <button class="ghost sm" onclick="delEvent('${id}',${e.ts},this)">${IC_CLOSE}</button>
       </div>`).join('');
     overlay.innerHTML = `
       <div class="modal-card ev-manage-modal">
-        <div class="modal-head"><span>🧾 经历事件管理（${s.eventCount} 条）</span><span class="spacer"></span>
+        <div class="modal-head"><span>${IC_INBOX}<span class="lb">经历事件管理</span>（${s.eventCount} 条）</span><span class="spacer"></span>
           <button class="danger sm" onclick="clearAllEvents('${id}')">清空全部</button>
-          <button class="ghost sm" onclick="document.getElementById('ev-manage-modal').remove()">✕ 关闭</button></div>
+          <button class="ghost sm" onclick="document.getElementById('ev-manage-modal').remove()">${IC_CLOSE}<span class="lb">关闭</span></button></div>
         <div class="modal-body">${rows || '<div class="empty-hint">暂无事件</div>'}</div>
       </div>`;
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
@@ -1661,8 +1832,8 @@ function openUploadModal(id) {
   overlay.id = 'upload-modal';
   overlay.innerHTML = `
     <div class="modal-card upload-modal">
-      <div class="modal-head"><span>⬆ 上传记忆文件</span><span class="spacer"></span>
-        <button class="ghost sm" onclick="document.getElementById('upload-modal').remove()">✕ 关闭</button></div>
+      <div class="modal-head"><span>${IC_UPLOAD}<span class="lb">上传</span>记忆文件</span><span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('upload-modal').remove()">${IC_CLOSE}<span class="lb">关闭</span></button></div>
       <div class="modal-body">
         <label class="frm">选择文件（.md / .txt，可多选，内容为纯文本）</label>
         <input id="upload-input" type="file" multiple accept=".md,.txt,.markdown">
@@ -1705,13 +1876,13 @@ async function distillNow(id) {
   const r = await api(`/api/memory/${id}/distill`, 'POST', {});
   if (!r.ok) return toast(r.err || '蒸馏失败', 'err');
   const res = r.results || {};
-  const parts = [`核心卡 ${res.core && res.core.ok ? '✓' : '✗'}`, `经历摘要 ${res.events && res.events.ok ? '✓' : '✗'}`];
+  const parts = [`核心卡 ${res.core && res.core.ok ? '成功' : '失败'}`, `经历摘要 ${res.events && res.events.ok ? '成功' : '失败'}`];
   let okN = (res.core?.ok ? 1 : 0) + (res.events?.ok ? 1 : 0);
   for (const [k, v] of Object.entries(res.summaries || {})) {
-    parts.push(`${v.name || k} ${v.ok ? (v.empty ? '✓（源为空）' : '✓') : '✗ ' + (v.err || '失败')}`);
+    parts.push(`${v.name || k} ${v.ok ? (v.empty ? '成功（源为空）' : '成功') : '失败：' + (v.err || '未知错误')}`);
     if (v.ok) okN++;
   }
-  toast(parts.join('　'), okN ? 'ok' : 'err');
+  toast(parts.join(' · '), okN ? 'ok' : 'err');
   loadMemLayers(id);
 }
 
@@ -1732,8 +1903,8 @@ function openCoreEditModal(id) {
   overlay.id = 'core-edit-modal';
   overlay.innerHTML = `
     <div class="modal-card core-edit-modal">
-      <div class="modal-head"><span>✎ 编辑人格核心卡</span><span class="spacer"></span>
-        <button class="ghost sm" onclick="document.getElementById('core-edit-modal').remove()">✕ 关闭</button></div>
+      <div class="modal-head"><span>${IC_PENCIL}<span class="lb">编辑人格核心卡</span></span><span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('core-edit-modal').remove()">${IC_CLOSE}<span class="lb">关闭</span></button></div>
       <div class="modal-body">
         <p class="empty-hint" style="margin:0 0 10px">核心卡每轮对话注入。手动编辑后不会被周期性自动蒸馏覆盖；但修改「人格/特征」等用户文件会触发重新蒸馏。</p>
         ${CORE_FIELDS.map(([k, label, ph]) => `
@@ -1758,7 +1929,7 @@ async function saveCore(id) {
 async function seedFromCore(id) {
   if (!(await uiConfirm({ title: '从核心卡生成种子', message: '将把当前人格核心卡的内容写回「人格」记忆文件作为种子。\n生成后核心卡会基于新种子自动重新蒸馏，确认？', okText: '生成' }))) return;
   const r = await api(`/api/memory/${id}/seed-from-core`, 'POST', {});
-  if (r.ok) { toast('种子已生成 ✓（核心卡将基于新种子重新蒸馏）', 'ok'); loadMemLayers(id); loadMemoryFiles(id); }
+  if (r.ok) { toast('种子已生成（核心卡将基于新种子重新蒸馏）', 'ok'); loadMemLayers(id); loadMemoryFiles(id); }
   else toast(r.err || '生成失败', 'err');
 }
 
@@ -1773,11 +1944,11 @@ async function openMemFile(id, key) {
   overlay.innerHTML = `
     <div class="modal-card memfile-modal">
       <div class="modal-head">
-        <span>📄 ${esc(f.name)}（${esc(f.key)}.md）</span>
+        <span>${IC_FILE}<span class="lb">${esc(f.name)}（${esc(f.key)}.md）</span></span>
         <span class="spacer"></span>
         <button class="primary sm" onclick="saveTierModal('${id}','${key}')">保存层级</button>
         <button class="primary sm" onclick="saveFileDesc('${id}','${key}')">保存备注</button>
-        <button class="ghost sm" onclick="closeMemFileModal()">✕ 关闭</button>
+        <button class="ghost sm" onclick="closeMemFileModal()">${IC_CLOSE}<span class="lb">关闭</span></button>
       </div>
       <div class="modal-body memfile-body">
         <div class="mf-desc-edit">
@@ -1804,7 +1975,7 @@ async function saveTierModal(id, key) {
   const tier = Number((document.querySelector('#memfile-modal input[name="mf-tier"]:checked') || {}).value);
   if (![1, 2, 3].includes(tier)) return toast('请选择层级', 'err');
   const r = await api(`/api/memory/${id}/files/${key}/tier`, 'PUT', { tier });
-  if (r.ok) { toast(`「${key}」→ ${ { 1: '强制注入', 2: '摘要索引', 3: '冷记忆' }[tier] }`, 'ok'); closeMemFileModal(); loadMemoryFiles(id); }
+  if (r.ok) { toast(`「${key}」已改为「${ { 1: '强制注入', 2: '摘要索引', 3: '冷记忆' }[tier] }」`, 'ok'); closeMemFileModal(); loadMemoryFiles(id); }
   else toast(r.err || '层级设置失败', 'err');
 }
 
@@ -1816,7 +1987,7 @@ function closeMemFileModal() {
 async function saveFileDesc(id, key) {
   const desc = ($('#mf-desc').value || '').trim();
   const r = await api(`/api/memory/${id}/files/${key}/desc`, 'PUT', { desc });
-  r.ok ? toast('备注已保存 ✓', 'ok') : toast(r.err, 'err');
+  r.ok ? toast('备注已保存', 'ok') : toast(r.err, 'err');
   if (r.ok) { closeMemFileModal(); loadMemoryFiles(id); }
 }
 
@@ -1844,14 +2015,15 @@ async function ingestMemory(id) {
     const r = await api(`/api/bots/${id}/ingest`, 'POST', { text });
     if (r.ok) {
       const rs = r.results || [];
-      toast(`已归档 ${rs.length} 条 → ${rs.map(x => x.name).join('、')}`, 'ok');
+      toast(`已归档 ${rs.length} 条，写入 ${rs.map(x => x.name).join('、')}`, 'ok');
       $('#f-ingest').value = '';
       loadMemoryFiles(id);
     } else {
       toast('AI 处理失败: ' + r.err, 'err');
     }
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '✉ 交给 AI 处理'; }
+    // 用 innerHTML 还原：按钮里含 SVG 图标，textContent 会把图标抹掉（且 HTML 不被解析）
+    if (btn) { btn.disabled = false; btn.innerHTML = IC_INBOX + '<span class="lb">AI 归档</span>'; }
   }
 }
 
@@ -1880,7 +2052,7 @@ async function uploadAvatar(id) {
       $('#f-avatar').value = r.url;
       const pv = $('#avatar-preview');
       if (pv) pv.innerHTML = `<img src="${esc(r.url)}" alt="">`;
-      toast('头像已上传 ✓', 'ok');
+      toast('头像已上传', 'ok');
     } else {
       toast('上传失败: ' + r.err, 'err');
     }
@@ -1939,18 +2111,18 @@ async function loadSessions(id, tid) {
   }
   const el = $('#session-list');
   if (!el) return;
-  // 机器人头像（来自机器人配置），用户侧用 👤
+  // 机器人头像（来自机器人配置），用户侧用默认人像图标
   const bot = (state.bots || []).find(x => x.id === id);
-  const botAvatar = bot ? avatarInner(bot) : '🤖';
+  const botAvatar = bot ? avatarInner(bot) : IC_BOT;
   const html = list.length
     ? list.map((s, i) => `
       <div class="session ${s.role === 'assistant' ? 'bot' : 'user'}" style="animation-delay:${Math.min(i * 45, 400)}ms">
-        <div class="who">${s.role === 'assistant' ? botAvatar : '👤'}</div>
+        <div class="who">${s.role === 'assistant' ? botAvatar : IC_USER}</div>
         <div class="bubble md">${md(s.content)}
           <div class="time">${new Date(s.ts).toLocaleString()}
             <span class="s-ops">
-              <button class="ghost sm del" onclick="deleteSessionItem('${id}','${s.ts}','${tid || ''}')" title="删除本条（AI 将不再读到）">✕</button>
-              <button class="ghost sm" onclick="forkSessionAt('${id}','${s.ts}','${tid || ''}')" title="从本条派生一条新对话（本条及其之前的消息复制过去，原对话不动）">⑂</button>
+              <button class="ghost sm del" onclick="deleteSessionItem('${id}','${s.ts}','${tid || ''}')" title="删除本条（AI 将不再读到）">${IC_CLOSE}</button>
+              <button class="ghost sm" onclick="forkSessionAt('${id}','${s.ts}','${tid || ''}')" title="从本条派生一条新对话（本条及其之前的消息复制过去，原对话不动）">${IC_FORK}</button>
             </span>
           </div>
         </div>
@@ -2031,7 +2203,7 @@ function appendUserBubble(container, content) {
   const el = document.createElement('div');
   el.className = 'session user';
   el.innerHTML = `
-    <div class="who">👤</div>
+    <div class="who">${IC_USER}</div>
     <div class="bubble md">${md(content)}<div class="time">${new Date().toLocaleString()}</div></div>`;
   container.appendChild(el);
   container.scrollTop = container.scrollHeight;
@@ -2043,7 +2215,7 @@ function makeStreamBubble(container, bot) {
   const el = document.createElement('div');
   el.className = 'session bot';
   el.innerHTML = `
-    <div class="who">${bot ? avatarInner(bot) : '🤖'}</div>
+    <div class="who">${bot ? avatarInner(bot) : IC_BOT}</div>
     <div class="bubble thinking"><span class="tp"></span>正在思考输出…</div>`;
   if (container) {
     container.querySelectorAll('.empty-hint').forEach((n) => n.remove());
@@ -2098,13 +2270,13 @@ async function directChat(id) {
     });
     if (r && r.ok) {
       paint(r.reply, false);
-      toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok');
+      toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
     }
   } catch (err) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat，保住「流式不可用的环境仍能对话」
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
-      if (r.ok) toast(r.pushed ? '已回复，并自动推送给主 ID ✓' : '已回复（未设置主 ID）', 'ok');
+      if (r.ok) toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
       else { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
       toast('对话失败: ' + err.message, 'err');
@@ -2131,11 +2303,11 @@ function expandSessions(id, tid) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'session-modal';
-  const botAvatar = bot ? avatarInner(bot) : '🤖';
+  const botAvatar = bot ? avatarInner(bot) : IC_BOT;
   const html = list.length
     ? list.map(s => `
       <div class="session ${s.role === 'assistant' ? 'bot' : 'user'}">
-        <div class="who">${s.role === 'assistant' ? botAvatar : '👤'}</div>
+        <div class="who">${s.role === 'assistant' ? botAvatar : IC_USER}</div>
         <div class="bubble md">${md(s.content)}<div class="time">${new Date(s.ts).toLocaleString()}</div></div>
       </div>`).join('')
     : '<div class="empty-hint">暂无会话记录</div>';
@@ -2144,8 +2316,8 @@ function expandSessions(id, tid) {
       <div class="modal-head">
         <span>会话完整记录${bot ? ' — ' + esc(bot.name || bot.id) : ''}${th ? ' · ' + esc(th.title || '') : ''}</span>
         <span class="spacer"></span>
-        <button class="ghost sm" onclick="exportSessions('${id}','${tid || ''}')">⬇ 导出</button>
-        <button class="ghost sm" onclick="closeSessionModal()">✕ 关闭</button>
+        <button class="ghost sm" onclick="exportSessions('${id}','${tid || ''}')">${IC_DOWNLOAD}<span class="lb">导出</span></button>
+        <button class="ghost sm" onclick="closeSessionModal()">${IC_CLOSE}<span class="lb">关闭</span></button>
       </div>
       <div class="modal-body">${html}</div>
       <div class="modal-foot">
@@ -2232,7 +2404,7 @@ async function deleteSessionItem(id, ts, tid) {
 // （多线程改造后是非破坏性派生；旧版「主会话截断、尾巴转存分支」的语义已废弃）
 async function forkSessionAt(id, ts, tid) {
   if (!tid) return toast('请先进入对话页再派生', 'err');
-  if (!(await uiConfirm({ title: '派生新对话', message: '从这里派生一条新对话？\n• 本条及其之前的消息会复制到新对话\n• 原对话保持原样，一条都不会动\n• 之后可在左侧对话列表自由切换', okText: '派生' }))) return;
+  if (!(await uiConfirm({ title: '派生新对话', message: '从这里派生一条新对话？\n· 本条及其之前的消息会复制到新对话\n· 原对话保持原样，一条都不会动\n· 之后可在左侧对话列表自由切换', okText: '派生' }))) return;
   const r = await api(`/api/memory/${id}/threads/${tid}/fork`, 'POST', { fromTs: Number(ts) });
   if (!r || !r.ok) return toast('派生失败: ' + ((r && r.err) || ''), 'err');
   await loadThreads();
@@ -2252,14 +2424,14 @@ async function listBranchModals(id) {
     <div class="branch-row">
       <span class="branch-info">分支起点 ${new Date(b.fromTs).toLocaleString()} · 转存 ${b.count} 条</span>
       <span class="spacer"></span>
-      <button class="ghost sm" onclick="restoreBranchById('${id}', ${b.fromTs})" title="切换回这一分支作为主会话">↺ 恢复此分支</button>
+      <button class="ghost sm" onclick="restoreBranchById('${id}', ${b.fromTs})" title="切换回这一分支作为主会话">${IC_RESTORE}<span class="lb">恢复此分支</span></button>
     </div>`).join('') : '<div class="empty-hint">暂无分支记录</div>';
   overlay.innerHTML = `
     <div class="modal-card">
       <div class="modal-head">
         <span>对话分支管理</span>
         <span class="spacer"></span>
-        <button class="ghost sm" onclick="closeBranchModal()">✕ 关闭</button>
+        <button class="ghost sm" onclick="closeBranchModal()">${IC_CLOSE}<span class="lb">关闭</span></button>
       </div>
       <div class="modal-body">${body}</div>
     </div>`;
@@ -2388,7 +2560,7 @@ function adminRenderHist() {
       <div class="hist-item ${s.id === _adminSessionId ? 'active' : ''}" onclick="adminOpenSession('${esc(s.id)}')">
         <div class="hist-title">${esc(s.title || '新对话')}</div>
         <div class="hist-meta">${s.count} 条</div>
-        <button class="hist-del" title="删除此会话" onclick="event.stopPropagation();adminDeleteSession('${esc(s.id)}')">🗑</button>
+        <button class="hist-del" title="删除此会话" onclick="event.stopPropagation();adminDeleteSession('${esc(s.id)}')">${IC_CLOSE}</button>
       </div>`).join('')
     : '<div class="hist-empty">暂无历史会话<br>发第一条消息后自动保存</div>';
 }
@@ -2439,29 +2611,29 @@ function openAdminPanel() {
   const modelOpts = usable.map(m => `<option value="${m.id}" ${m.id === cur?.id ? 'selected' : ''}>${esc(m.name || m.id)}</option>`).join('');
   const nowBot = (state.bots || []).find(x => x.id === currentBotId());
   const toolChips = [
-    { k: 'model', icon: '🛠', name: '创建模型' },
-    { k: 'cfg', icon: '💡', name: '配置模型' },
-    { k: 'prompt', icon: '✍', name: '编写提示词' },
-    { k: 'edit', icon: '✏', name: '改写记忆' },
-    { k: 'summary', icon: '📋', name: '总结会话' },
-    { k: 'mem', icon: '📚', name: '总结记忆' },
+            { k: 'model', icon: IC_MEMORY, name: '创建模型' },
+            { k: 'cfg', icon: IC_SETTINGS, name: '配置模型' },
+            { k: 'prompt', icon: IC_PENCIL, name: '编写提示词' },
+            { k: 'edit', icon: IC_PENCIL, name: '改写记忆' },
+            { k: 'summary', icon: IC_LAYERS, name: '总结会话' },
+            { k: 'mem', icon: IC_MEMORY, name: '总结记忆' },
   ];
   overlay.innerHTML = `
     <div class="modal-card admin-modal">
       <div class="modal-head">
         <div class="admin-head-l">
-          <span class="admin-title">◈ 面板管理员</span>
+          <span class="admin-title">${IC_BOT}<span class="lb">面板管理员</span></span>
           <span class="admin-sub">配置模型 · 提示词 · 总结 · Agent 工具 · 编辑需你确认</span>
         </div>
         <span class="spacer"></span>
         <select id="admin-model" class="admin-model-sel" onchange="adminPickModel(this.value)" ${usable.length ? '' : 'disabled'}>
           ${usable.length ? modelOpts : '<option value="">暂无可用模型</option>'}
         </select>
-        <button class="ghost sm" onclick="closeAdminPanel()">✕ 关闭</button>
+        <button class="ghost sm" onclick="closeAdminPanel()">${IC_CLOSE}<span class="lb">关闭</span></button>
       </div>
       ${nowBot ? `
       <div class="admin-target-bar">
-        <span class="at-ic">📍</span>
+        <span class="at-ic">${IC_CHANNEL}</span>
         <span class="at-cap">正在操作</span>
         <span class="at-name">${esc(nowBot.name || nowBot.id)}</span>
         <span class="at-id">${esc(nowBot.id)} · ${nowBot.sandbox === false ? '正式' : '沙箱'}</span>
@@ -2472,7 +2644,7 @@ function openAdminPanel() {
           <div class="admin-msgs" id="admin-msgs"></div>
           <div class="admin-chat-foot">
             <div class="admin-tools-bar">
-              ${toolChips.map(t => `<span class="chip" onclick="adminQuick('${t.k}')">${t.icon} ${t.name}</span>`).join('')}
+              ${toolChips.map(t => `<span class="chip" onclick="adminQuick('${t.k}')">${t.icon}<span class="lb">${t.name}</span></span>`).join('')}
             </div>
             <div class="admin-input-row">
               <textarea id="admin-input" rows="1" placeholder="向面板管理员交代任务，Enter 发送，Shift+Enter 换行…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();adminSend()}"></textarea>
@@ -2483,7 +2655,7 @@ function openAdminPanel() {
         <div class="admin-hist">
           <div class="admin-hist-head">
             <span class="hist-cap">历史会话</span>
-            <button class="primary sm" onclick="adminNewSession()">＋ 新对话</button>
+            <button class="primary sm" onclick="adminNewSession()">${IC_PLUS}<span class="lb">新对话</span></button>
           </div>
           <div class="admin-hist-list" id="admin-hist-list"><div class="hist-empty">加载中…</div></div>
         </div>
@@ -2552,23 +2724,23 @@ function adminQuick(type) {
 
 // 工具展示元信息（图标 + 中文名）
 const ADMIN_TOOL_META = {
-  list_robots: ['🤖', '机器人列表'],
-  get_panel_state: ['🗂', '面板概况'],
-  list_memory_files: ['📂', '记忆库'],
-  read_memory_file: ['📖', '读取记忆'],
-  read_sessions: ['💬', '读取会话'],
-  read_global_files: ['⚙', '全局文件'],
-  read_global_file: ['⚙', '全局文件'],
-  create_model: ['➕', '新增模型'],
-  propose_memory_edit: ['✏', '待确认·记忆'],
-  propose_global_edit: ['✏', '待确认·全局'],
-  propose_bot_config_edit: ['✏', '待确认·配置'],
-  web_search: ['🌐', '联网搜索'],
-  web_fetch: ['🔗', '抓取网页'],
-  list_admin_sessions: ['🗂', '历史会话'],
-  read_admin_session: ['📂', '回看会话'],
-  search_memory: ['🔎', '搜索记忆'],
-  note: ['💬', '提示'],
+  list_robots: [IC_MEMORY, '机器人列表'],
+  get_panel_state: [IC_LAYERS, '面板概况'],
+  list_memory_files: [IC_MEMORY, '记忆库'],
+  read_memory_file: [IC_FILE, '读取记忆'],
+  read_sessions: [IC_CHAT, '读取会话'],
+  read_global_files: [IC_SETTINGS, '全局文件'],
+  read_global_file: [IC_SETTINGS, '全局文件'],
+  create_model: [IC_PLUS, '新增模型'],
+  propose_memory_edit: [IC_PENCIL, '待确认·记忆'],
+  propose_global_edit: [IC_PENCIL, '待确认·全局'],
+  propose_bot_config_edit: [IC_PENCIL, '待确认·配置'],
+  web_search: [IC_GLOBE, '联网搜索'],
+  web_fetch: [IC_LINK, '抓取网页'],
+  list_admin_sessions: [IC_LAYERS, '历史会话'],
+  read_admin_session: [IC_MEMORY, '回看会话'],
+  search_memory: [IC_SEARCH, '搜索记忆'],
+  note: [IC_CHAT, '提示'],
 };
 
 // 读取 fetch 响应的 SSE 流（data: JSON 行），逐条回调
@@ -2624,7 +2796,7 @@ async function adminSend(prompt, botIdOverride) {
   const mdSafe = (s) => { try { return md(s); } catch { return '<p>' + esc(s) + '</p>'; } };
   // 工具活动胶囊（读取/搜索/编辑建议等过程可视化）
   const chipHtml = (t) => {
-    const m = ADMIN_TOOL_META[t.name] || ['🛠', t.name];
+    const m = ADMIN_TOOL_META[t.name] || [IC_SETTINGS, t.name];
     const cls = t.ok === false ? 'err' : (t.name === 'note' ? 'note' : 'ok');
     return `<div class="admin-msg ai"><div class="admin-tool ${cls}"><span class="t-ic">${m[0]}</span><span class="t-name">${esc(m[1])}</span><span class="t-sum">${esc(t.summary || '')}</span></div></div>`;
   };
@@ -2667,7 +2839,7 @@ async function adminSend(prompt, botIdOverride) {
       msgs.insertAdjacentHTML('beforeend', `
         <div class="admin-msg ai"><div class="admin-bubble admin-action">
           <span class="admin-action-label">检测到模型配置：${esc(cm.name || cm.id)}</span>
-          <button class="primary sm" data-json='${esc(JSON.stringify(cm))}' onclick="applyAdminModel(this)">＋ 添加到模型管理</button>
+          <button class="primary sm" data-json='${esc(JSON.stringify(cm))}' onclick="applyAdminModel(this)">${IC_PLUS}<span class="lb">添加到模型管理</span></button>
         </div></div>`);
     }
     const ed = extractEdit(replyText);
@@ -2690,7 +2862,9 @@ async function adminSend(prompt, botIdOverride) {
 
   let ok = false;
   try {
-    // ---- 流式模式（可选；失败自动回落普通模式） ----
+    // ---- 主路径：流式 SSE（与「角色对话」一致，无手动开关）----
+    // _adminStream=false 只可能是「本环境此前已确认不支持 SSE」（adminForceNormal 记下的），
+    // 此时跳过整段直接走普通模式，免得每次都要先失败一次。
     if (_adminStream) {
       const aiRow = document.createElement('div');
       aiRow.className = 'admin-msg ai';
@@ -2770,7 +2944,10 @@ async function adminSend(prompt, botIdOverride) {
       }
     }
 
-    // ---- 普通模式（默认；稳定可靠） ----
+    // ---- 兜底：一次性返回（仅当本环境不支持 SSE 时才会走到）----
+    // 注意与「角色对话」的降级语义差别：那边靠 err.noFallback 判断「请求有没有真打到
+    // 服务端」以防重复写；这里走 SSE 零事件（streamSaw=false）才回落，等价于「连接没建起来」，
+    // 同样不会造成重复副作用。
     if (!ok) {
       const c3 = new AbortController();
       const to = setTimeout(() => { try { c3.abort(); } catch {} }, 60000);
@@ -2783,11 +2960,11 @@ async function adminSend(prompt, botIdOverride) {
         });
         const j = await resp.json().catch(() => ({ ok: false, err: '响应解析失败 (HTTP ' + resp.status + ')' }));
         if (j && j.ok) { appendFlow(j.reply || '', j.modelName, j.tools); ok = true; }
-        else if (isOpen()) msgs.insertAdjacentHTML('beforeend', `<div class="admin-msg ai"><div class="admin-bubble err">❌ ${esc((j && j.err) || '调用失败')}</div></div>`);
+        else if (isOpen()) msgs.insertAdjacentHTML('beforeend', `<div class="admin-msg ai"><div class="admin-bubble err">${IC_CLOSE}<span class="lb">${esc((j && j.err) || '调用失败')}</span></div></div>`);
         else toast('后台任务失败：' + ((j && j.err) || '未知错误'), 'err');
       } catch (e2) {
         const msg = (e2 && e2.name === 'AbortError') ? '请求超时（60s），请重试' : ((e2 && e2.message) || '网络错误');
-        if (isOpen()) msgs.insertAdjacentHTML('beforeend', `<div class="admin-msg ai"><div class="admin-bubble err">❌ ${esc(msg)}</div></div>`);
+        if (isOpen()) msgs.insertAdjacentHTML('beforeend', `<div class="admin-msg ai"><div class="admin-bubble err">${IC_CLOSE}<span class="lb">${esc(msg)}</span></div></div>`);
         else toast('后台任务失败：' + msg, 'err');
       } finally { clearTimeout(to); try { c3.abort(); } catch {} }
     }
@@ -2849,17 +3026,17 @@ function renderEditBar(ed) {
   const tierNames = { 1: '无条件强制注入', 2: '摘要索引', 3: '冷记忆' };
   let label = '';
   if (ed.type === 'memory') label = `管理员建议修改记忆：${p.botId} 的「${p.key}」`;
-  else if (ed.type === 'memory_tier') label = `管理员建议调整记忆层级：${p.botId} 的「${p.key}」→ ${tierNames[p.tier] || p.tier}`;
+  else if (ed.type === 'memory_tier') label = `管理员建议调整记忆层级：${p.botId} 的「${p.key}」改为「${tierNames[p.tier] || p.tier}」`;
   else if (ed.type === 'core') label = `管理员建议修改人格核心卡：${p.botId}`;
   else if (ed.type === 'global') label = `管理员建议修改全局文件：「${p.key}」`;
   else if (ed.type === 'ws_inject') label = `管理员建议把工作区草稿「${p.key}」注入到 ${p.targetType === 'global' ? '全局设定' : (p.targetId || '?') + ' 的记忆库'}（目标文件 ${p.destKey || p.key}.md）`;
   else label = `管理员建议更新机器人配置：${p.id || ''}`;
   return `<div class="admin-msg ai"><div class="admin-bubble admin-action admin-write">
-    <span class="admin-action-label">🤖 是否同意此更改？<br><span class="admin-action-sub">${esc(label)}</span></span>
+    <span class="admin-action-label">${IC_SETTINGS}<span class="lb">是否同意此更改？</span><br><span class="admin-action-sub">${esc(label)}</span></span>
     <span class="spacer"></span>
     <button class="ghost sm" data-json='${esc(JSON.stringify(ed))}' onclick="previewEdit(this)">查看</button>
     <button class="ghost sm" data-json='${esc(JSON.stringify(ed))}' onclick="dismissEdit(this)">忽略</button>
-    <button class="primary sm" data-json='${esc(JSON.stringify(ed))}' onclick="confirmEdit(this)">✓ 确认应用</button>
+    <button class="primary sm" data-json='${esc(JSON.stringify(ed))}' onclick="confirmEdit(this)">${IC_CHECK}<span class="lb">确认应用</span></button>
   </div></div>`;
 }
 
@@ -2870,7 +3047,7 @@ function dismissEdit(btn) {
   bar.classList.add('ignored');
   bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
   const lab = bar.querySelector('.admin-action-label');
-  if (lab) lab.innerHTML = '⛔ 已忽略此建议（未做任何更改）';
+  if (lab) lab.innerHTML = IC_CLOSE + '<span class="lb">已忽略此建议（未做任何更改）</span>';
   toast('已忽略该建议', '');
 }
 
@@ -2888,7 +3065,7 @@ async function previewEdit(btn) {
   const title = ed.type === 'memory' ? `预览：${p.botId} 记忆「${p.key}」`
     : ed.type === 'global' ? `预览：全局「${p.key}」`
       : ed.type === 'core' ? `预览：${p.botId} 人格核心卡`
-        : ed.type === 'ws_inject' ? `预览：工作区「${p.key}」→ ${p.targetType === 'global' ? '全局' : p.targetId}「${p.destKey || p.key}」`
+        : ed.type === 'ws_inject' ? `预览：工作区「${p.key}」写入${p.targetType === 'global' ? '全局' : '「' + p.targetId + '」'}「${p.destKey || p.key}」`
           : `预览：机器人「${p.id}」配置`;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -2896,7 +3073,7 @@ async function previewEdit(btn) {
   overlay.innerHTML = `
     <div class="modal-card preview-modal">
       <div class="modal-head"><span>${esc(title)}</span><span class="spacer"></span>
-        <button class="ghost sm" onclick="document.getElementById('edit-preview').remove()">✕ 关闭</button></div>
+        <button class="ghost sm" onclick="document.getElementById('edit-preview').remove()">${IC_CLOSE}<span class="lb">关闭</span></button></div>
       <div class="modal-body"><pre class="mf-preview">${esc(content)}</pre></div>
     </div>`;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
@@ -2941,16 +3118,16 @@ async function confirmEdit(btn) {
     r = await api('/api/config', 'PUT', { bots });
   }
   if (r.ok) {
-    toast('已写入 ✓', 'ok');
+    toast('已写入', 'ok');
     const bar = btn.closest('.admin-action');
     if (bar) {
       bar.classList.add('applied');
       bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
       const lab = bar.querySelector('.admin-action-label');
-      if (lab) lab.innerHTML = '✅ 已同意并应用此更改';
+      if (lab) lab.innerHTML = IC_CHECK + '<span class="lb">已同意并应用此更改</span>';
     } else {
       btn.disabled = true;
-      btn.textContent = '已写入 ✓';
+      btn.innerHTML = IC_CHECK + '<span class="lb">已写入</span>';
     }
     await loadState();
     if ((ed.type === 'memory' || ed.type === 'memory_tier' || ed.type === 'core') && view.type === 'bot' && view.id === p.botId) loadMemoryFiles(p.botId);
@@ -2981,10 +3158,10 @@ async function applyAdminModel(btn) {
     hasKey: false,
   });
   const r = await api('/api/config', 'PUT', { models });
-  r.ok ? toast('模型已添加 ✓ 请到「▤ 模型」补充 API Key', 'ok') : toast(r.err, 'err');
+  r.ok ? toast('模型已添加，请到「模型管理」补充 API Key', 'ok') : toast(r.err, 'err');
   if (r.ok) {
     btn.disabled = true;
-    btn.textContent = '已添加 ✓';
+    btn.innerHTML = IC_CHECK + '<span class="lb">已添加</span>';
     await loadState();
   }
 }
@@ -3200,7 +3377,7 @@ async function sendMsg(id) {
   const content = $('#f-content').value.trim();
   if (!targetId || !content) return toast('请填写目标 openid 和内容', 'err');
   const r = await api(`/api/bots/${id}/send`, 'POST', { scene: _scene, targetId, content });
-  r.ok ? toast('消息已发送 ✓', 'ok') : toast('发送失败: ' + r.err, 'err');
+  r.ok ? toast('消息已发送', 'ok') : toast('发送失败: ' + r.err, 'err');
   if (r.ok) { $('#f-content').value = ''; loadSessions(id); }
 }
 
@@ -3215,7 +3392,7 @@ function renderBotForm() {
     <div class="page-head">
       <h2>添加机器人</h2>
       <span class="spacer"></span>
-      <button class="ghost sm" onclick="backToBots()">← 返回</button>
+      <button class="ghost sm" onclick="backToBots()">${IC_BACK}<span class="lb">返回</span></button>
     </div>
     <div class="card">
       <div class="grid-2">
@@ -3226,7 +3403,7 @@ function renderBotForm() {
         <div class="field"><label>绑定模型</label><select id="f-model">${modelOpts}</select></div>
         <div class="field"><label>历史记忆条数</label><input id="f-history" type="number" value="10"></div>
       </div>
-      <div class="frm-hint">创建后即可直接对话，不需要填任何 QQ 信息。要接入 QQ 时，到该角色卡下的「📡 渠道」标签页开启并填写 AppID / AppSecret。</div>
+      <div class="frm-hint">创建后即可直接对话，不需要填任何 QQ 信息。要接入 QQ 时，到该角色卡下的「渠道」标签页开启并填写 AppID / AppSecret。</div>
       <div style="margin-top:18px;display:flex;gap:8px">
         <button class="primary" onclick="createBot()">创建</button>
         <button class="ghost" onclick="backToBots()">取消</button>
@@ -3346,14 +3523,14 @@ function onProviderChange() {
 function renderModelDetail(id) {
   const m = (state.models || []).find(x => x.id === id);
   if (!m) {
-    main.innerHTML = `<div class="card"><div class="empty-hint">选择一个模型，或点击左侧 ＋ 添加。</div></div>`;
+    main.innerHTML = `<div class="card"><div class="empty-hint">选择一个模型，或点击左侧 ${IC_PLUS} 添加。</div></div>`;
     return;
   }
   main.innerHTML = `
     <div class="page-head">
       <h2>${esc(m.name || m.id)}</h2>
       <span class="spacer"></span>
-      <button class="ghost sm" onclick="backToModels()">← 模型管理</button>
+      <button class="ghost sm" onclick="backToModels()">${IC_BACK}<span class="lb">模型管理</span></button>
       <button class="ghost sm" onclick="delModel('${m.id}')">删除</button>
       <button class="primary" onclick="saveModel('${m.id}')">保存</button>
     </div>
@@ -3378,7 +3555,7 @@ function renderModelDetail(id) {
       <div class="grid-3" style="margin-top:12px">
         <div class="field"><label>温度</label><input id="m-temp" type="number" step="0.1" value="${m.temperature ?? 0.7}"></div>
         <div class="field"><label>最大 tokens（留空 = 不限制）</label><input id="m-tokens" type="number" value="${m.maxTokens > 0 ? m.maxTokens : ''}" placeholder="不限制"></div>
-        <div class="field"><label>Key 状态</label><div class="value">${m.hasKey ? '✅ 已配置' : '❌ 未配置'}</div></div>
+        <div class="field"><label>Key 状态</label><div class="value">${m.hasKey ? IC_CHECK + '<span class="lb">已配置</span>' : IC_CLOSE + '<span class="lb">未配置</span>'}</div></div>
       </div>
       <div class="frm-row" style="margin-top:12px">
         <label class="frm" style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -3428,7 +3605,7 @@ async function testModel(id) {
   if (!el) return;
   el.textContent = '测试中…';
   const r = await api(`/api/models/${id}/test`, 'POST');
-  el.textContent = r.ok ? '✅ ' + (r.reply || '').slice(0, 120) : '❌ ' + (r.err || '失败');
+  el.innerHTML = (r.ok ? IC_CHECK : IC_CLOSE) + '<span class="lb">' + esc(r.ok ? (r.reply || '').slice(0, 120) : (r.err || '失败')) + '</span>';
 }
 
 // ================= 模型表单（添加） =================
@@ -3437,7 +3614,7 @@ function renderModelForm() {
     <div class="page-head">
       <h2>添加模型</h2>
       <span class="spacer"></span>
-      <button class="ghost sm" onclick="backToModels()">← 返回</button>
+      <button class="ghost sm" onclick="backToModels()">${IC_BACK}<span class="lb">返回</span></button>
     </div>
     <div class="card">
       <div class="grid-2">
@@ -3514,7 +3691,7 @@ async function renderWorkspace() {
         <span class="ws-meta">${cur ? cur.size : 0} 字</span>
         <span class="spacer"></span>
         <button class="ghost sm" onclick="wsRename('${esc(_wsCur)}')">改名</button>
-        <button class="ghost sm" onclick="wsInjectUI('${esc(_wsCur)}')">⤓ 注入…</button>
+        <button class="ghost sm" onclick="wsInjectUI('${esc(_wsCur)}')">${IC_INJECT}<span class="lb">注入…</span></button>
         <button class="ghost sm ghost-del" onclick="wsDel('${esc(_wsCur)}')">删除</button>
       </div>
       ${cur && cur.injects.length ? `<div class="ws-injects">已注入：${cur.injects.map((x) => esc(x.targetType === 'global' ? `全局/${x.destKey}` : `${x.targetId}/${x.destKey}`)).join('、')}</div>` : ''}
@@ -3523,11 +3700,11 @@ async function renderWorkspace() {
 
   main.innerHTML = `
     <div class="page-head">
-      <h2>▢ 工作区</h2>
+      <h2><span class="ph-t">${IC_WINDOW}<span class="lb">工作区</span></span></h2>
       <span class="page-sub">管理员 AI 的草稿台 —— 生成的内容先落在这里，确认后再注入给角色或全局</span>
       <span class="spacer"></span>
-      <button class="ghost sm" onclick="wsNew()">＋ 新建文件</button>
-      <button class="ghost sm" onclick="refreshWorkspace()">↻ 刷新</button>
+      <button class="ghost sm" onclick="wsNew()">${IC_PLUS}<span class="lb">新建文件</span></button>
+      <button class="ghost sm" onclick="refreshWorkspace()">${IC_REFRESH}<span class="lb">刷新</span></button>
     </div>
     <div class="cards-2 ws-layout">
       <div class="card">
@@ -3589,7 +3766,7 @@ function wsInjectUI(key) {
   overlay.innerHTML = `
     <div class="modal-card">
       <div class="modal-head"><span>注入「${esc(key)}.md」</span><span class="spacer"></span>
-        <button class="ghost sm" onclick="document.getElementById('ws-inject-modal').remove()">✕</button></div>
+        <button class="ghost sm" onclick="document.getElementById('ws-inject-modal').remove()">${IC_CLOSE}</button></div>
       <div class="modal-body">
         <div class="field"><label>注入到</label>
           <select id="ws-inj-target">${opts}</select>
@@ -3619,7 +3796,7 @@ async function wsInjectDo(key) {
   const r = await api('/api/workspace/inject', 'POST', { key, targetType, targetId, destKey });
   const m = document.getElementById('ws-inject-modal'); if (m) m.remove();
   if (!r.ok) return toast(r.err || '注入失败', 'err');
-  toast('已注入 ✓', 'ok');
+  toast('已注入', 'ok');
   renderMain();
 }
 
@@ -3629,7 +3806,7 @@ function renderModelsPage() {
     <div class="page-head">
       <h2>模型管理</h2>
       <span class="spacer"></span>
-      <button class="primary sm" onclick="openModelForm()">＋ 添加模型</button>
+      <button class="primary sm" onclick="openModelForm()">${IC_PLUS}<span class="lb">添加模型</span></button>
     </div>
     <div class="model-grid">
       ${models.length ? models.map(m => `
@@ -3644,7 +3821,7 @@ function renderModelsPage() {
             <span class="tag">${esc((m.baseURL || '').replace(/^https?:\/\//, '').split('/')[0] || '自定义')}</span>
             <span class="tag ${m.webSearch ? 'ok' : ''}">${m.webSearch ? '联网开' : '联网关'}</span>
           </div>
-        </div>`).join('') : '<div class="card"><div class="empty-hint">暂无模型，点击右上角「＋ 添加模型」</div></div>'}
+        </div>`).join('') : '<div class="card"><div class="empty-hint">暂无模型，点击右上角「添加模型」</div></div>'}
     </div>`;
 }
 
@@ -3690,7 +3867,14 @@ function applyAccent(hex) {
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem('qqbot-theme', theme);
-  $('#btn-theme').textContent = theme === 'light' ? '☀' : '☾';
+  // 亮色时显示月亮（点了会变暗），暗色时显示太阳 —— 图标用同一套 SVG，尺寸恒定
+  $('#btn-theme').innerHTML = theme === 'light' ? IC_MOON : IC_SUN;
+  // 外观页的明暗按钮：切主题后同步刷新（图标 + 文案），否则会停在旧状态
+  const at = $('#appearance-theme');
+  if (at) {
+    const isLight = theme === 'light';
+    at.innerHTML = (isLight ? IC_MOON : IC_SUN) + `<span class="lb">${isLight ? '亮色' : '暗色'}</span>`;
+  }
   $('#btn-theme').title = theme === 'light' ? '切换暗色主题' : '切换亮色主题';
 }
 
@@ -3721,7 +3905,7 @@ function renderAppearance() {
       </div>
       <div class="theme-row" style="margin-top:8px">
         <span class="theme-label">明暗</span>
-        <button class="sm" id="appearance-theme" onclick="toggleTheme()">${document.documentElement.getAttribute('data-theme') === 'light' ? '☀ 亮色' : '☾ 暗色'}</button>
+        <button class="sm" id="appearance-theme" onclick="toggleTheme()">${document.documentElement.getAttribute('data-theme') === 'light' ? IC_MOON : IC_SUN}<span class="lb">${document.documentElement.getAttribute('data-theme') === 'light' ? '亮色' : '暗色'}</span></button>
       </div>
       <div class="theme-row fx-row" style="margin-top:12px;align-items:flex-start">
         <span class="theme-label" style="padding-top:5px">卡片背景</span>
@@ -3745,15 +3929,15 @@ function resetAccent() {
 
 // ---- 机器人信息卡背景动效（设置 → 外观） ----
 const CARD_EFFECTS = [
-  { id: 'wave', name: '🌊 像素海浪' },
-  { id: 'shine', name: '✨ 流光' },
-  { id: 'matrix', name: '🖥 黑客雨' },
-  { id: 'meteor', name: '☄ 流星' },
-  { id: 'aurora', name: '🌠 极光' },
-  { id: 'firefly', name: '🌌 萤火' },
-  { id: 'snow', name: '❄ 飘雪' },
-  { id: 'bubbles', name: '🫧 气泡' },
-  { id: 'none', name: '◽ 纯净' },
+    { id: 'wave', name: '像素海浪' },
+    { id: 'shine', name: '流光' },
+    { id: 'matrix', name: '黑客雨' },
+    { id: 'meteor', name: '流星' },
+    { id: 'aurora', name: '极光' },
+    { id: 'firefly', name: '萤火' },
+    { id: 'snow', name: '飘雪' },
+    { id: 'bubbles', name: '气泡' },
+  { id: 'none', name: '纯净' },
 ];
 function cardEffectId() {
   let e = 'wave';
@@ -4210,6 +4394,8 @@ $('#btn-add-bot').addEventListener('click', () => { view = { type: 'bot-form' };
 Object.assign(window, {
   switchThread, newThread, renameThreadUI, delThread, clearThread,
   switchBotTab, openBotSettings, closeBotSettings,
+  // 挂在 oncontextmenu 上：lint 的 no-unused-vars 只认 onclick 里的引用
+  sideCtx,
 });
 // 模型入口已在底部按钮（openModels），不再绑定已删除的 #btn-add-model
 $('#btn-refresh').addEventListener('click', loadState);

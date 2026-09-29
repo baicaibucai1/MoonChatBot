@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MoonChatBot 控制台</title>
+<link rel="icon" type="image/svg+xml" href="/logo.svg">
+<link rel="apple-touch-icon" href="/logo.svg">
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/design.css">
 </head>
@@ -13,7 +15,7 @@
   <!-- 左侧导航 -->
   <aside class="sidebar">
     <div class="logo">
-      <span class="logo-mark"></span>
+      <img class="logo-mark" src="/logo.svg" alt="MoonChatBot">
       <span class="logo-text">MoonChatBot 控制台</span>
     </div>
 
@@ -22,26 +24,40 @@
     <div class="side-group">
       <div class="side-label">
         <span>角色</span>
-        <button class="add-btn" id="btn-add-bot" title="添加角色">＋</button>
+        <button class="add-btn" id="btn-add-bot" title="添加角色">
+          <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.4v9.2M3.4 8h9.2"/></svg>
+        </button>
       </div>
       <div class="side-list" id="bot-list"></div>
     </div>
 
     <div class="side-btns">
-      <button class="settings-btn" onclick="openSettings()" title="设置">⚙ 设置</button>
-      <button class="settings-btn" onclick="openModels()" title="模型管理">▤ 模型</button>
-      <button class="settings-btn" onclick="openWorkspace()" title="工作区：管理员 AI 的草稿台">▢ 工作区</button>
+      <button class="settings-btn" onclick="openSettings()" title="设置">
+        <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v1.5M8 12.7v1.5M1.8 8h1.5M12.7 8h1.5M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M12.4 3.6l-1.1 1.1M4.7 11.3l-1.1 1.1"/></svg><span class="lb">设置</span>
+      </button>
+      <button class="settings-btn" onclick="openModels()" title="模型管理">
+        <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 2.4 5.4 8 8.6l5.6-3.2z"/><path d="M2.4 8.2 8 11.4l5.6-3.2"/><path d="M2.4 11 8 14.2 13.6 11"/></svg><span class="lb">模型</span>
+      </button>
+      <button class="settings-btn" onclick="openWorkspace()" title="工作区：管理员 AI 的草稿台">
+        <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2.6H4.6a1 1 0 0 0-1 1v8.8a1 1 0 0 0 1 1h6.8a1 1 0 0 0 1-1V5.6z"/><path d="M9 2.6v3h3.4"/></svg><span class="lb">工作区</span>
+      </button>
     </div>
 
     <div class="admin-launch">
-      <button class="settings-btn admin-entry" onclick="openAdminPanel()" title="面板管理员：配置模型 / 写提示词 / 总结内容">◈ 面板管理员</button>
+      <button class="settings-btn admin-entry" onclick="openAdminPanel()" title="面板管理员：配置模型 / 写提示词 / 总结内容">
+        <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.2" y="5.2" width="9.6" height="7.6" rx="2.2"/><path d="M8 2.6v2.6M6 8.6v1.2M10 8.6v1.2"/></svg><span class="lb">面板管理员</span>
+      </button>
     </div>
 
     <div class="side-foot">
       <span class="dot" id="status-dot"></span>
       <span class="conn" id="conn-text">连接中…</span>
-      <button class="foot-btn" id="btn-theme" title="切换亮/暗主题">☾</button>
-      <button class="foot-btn" id="btn-refresh" title="刷新">↻</button>
+      <button class="foot-btn" id="btn-theme" title="切换亮/暗主题">
+        <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.2 9.6A5.7 5.7 0 0 1 6.4 2.8a5.7 5.7 0 1 0 6.8 6.8z"/></svg>
+      </button>
+      <button class="foot-btn" id="btn-refresh" title="刷新">
+        <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M13.4 2.8v3.4H10"/></svg>
+      </button>
     </div>
   </aside>
 

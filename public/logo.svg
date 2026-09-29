@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="MoonChatBot">
+  <title>MoonChatBot</title>
+  <defs>
+    <!-- 浅蓝渐变：左上受光、右下沉一点，让平面图形有一点体积 -->
+    <linearGradient id="moonGrad" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#EAF6FF"/>
+      <stop offset="0.42" stop-color="#A6D4FA"/>
+      <stop offset="1" stop-color="#3F8FD8"/>
+    </linearGradient>
+    <!-- 月光晕：贴在圆形底子上，只做氛围，不参与轮廓 -->
+    <radialGradient id="moonGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0.62" stop-color="#8FC6F7" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#8FC6F7" stop-opacity="0"/>
+    </radialGradient>
+    <!--
+      弯月 = 大圆减去一个偏右的小圆。两圆做**水平连线**，月牙才站得正
+      （斜着连会得到一个歪的、不像月亮的形状 —— 2026-09-29 第一版就栽在这）。
+      月牙厚度 = R - (r - d) = 28 - (36 - 22) = 14。
+    -->
+    <mask id="crescent">
+      <circle cx="32" cy="32" r="28" fill="#fff"/>
+      <circle cx="54" cy="32" r="36" fill="#000"/>
+    </mask>
+  </defs>
+
+  <circle cx="32" cy="32" r="31" fill="url(#moonGlow)"/>
+  <!-- 整体向左倾 15°：正立的月牙略显呆板，歪一点更像挂在天上的样子 -->
+  <g transform="rotate(-15 32 32)">
+    <circle cx="32" cy="32" r="28" fill="url(#moonGrad)" mask="url(#crescent)"/>
+  </g>
+
+  <!-- 月亮开口侧的两颗小星：呼应「聊天」的轻快，主形仍然是月亮 -->
+  <circle cx="47" cy="21" r="2.4" fill="#8FC6F7" opacity="0.85"/>
+  <circle cx="52.5" cy="29" r="1.5" fill="#BCE1FB" opacity="0.9"/>
+</svg>
