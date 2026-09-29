@@ -2315,41 +2315,34 @@ let _chatting = new Set();   // 正在对话的机器人 id 集合（侧栏黄�
 let _streaming = new Set();
 let _adminSessions = [];     // 会话列表缓存（右侧历史）
 let _adminSessionId = '';    // 当前会话 id（'' = 下次发送时新建）
-// 流式输出：默认普通模式（部分内嵌预览/WebView 会掐断 SSE 长连接，导致 net::ERR_ABORTED）。
-// 仅当本环境曾成功跑通过流式（qqbot-stream-ok=1）且未被手动关闭时才默认流式。
-let _adminStream = false;
+// 管理员对话固定走流式 SSE —— 与「角色对话」保持一致（那边也没有开关）。
+// 部分内嵌预览 / WebView 会掐断 SSE 长连接（net::ERR_ABORTED），但那属于**环境能力**
+// 而非用户偏好，所以不设手动开关：零事件时由下面的 adminForceNormal 自动降级到
+// 一次性 POST /api/admin/chat，用户无感。
+// localStorage 只记「本环境**不能**流式」这**一个**事实（qqbot-stream-blocked=1）：
+// 有它 → 下次直接走普通路径，免得每次都先失败一次；没有它 → 直接走 SSE。
+// （曾经还记过一个 qqbot-stream-ok，但没有任何地方读它，已删。）
+let _adminStream = true;
 try {
-  const everOk = localStorage.getItem('qqbot-stream-ok') === '1';
-  const prefer = localStorage.getItem('qqbot-admin-stream-v2');
-  _adminStream = everOk && prefer !== 'off';
+  // 一次性清理：旧版的「流式偏好开关」存过 qqbot-admin-stream-v2=off。
+  // 现在开关已删，若不清掉，当年点过「切普通」的用户会被永久钉在降级路径上，且无从恢复。
+  localStorage.removeItem('qqbot-admin-stream-v2');
+  _adminStream = localStorage.getItem('qqbot-stream-blocked') !== '1';
 } catch {}
 
-// 记录本环境对流式的支持情况（成功过一次 → 记住可流式；失败 → 记住禁流式）
+// 记住本环境对流式的支持情况：失败过 → 以后直接走普通路径
 function adminMarkStream(ok) {
   try {
-    if (ok) { localStorage.setItem('qqbot-stream-ok', '1'); localStorage.removeItem('qqbot-stream-blocked'); }
-    else { localStorage.removeItem('qqbot-stream-ok'); localStorage.setItem('qqbot-stream-blocked', '1'); }
+    if (ok) localStorage.removeItem('qqbot-stream-blocked');
+    else localStorage.setItem('qqbot-stream-blocked', '1');
   } catch {}
 }
-// 流式失败后强制回落普通模式（同步按钮状态 + 提示）
+// 流式失败后静默回落普通模式（本环境不支持 SSE，下次就直接走普通路径）。
+// 不再有按钮要同步 —— 这不是用户可切换的偏好，只是环境能力探测的结果。
 function adminForceNormal(msg) {
   _adminStream = false;
   adminMarkStream(false);
-  const b = document.getElementById('admin-stream-btn');
-  if (b) { b.textContent = '⏸ 普通'; b.classList.remove('active'); }
   if (msg) toast(msg, 'err');
-}
-function adminToggleStream(btn) {
-  _adminStream = !_adminStream;
-  try {
-    localStorage.setItem('qqbot-admin-stream-v2', _adminStream ? 'on' : 'off');
-    if (_adminStream) localStorage.removeItem('qqbot-stream-blocked');
-  } catch {}
-  if (btn) {
-    btn.textContent = _adminStream ? '⏩ 流式' : '⏸ 普通';
-    btn.classList.toggle('active', _adminStream);
-  }
-  toast(_adminStream ? '流式回复已开启（若当前环境不支持会自动回退）' : '已切换为普通模式（一次性返回全文，更稳定）', 'ok');
 }
 
 function currentBotId() {
@@ -2464,7 +2457,6 @@ function openAdminPanel() {
         <select id="admin-model" class="admin-model-sel" onchange="adminPickModel(this.value)" ${usable.length ? '' : 'disabled'}>
           ${usable.length ? modelOpts : '<option value="">暂无可用模型</option>'}
         </select>
-        <button class="ghost sm ${_adminStream ? 'active' : ''}" id="admin-stream-btn" onclick="adminToggleStream(this)" title="流式回复会逐字显示；若当前环境无法使用流式，可切换到普通模式">${_adminStream ? '⏩ 流式' : '⏸ 普通'}</button>
         <button class="ghost sm" onclick="closeAdminPanel()">✕ 关闭</button>
       </div>
       ${nowBot ? `
