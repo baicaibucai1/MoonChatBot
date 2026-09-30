@@ -208,7 +208,13 @@ test('SSE 响应带 CORS 头（桌面壳跨源也要能读流）', async () => {
  * 返回采样数组：{ t, len, cls, caret, thinking }
  */
 async function sendAndSample(content) {
-  await page.click('#bot-list .side-item');
+  // ★ 绝不能点「第一个」角色：侧栏按「收藏优先 + 最近对话降序」排序（C17），
+  //   顺序随对话历史变化 —— 谁刚聊过谁就被顶到首位。
+  //   这里曾经就是 `page.click('#bot-list .side-item')`，于是某次 BOT4 刚聊完排到第一，
+  //   页面实际操作的是 BOT4，而下面 /api/memory/<botId>/sessions 断言的却是 BOT1 ——
+  //   两者不是同一个角色，测试以一种极难看懂的方式失败（气泡里冒出 3 倍内容）。
+  //   按 botId 精确定位，排序怎么变都不影响。
+  await page.click(`#bot-list .side-item[onclick*="selectBot('${botId}')"]`);
   await page.waitForSelector('#f-chat', { timeout: 10000 });
   await page.waitForSelector('#session-list .session', { timeout: 10000 });
   await page.fill('#f-chat', content);
@@ -299,7 +305,8 @@ test('SSE 被掐断 → 自动回落一次性 /chat，且 user 消息只写一�
 
   await page.route('**/chat/stream', (route) => route.abort());   // 模拟本环境掐断 SSE 长连接
   try {
-    await page.click('#bot-list .side-item');
+    // 同上：按 botId 定位，别点「第一个」（侧栏顺序随对话历史变化）
+    await page.click(`#bot-list .side-item[onclick*="selectBot('${botId}')"]`);
     await page.waitForSelector('#f-chat', { timeout: 10000 });
     await page.fill('#f-chat', '降级路径测试');
     await page.click('.chat-input .primary');

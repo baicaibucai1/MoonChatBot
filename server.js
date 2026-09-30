@@ -213,6 +213,7 @@ async function chatWithBot(botId, content, opts = {}) {
   // 让模型看得见自己写过什么。是否续写的纯判断逻辑在 lib/longreply.js。
   const lr = longreply.resolveLongReply(cfg, bot, model);
   let finishReason = res ? res.finishReason : null;
+  let segCount = 1;                          // 已完成段数（首段算 1），仅供日志
   for (let seg = 1; longreply.shouldContinue({ finishReason, currentLen: reply.length, segIndex: seg, ...lr }); seg++) {
     const prevReason = finishReason;         // 决定拼接方式：截断续写要无缝，主动续写才另起一段
     const msgs = longreply.continueMessages(messages, reply);
@@ -238,10 +239,22 @@ async function chatWithBot(botId, content, opts = {}) {
     const piece = takeRecord(segRes.content || '');
     if (!piece) break;                        // 空段 = 模型没东西可写了，停在这里
     reply = prevReason === 'length' ? reply + piece : (reply ? reply + '\n\n' + piece : piece);
+    segCount = seg + 1;
+    // 日志带上上一段的 finish_reason：区分「被截断所以补全」还是「写完了但长文模式要追加」，
+    // 否则事后只看成品根本分不出来 —— 前者接缝无空行、后者有，但正文里本来就有空行。
+    console.log(`[bot:${botId}] 分段续写：第 ${segCount} 段 +${piece.length} 字` +
+      `（上一段 ${prevReason === 'length' ? '被截断→补全' : '已写完→追加'}）→ 累计 ${reply.length} 字`);
     finishReason = segRes.finishReason;
     // 流式纠正：本段末尾的【记录】在流式中已被 streamClean 吃掉，但拼接后的全文才是最终态，
     // 再下发一次保证前端气泡与最终入库内容完全一致。
     if (opts.onDelta) { try { opts.onDelta(streamClean(reply)); } catch {} }
+  }
+  // 停在哪儿也说清楚：段数用尽 / 字数到顶 / 它自己写完了 —— 这是调「续写上限」的直接依据
+  if (segCount > 1) {
+    const why = segCount >= lr.segments ? '段数用尽'
+      : reply.length >= lr.maxChars ? '字数到顶'
+      : finishReason === 'length' ? '仍被截断（上限未放开）' : '已写完';
+    console.log(`[bot:${botId}] 长文完成：共 ${segCount} 段 / ${reply.length} 字（止于：${why}；上限 ${lr.segments} 段 / ${lr.maxChars} 字）`);
   }
 
   // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成
