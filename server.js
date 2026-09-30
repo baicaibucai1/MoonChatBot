@@ -11,6 +11,7 @@ const memory = require('./lib/memory');
 const models = require('./lib/models');
 const search = require('./lib/search');
 const workspace = require('./lib/workspace');
+const longreply = require('./lib/longreply');
 const BotManager = require('./lib/bots');
 
 // ---- 拆分后引入的模块（批 1：HTTP 层 + 路由层 + ID 常量）----
@@ -188,12 +189,59 @@ async function chatWithBot(botId, content, opts = {}) {
   if (!reply) return '';
 
   // 解析 AI 自动记录的关键剧情（【记录】xxx）→ 结构化事件流
-  const record = /【记录】([\s\S]+)$/.exec(reply.trim());
-  if (record) {
-    const event = record[1].trim();
-    if (event) memory.appendEvent(botId, { event, importance: 3, source: 'mark' });
-    reply = reply.replace(/【记录】[\s\S]+$/, '').trim();
-    console.log(`[bot:${botId}] 已自动记录关键剧情: ${event.slice(0, 60)}`);
+  // ★ 抽成函数：分段续写下**每一段**都要跑一次 —— 否则上一段的【记录】会被埋在正文中间，
+  //   既不会被记录、又会原样显示给用户。
+  const takeRecord = (text) => {
+    const s = String(text || '');
+    const m = /【记录】([\s\S]+)$/.exec(s.trim());
+    if (!m) return s;
+    const event = m[1].trim();
+    if (event) {
+      memory.appendEvent(botId, { event, importance: 3, source: 'mark' });
+      console.log(`[bot:${botId}] 已自动记录关键剧情: ${event.slice(0, 60)}`);
+    }
+    return s.replace(/【记录】[\s\S]+$/, '').trim();
+  };
+  reply = takeRecord(reply);
+
+  // ---- 分段续写（长文模式）----
+  // 模型单次输出有上限：长回复要么被从中间掐断（finish_reason='length'），要么它自己觉得
+  // 说完了就收尾（'stop'）。两种语义必须分开，否则闲聊也会被硬生生拉长：
+  //   'length' → **补全**，无条件续（不开长文模式也要续，否则用户拿到的是半截话）
+  //   'stop'   → **追加**，只有开了长文模式才续
+  // 续写请求沿用**同一个 messages 链**（含前面的工具结果），追加 assistant prefix + 续写指令，
+  // 让模型看得见自己写过什么。是否续写的纯判断逻辑在 lib/longreply.js。
+  const lr = longreply.resolveLongReply(cfg, bot, model);
+  let finishReason = res ? res.finishReason : null;
+  for (let seg = 1; longreply.shouldContinue({ finishReason, currentLen: reply.length, segIndex: seg, ...lr }); seg++) {
+    const prevReason = finishReason;         // 决定拼接方式：截断续写要无缝，主动续写才另起一段
+    const msgs = longreply.continueMessages(messages, reply);
+    // 续写不带工具：它的任务只有「接着写」，再给工具它会跑偏（转头去搜索/读档案）
+    let segRes = null;
+    try {
+      if (opts.onDelta) {
+        const prev = reply;
+        segRes = await models.chatStreamCollect(model, msgs, { apiKey }, (accum) => {
+          try { opts.onDelta(streamClean(prev + accum)); } catch {}
+        });
+      } else {
+        segRes = await models.chat(model, msgs, { apiKey });
+      }
+      memory.recordUsage(botId, model.id, { usage: segRes.usage, promptTokens: segRes.promptTokens, ok: true });
+    } catch (err) {
+      // 续写失败**不能**毁掉已经写出来的正文：回复已经有了，把已写的返回去就行
+      // （失败请求同样计费，所以用量还是要记一笔）
+      memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
+      console.log(`[bot:${botId}] 分段续写第 ${seg + 1} 段失败，返回已写内容：${err.message}`);
+      break;
+    }
+    const piece = takeRecord(segRes.content || '');
+    if (!piece) break;                        // 空段 = 模型没东西可写了，停在这里
+    reply = prevReason === 'length' ? reply + piece : (reply ? reply + '\n\n' + piece : piece);
+    finishReason = segRes.finishReason;
+    // 流式纠正：本段末尾的【记录】在流式中已被 streamClean 吃掉，但拼接后的全文才是最终态，
+    // 再下发一次保证前端气泡与最终入库内容完全一致。
+    if (opts.onDelta) { try { opts.onDelta(streamClean(reply)); } catch {} }
   }
 
   // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generatedAt": "2026-09-29T02:10:23.595Z",
+    "generatedAt": "2026-09-30T12:28:56.733Z",
     "node": "v22.22.2",
     "sourceSha": "<unknown>",
     "probeCount": 100,
@@ -74,6 +74,7 @@
         "bots[].webSearch:boolean",
         "bots[]:object",
         "distillModel:string",
+        "longReply:boolean",
         "models:array",
         "models[].apiKeyEnv:string",
         "models[].baseURL:string",
@@ -145,6 +146,7 @@
         "bots[].webSearch:boolean",
         "bots[]:object",
         "distillModel:string",
+        "longReply:boolean",
         "models:array",
         "models[].apiKeyEnv:string",
         "models[].baseURL:string",
@@ -340,6 +342,7 @@
         "bots[].webSearch:boolean",
         "bots[]:object",
         "distillModel:string",
+        "longReply:boolean",
         "models:array",
         "models[].apiKeyEnv:string",
         "models[].baseURL:string",

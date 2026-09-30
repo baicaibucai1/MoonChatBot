@@ -1024,6 +1024,10 @@ function openBotSettings(id) {
   if (!b) return;
   const models = state.models || [];
   const modelOpts = models.map(m => `<option value="${m.id}" ${m.id === b.modelId ? 'selected' : ''}>${esc(m.name || m.id)}</option>`).join('') || '<option value="">未绑定</option>';
+  // 续写上限只从全局读（段数/字数不给角色单独配，角色页已经够长了）——
+  // 这里的 clamp 与后端 lib/longreply.js 的 DEFAULTS/LIMITS 保持一致，只用于展示。
+  const lrSeg = clampInt(state.longReplySegments, 3, 1, 8);
+  const lrChars = clampInt(state.longReplyMaxChars, 8000, 500, 40000);
   const old = $('#bot-settings-modal');
   if (old) old.remove();
 
@@ -1076,6 +1080,15 @@ function openBotSettings(id) {
           </select></div>
           <div class="field"><label>Markdown 回复</label><div class="value">自动启用，失败回退文本</div></div>
           <div class="field"><label>流式可用性</label><div class="value">${b.streamReply === false ? '已关闭' : '需要官方 Markdown/流式权限'}</div></div>
+        </div>
+        <div class="grid-3" style="margin-top:12px">
+          <div class="field"><label>长文模式（分段续写）</label><select id="f-long">
+            <option value="" ${b.longReply === undefined || b.longReply === null ? 'selected' : ''}>跟随全局设置（当前：${longReplyEnabled(b) ? '开启' : '关闭'}）</option>
+            <option value="true" ${b.longReply === true ? 'selected' : ''}>开启</option>
+            <option value="false" ${b.longReply === false ? 'selected' : ''}>关闭</option>
+          </select></div>
+          <div class="field"><label>续写上限</label><div class="value">${lrSeg} 段 / ${lrChars} 字（全局）</div></div>
+          <div class="field"><label>被截断时</label><div class="value">${IC_CHECK}<span class="lb">自动补全，不受此开关影响</span></div></div>
         </div>
         <div class="frm-hint">这里只管角色本体。QQ 连接（AppID / AppSecret / 运行环境）在角色卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
       </div>
@@ -3348,6 +3361,8 @@ async function saveBot(id) {
     searchMode: $('#f-smode').value || undefined,
     // 流式回复：空 = 跟随全局；true/false 单独覆盖
     streamReply: $('#f-stream') ? ($('#f-stream').value === 'true' ? true : $('#f-stream').value === 'false' ? false : undefined) : undefined,
+    // 长文模式（分段续写）：空 = 跟随全局；true/false 单独覆盖
+    longReply: $('#f-long') ? ($('#f-long').value === 'true' ? true : $('#f-long').value === 'false' ? false : undefined) : undefined,
   };
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
@@ -4003,6 +4018,24 @@ function renderGeneral() {
         </label>
         <span class="gen-hint">开启后单聊使用官方流式消息（打字机效果 + Markdown），需机器人具备相应权限；失败自动回退普通文本</span>
       </div>
+      <div class="gen-row" style="margin-top:12px">
+        <span class="gen-label">长文模式</span>
+        <label class="switch" title="${state.longReply === true ? '点击关闭全局长文模式' : '点击开启全局长文模式'}">
+          <input type="checkbox" id="g-long" ${state.longReply === true ? 'checked' : ''}>
+          <span class="slider"></span>
+        </label>
+        <span class="gen-hint">全局默认 ${state.longReply === true ? '已开启' : '已关闭'}，各机器人可在「编辑」里单独覆盖</span>
+      </div>
+      <div class="gen-row" style="margin-top:12px">
+        <span class="gen-label">续写上限</span>
+        <div class="gen-sel-wrap" style="display:flex;gap:10px;align-items:center">
+          <input id="g-long-seg" type="number" min="1" max="8" value="${clampInt(state.longReplySegments, 3, 1, 8)}" style="width:88px">
+          <span class="gen-hint" style="margin:0">段</span>
+          <input id="g-long-chars" type="number" min="500" max="40000" step="500" value="${clampInt(state.longReplyMaxChars, 8000, 500, 40000)}" style="width:120px">
+          <span class="gen-hint" style="margin:0">字（含首段）</span>
+        </div>
+      </div>
+      <p class="empty-hint" style="margin-top:8px">长文模式管的是「模型自己写完了还接着写」—— 开启后它会在段数内继续往下写。<br>另一件事不受这个开关影响：回复被模型上限<strong>截断</strong>时（话没说完就被掐断）会自动补全，否则你拿到的就是半截话。</p>
       <p class="empty-hint" style="margin-top:10px">轻量方式只取标题/摘要，快且省资源；模型需要详细内容时会自动用浏览器抓取正文（web_fetch）。</p>
     </div>`;
 }
@@ -4014,7 +4047,19 @@ function pickMode(el) {
 
 async function saveGeneral() {
   const distillModel = $('#g-distill') ? $('#g-distill').value : '';
-  const r = await api('/api/config', 'PUT', { webSearch: !!$('#g-web').checked, searchMode: _gMode, streamReply: !!$('#g-stream').checked, distillModel });
+  // 续写上限同样用 clampInt 收敛一次再提交：输入框的 min/max 只是提示，
+  // 手输 99 依然能提交 —— 服务端虽也有 clamp，但界面要立刻显示被改成了什么。
+  const longReplySegments = clampInt($('#g-long-seg') ? $('#g-long-seg').value : undefined, 3, 1, 8);
+  const longReplyMaxChars = clampInt($('#g-long-chars') ? $('#g-long-chars').value : undefined, 8000, 500, 40000);
+  const r = await api('/api/config', 'PUT', {
+    webSearch: !!$('#g-web').checked,
+    searchMode: _gMode,
+    streamReply: !!$('#g-stream').checked,
+    distillModel,
+    longReply: !!$('#g-long').checked,
+    longReplySegments,
+    longReplyMaxChars,
+  });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   if (r.ok) loadState();
 }
@@ -4025,6 +4070,23 @@ function webEnabled(b) {
   if (b.webSearch === true || b.webSearch === false) return b.webSearch;
   if (state.webSearch === true || state.webSearch === false) return state.webSearch;
   return model?.webSearch === true;
+}
+
+// 计算机器人实际的长文模式状态（机器人 > 全局 > 模型），与后端 resolveLongReply 同一套优先级。
+// ★ 取**第一个显式** true/false，不是「任一为真即为真」——否则「全局开 + 角色显式关」会失效。
+function longReplyEnabled(b) {
+  const model = (state.models || []).find(m => m.id === b.modelId);
+  const chain = [b.longReply, state.longReply, model?.longReply];
+  const explicit = chain.find(v => v === true || v === false);
+  return explicit === true;
+}
+
+// 配置数值收敛（与后端 lib/longreply.js 的 DEFAULTS / LIMITS 对应）：
+// 非数字回默认，越界压到边界 —— 防止手滑填个 99 段把 token 烧穿。
+function clampInt(v, def, lo, hi) {
+  const n = Number(v);
+  if (Number.isNaN(n)) return def;
+  return Math.min(hi, Math.max(lo, Math.round(n)));
 }
 
 // 搜索方式显示名
