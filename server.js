@@ -115,6 +115,41 @@ async function chatWithBot(botId, content, opts = {}) {
   let tools = [...(WEB_TOOLS || []), ...COLD_TOOLS];
   if (!tools.length) tools = undefined;
 
+  // ---- 长文：先规划，再逐段写 ----
+  // 目标字数超过阈值时，先让模型把全文拆成 N 段（每段要点 + 字数），再把这份结构交给首段。
+  // 为什么规划要放在工具循环**之前**：首段是全文的开头，它得知道自己这段在全局里的位置，
+  // 否则要么一口气把后面也写了，要么写到一半觉得「说完了」就收尾（实测单次输出中位数只有
+  // 281 tokens —— 不是写不长，是没有蓝图时它不知道该写多长）。
+  const lr = longreply.resolveLongReply(cfg, bot, model);
+  let plan = null;
+  if (lr.enabled && lr.target > longreply.PLAN_THRESHOLD) {
+    const want = longreply.estimateSegments(lr.target, lr.segments);
+    try {
+      // 规划请求只做规划：明确禁止写正文，且给一个较小的 maxTokens（大纲不该长篇大论）
+      const pr = await models.chat(
+        model,
+        [...messages, { role: 'user', content: longreply.planPrompt(lr.target, want) }],
+        { apiKey, maxTokens: 800 },
+      );
+      memory.recordUsage(botId, model.id, { usage: pr.usage, promptTokens: pr.promptTokens, ok: true });
+      const parsed = longreply.parsePlan(pr.content);
+      // ★ 少于 2 段的大纲等于没规划（模型拒绝规划时往往只回一句话，也会被 parsePlan 收成 1 段）
+      //   —— 拿它当大纲会让「按大纲走完」立刻判定为已完成，反倒把续写关掉。降级更安全。
+      if (parsed.length >= 2) {
+        plan = longreply.fillPlanChars(parsed, lr.target);
+        console.log(`[bot:${botId}] 长文规划：${plan.length} 段 / 目标 ${lr.target} 字`);
+      } else {
+        console.log(`[bot:${botId}] 长文规划未拿到有效大纲（只解析出 ${parsed.length} 段），降级为按目标续写`);
+      }
+    } catch (err) {
+      // 规划失败不能毁掉这次回复 —— 降级到「无大纲，按目标续写」继续走
+      memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
+      console.log(`[bot:${botId}] 长文规划失败，降级为按目标续写：${err.message}`);
+    }
+  }
+  // 规划成功才给首段挂上结构（规划失败/不需要时 messages 保持原样，行为与之前完全一致）
+  if (plan) messages.push({ role: 'user', content: longreply.segPromptFirst(plan, lr.target) });
+
   // 调用模型（最多 3 轮工具循环）：模型可自主决定调用 web_search / web_fetch，
   // 服务端在本地执行搜索/抓正文后把结果回传，模型基于结果作答。
   // 用量记录：每轮成功用精确 usage，失败用本地估算兜底（失败请求同样计费）。
@@ -205,18 +240,36 @@ async function chatWithBot(botId, content, opts = {}) {
   reply = takeRecord(reply);
 
   // ---- 分段续写（长文模式）----
-  // 模型单次输出有上限：长回复要么被从中间掐断（finish_reason='length'），要么它自己觉得
-  // 说完了就收尾（'stop'）。两种语义必须分开，否则闲聊也会被硬生生拉长：
+  // 模型单次输出要么被掐断（finish_reason='length'），要么它自己觉得说完了（'stop'）。
+  // 两种语义必须分开，否则闲聊也会被硬生生拉长：
   //   'length' → **补全**，无条件续（不开长文模式也要续，否则用户拿到的是半截话）
-  //   'stop'   → **追加**，只有开了长文模式才续
-  // 续写请求沿用**同一个 messages 链**（含前面的工具结果），追加 assistant prefix + 续写指令，
+  //   'stop'   → **追加**，按大纲 / 目标 / 开关决定要不要再写一段
+  // 续写请求沿用**同一个 messages 链**（含前面的工具结果），追加 assistant prefix + 写作指令，
   // 让模型看得见自己写过什么。是否续写的纯判断逻辑在 lib/longreply.js。
-  const lr = longreply.resolveLongReply(cfg, bot, model);
   let finishReason = res ? res.finishReason : null;
-  let segCount = 1;                          // 已完成段数（首段算 1），仅供日志
-  for (let seg = 1; longreply.shouldContinue({ finishReason, currentLen: reply.length, segIndex: seg, ...lr }); seg++) {
-    const prevReason = finishReason;         // 决定拼接方式：截断续写要无缝，主动续写才另起一段
-    const msgs = longreply.continueMessages(messages, reply);
+  let segCount = 1;                          // 实际写过的段数（首段算 1），仅供日志
+  let planIdx = 0;                           // 已完成的大纲段数（首段 = plan[0]，故从 0 起）
+  let stopWhy = null;                        // 主动收尾的原因（模型没新东西可写了）
+  for (let seg = 1; longreply.shouldContinue({
+    finishReason,
+    currentLen: reply.length,
+    segIndex: seg,
+    ...lr,
+    planTotal: plan ? plan.length : 0,
+    planDone: planIdx + 1,
+  }); seg++) {
+    const prevReason = finishReason;         // 决定拼接方式与下一段指令：截断是「补完本段」，不算推进
+    const truncated = prevReason === 'length';
+    // 被截断 → 只求把这段写完（不带下一段要点，否则会把本段和下一段混在一起）
+    // 有大纲 → 带本段要点与字数；无大纲有目标 → 告诉它还差多少；都没有 → 老续写指令
+    const prompt = truncated
+      ? longreply.CONTINUE_PROMPT
+      : plan
+        ? longreply.segPromptNext(plan, planIdx + 1)
+        : lr.target > 0
+          ? longreply.targetPrompt(reply.length, lr.target)
+          : longreply.CONTINUE_PROMPT;
+    const msgs = longreply.continueMessages(messages, reply, prompt);
     // 续写不带工具：它的任务只有「接着写」，再给工具它会跑偏（转头去搜索/读档案）
     let segRes = null;
     try {
@@ -237,24 +290,40 @@ async function chatWithBot(botId, content, opts = {}) {
       break;
     }
     const piece = takeRecord(segRes.content || '');
-    if (!piece) break;                        // 空段 = 模型没东西可写了，停在这里
+    if (!piece) { stopWhy = '模型无新内容'; break; }   // 空段 = 它觉得写完了
+    // ★ 整段都是已有内容的原文 → 它在原地打转（目标驱动下常见：被催「还没写够」就把上一段又吐一遍）。
+    //   再续下去只是把段数上限烧完、拿到 N 遍重复正文，不如就收在这里。
+    if (longreply.isDuplicate(piece, reply)) {
+      stopWhy = '模型开始重复';
+      console.log(`[bot:${botId}] 分段续写：第 ${seg + 1} 段与已写内容重复，判定已写完（累计 ${reply.length} 字）`);
+      break;
+    }
     reply = prevReason === 'length' ? reply + piece : (reply ? reply + '\n\n' + piece : piece);
     segCount = seg + 1;
-    // 日志带上上一段的 finish_reason：区分「被截断所以补全」还是「写完了但长文模式要追加」，
+    // ★ 只有「真的推进到大纲的下一段」才前进指针 —— 截断补全是在补完当前这段，不算推进
+    if (!truncated && plan) planIdx++;
+    // 日志带上上一段的 finish_reason：区分「被截断所以补全」还是「写完了但还要往下写」，
     // 否则事后只看成品根本分不出来 —— 前者接缝无空行、后者有，但正文里本来就有空行。
     console.log(`[bot:${botId}] 分段续写：第 ${segCount} 段 +${piece.length} 字` +
-      `（上一段 ${prevReason === 'length' ? '被截断→补全' : '已写完→追加'}）→ 累计 ${reply.length} 字`);
+      `（${truncated ? '被截断→补全本段' : plan ? `按大纲写第 ${planIdx + 1}/${plan.length} 段` : '按目标追加'}）` +
+      ` → 累计 ${reply.length} 字`);
     finishReason = segRes.finishReason;
     // 流式纠正：本段末尾的【记录】在流式中已被 streamClean 吃掉，但拼接后的全文才是最终态，
     // 再下发一次保证前端气泡与最终入库内容完全一致。
     if (opts.onDelta) { try { opts.onDelta(streamClean(reply)); } catch {} }
   }
-  // 停在哪儿也说清楚：段数用尽 / 字数到顶 / 它自己写完了 —— 这是调「续写上限」的直接依据
+  // 停在哪儿也说清楚：段数用尽 / 字数到顶 / 大纲走完 / 达到目标 —— 这是调配置的直接依据
   if (segCount > 1) {
-    const why = segCount >= lr.segments ? '段数用尽'
+    const why = stopWhy ? stopWhy
+      : segCount >= lr.segments ? '段数用尽'
       : reply.length >= lr.maxChars ? '字数到顶'
-      : finishReason === 'length' ? '仍被截断（上限未放开）' : '已写完';
-    console.log(`[bot:${botId}] 长文完成：共 ${segCount} 段 / ${reply.length} 字（止于：${why}；上限 ${lr.segments} 段 / ${lr.maxChars} 字）`);
+      : finishReason === 'length' ? '仍被截断（上限未放开）'
+      : plan ? (planIdx + 1 >= plan.length ? '大纲走完' : '模型提前收尾')
+      : lr.target > 0 ? (reply.length >= lr.target ? '达到目标字数' : '模型提前收尾')
+      : '已写完';
+    const goal = plan ? `大纲 ${plan.length} 段` : `目标 ${lr.target || '不限'} 字`;
+    console.log(`[bot:${botId}] 长文完成：共 ${segCount} 段 / ${reply.length} 字` +
+      `（止于：${why}；${goal}；上限 ${lr.segments} 段 / ${lr.maxChars} 字）`);
   }
 
   // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成
