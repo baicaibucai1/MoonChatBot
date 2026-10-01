@@ -121,14 +121,29 @@ async function chatWithBot(botId, content, opts = {}) {
   // 否则要么一口气把后面也写了，要么写到一半觉得「说完了」就收尾（实测单次输出中位数只有
   // 281 tokens —— 不是写不长，是没有蓝图时它不知道该写多长）。
   const lr = longreply.resolveLongReply(cfg, bot, model);
+  // ---- 长度意图：用户说「写长一点 / 长文本输出 / 3000 字 / 简短」→ 这次回复按它来 ----
+  // ★ 只看**最后一条用户消息**：历史里提过一次「写详细」不该让后面十轮全变成 3000 字。
+  const lastUserMsg = [...messages].reverse().find((m) => m && m.role === 'user');
+  const intent = lr.auto
+    ? longreply.detectLengthIntent(lastUserMsg && lastUserMsg.content)
+    : { kind: 'none', target: null };
+  // eff 是这一次真正生效的参数；lr 仍是配置里那份（不写回，只影响本次）
+  const eff = longreply.applyIntent(lr, intent);
+  if (intent.kind !== 'none') {
+    console.log(`[bot:${botId}] 长度意图：${intent.kind === 'long' ? '拉长' : '压短'}` +
+      ` → 目标 ${eff.target || '—'} 字${lr.enabled === eff.enabled ? '' : `（长文开关 ${lr.enabled ? '开' : '关'} → 本次 ${eff.enabled ? '开' : '关'}）`}`);
+  }
+  // 压短靠提示词而不是目标字数：目标只管「没写够就继续」，已经写长了的目标压不短
+  if (eff.hint) messages.push({ role: 'user', content: eff.hint });
+
   let plan = null;
-  if (lr.enabled && lr.target > longreply.PLAN_THRESHOLD) {
-    const want = longreply.estimateSegments(lr.target, lr.segments);
+  if (eff.enabled && eff.target > longreply.PLAN_THRESHOLD) {
+    const want = longreply.estimateSegments(eff.target, eff.segments);
     try {
       // 规划请求只做规划：明确禁止写正文，且给一个较小的 maxTokens（大纲不该长篇大论）
       const pr = await models.chat(
         model,
-        [...messages, { role: 'user', content: longreply.planPrompt(lr.target, want) }],
+        [...messages, { role: 'user', content: longreply.planPrompt(eff.target, want) }],
         { apiKey, maxTokens: 800 },
       );
       memory.recordUsage(botId, model.id, { usage: pr.usage, promptTokens: pr.promptTokens, ok: true });
@@ -136,8 +151,8 @@ async function chatWithBot(botId, content, opts = {}) {
       // ★ 少于 2 段的大纲等于没规划（模型拒绝规划时往往只回一句话，也会被 parsePlan 收成 1 段）
       //   —— 拿它当大纲会让「按大纲走完」立刻判定为已完成，反倒把续写关掉。降级更安全。
       if (parsed.length >= 2) {
-        plan = longreply.fillPlanChars(parsed, lr.target);
-        console.log(`[bot:${botId}] 长文规划：${plan.length} 段 / 目标 ${lr.target} 字`);
+        plan = longreply.fillPlanChars(parsed, eff.target);
+        console.log(`[bot:${botId}] 长文规划：${plan.length} 段 / 目标 ${eff.target} 字`);
       } else {
         console.log(`[bot:${botId}] 长文规划未拿到有效大纲（只解析出 ${parsed.length} 段），降级为按目标续写`);
       }
@@ -148,7 +163,7 @@ async function chatWithBot(botId, content, opts = {}) {
     }
   }
   // 规划成功才给首段挂上结构（规划失败/不需要时 messages 保持原样，行为与之前完全一致）
-  if (plan) messages.push({ role: 'user', content: longreply.segPromptFirst(plan, lr.target) });
+  if (plan) messages.push({ role: 'user', content: longreply.segPromptFirst(plan, eff.target) });
 
   // 调用模型（最多 3 轮工具循环）：模型可自主决定调用 web_search / web_fetch，
   // 服务端在本地执行搜索/抓正文后把结果回传，模型基于结果作答。
@@ -254,7 +269,7 @@ async function chatWithBot(botId, content, opts = {}) {
     finishReason,
     currentLen: reply.length,
     segIndex: seg,
-    ...lr,
+    ...eff,
     planTotal: plan ? plan.length : 0,
     planDone: planIdx + 1,
   }); seg++) {
@@ -266,8 +281,8 @@ async function chatWithBot(botId, content, opts = {}) {
       ? longreply.CONTINUE_PROMPT
       : plan
         ? longreply.segPromptNext(plan, planIdx + 1)
-        : lr.target > 0
-          ? longreply.targetPrompt(reply.length, lr.target)
+        : eff.target > 0
+          ? longreply.targetPrompt(reply.length, eff.target)
           : longreply.CONTINUE_PROMPT;
     const msgs = longreply.continueMessages(messages, reply, prompt);
     // 续写不带工具：它的任务只有「接着写」，再给工具它会跑偏（转头去搜索/读档案）
@@ -315,15 +330,15 @@ async function chatWithBot(botId, content, opts = {}) {
   // 停在哪儿也说清楚：段数用尽 / 字数到顶 / 大纲走完 / 达到目标 —— 这是调配置的直接依据
   if (segCount > 1) {
     const why = stopWhy ? stopWhy
-      : segCount >= lr.segments ? '段数用尽'
-      : reply.length >= lr.maxChars ? '字数到顶'
+      : segCount >= eff.segments ? '段数用尽'
+      : reply.length >= eff.maxChars ? '字数到顶'
       : finishReason === 'length' ? '仍被截断（上限未放开）'
       : plan ? (planIdx + 1 >= plan.length ? '大纲走完' : '模型提前收尾')
-      : lr.target > 0 ? (reply.length >= lr.target ? '达到目标字数' : '模型提前收尾')
+      : eff.target > 0 ? (reply.length >= eff.target ? '达到目标字数' : '模型提前收尾')
       : '已写完';
-    const goal = plan ? `大纲 ${plan.length} 段` : `目标 ${lr.target || '不限'} 字`;
+    const goal = plan ? `大纲 ${plan.length} 段` : `目标 ${eff.target || '不限'} 字`;
     console.log(`[bot:${botId}] 长文完成：共 ${segCount} 段 / ${reply.length} 字` +
-      `（止于：${why}；${goal}；上限 ${lr.segments} 段 / ${lr.maxChars} 字）`);
+      `（止于：${why}；${goal}；上限 ${eff.segments} 段 / ${eff.maxChars} 字）`);
   }
 
   // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成

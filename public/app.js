@@ -1087,6 +1087,11 @@ function openBotSettings(id) {
             <option value="false" ${b.longReply === false ? 'selected' : ''}>关闭</option>
           </select></div>
           <div class="field"><label>目标字数（留空跟随全局）</label><input id="f-long-target" type="number" min="0" step="500" placeholder="跟随全局（${lrTarget || '不限'}）" value="${b.longReplyTarget === undefined || b.longReplyTarget === null ? '' : b.longReplyTarget}"></div>
+          <div class="field"><label>听懂长度意图</label><select id="f-long-auto">
+            <option value="" ${b.longReplyAuto === undefined || b.longReplyAuto === null ? 'selected' : ''}>跟随全局设置（当前：${state.longReplyAuto === false ? '关闭' : '开启'}）</option>
+            <option value="true" ${b.longReplyAuto === true ? 'selected' : ''}>开启</option>
+            <option value="false" ${b.longReplyAuto === false ? 'selected' : ''}>关闭</option>
+          </select></div>
           <div class="field"><label>被截断时</label><div class="value">${IC_CHECK}<span class="lb">自动补全，不受此开关影响</span></div></div>
         </div>
         <div class="frm-hint">这里只管角色本体。QQ 连接（AppID / AppSecret / 运行环境）在角色卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
@@ -1333,8 +1338,12 @@ function openSettings() {
 // ---- 设置页：分组 Tab（外观 / 联网 / 全局设定 / 用量统计） ----
 let _gFiles = [];    // 全局文件列表缓存（含内容）
 let _gKey = '';      // 当前正在编辑的全局文件 key
+// ★ 「生成」独立成组是刻意的：长文模式 / 目标字数 / 续写上限 / 流式这些**输出长度与呈现**
+//   相关的设置原本全塞在「联网」里，那个 Tab 名完全不副实 —— 用户找长文设置根本找不到。
+//   现在「联网」只管联网（开关 + 搜索方式），跟生成相关的一律进「生成」。
 const SETTING_TABS = [
   { id: 'appearance', n: '外观', ic: IC_PALETTE },
+  { id: 'generation', n: '生成', ic: IC_SPARKLE },
   { id: 'general', n: '联网', ic: IC_GLOBE },
   { id: 'global', n: '全局设定', ic: IC_LAYERS },
   { id: 'stats', n: '用量统计', ic: IC_CHART },
@@ -1386,8 +1395,9 @@ function renderSettings() {
       ${SETTING_TABS.map(x => `<span class="st-tab ${x.id === tab ? 'active' : ''}" data-t="${x.id}" role="tab" onclick="switchSettingsTab('${x.id}')">${x.ic}<span class="lb">${x.n}</span></span>`).join('')}
     </div>
     <div class="st-sec" data-sec="appearance"${show('appearance')}>${renderAppearance()}</div>
-    <div class="st-sec" data-sec="general"${show('general')}>${renderGeneral()}${renderAdminSetting()}</div>
-    <div class="st-sec" data-sec="global"${show('global')}>${globalCard}</div>
+    <div class="st-sec" data-sec="generation"${show('generation')}>${renderGeneration()}</div>
+    <div class="st-sec" data-sec="general"${show('general')}>${renderGeneral()}</div>
+    <div class="st-sec" data-sec="global"${show('global')}>${globalCard}${renderAdminSetting()}</div>
     <div class="st-sec" data-sec="stats"${show('stats')}>${statsCard}</div>`;
   _gFiles = [];
   _gKey = '';
@@ -3366,6 +3376,8 @@ async function saveBot(id) {
     longReplyTarget: $('#f-long-target') && $('#f-long-target').value.trim() !== ''
       ? clampInt($('#f-long-target').value, 0, 0, 100000)
       : undefined,
+    // 长度意图识别：空 = 跟随全局（闲聊角色可以单独关掉，免得被「详细」两个字拉到 3000 字）
+    longReplyAuto: $('#f-long-auto') ? ($('#f-long-auto').value === 'true' ? true : $('#f-long-auto').value === 'false' ? false : undefined) : undefined,
   };
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
@@ -3981,7 +3993,7 @@ function renderGeneral() {
   ];
   return `
     <div class="card gen-card">
-      <div class="card-title">通用（联网搜索）
+      <div class="card-title">联网（全局搜索）
         <span class="spacer"></span>
         <button class="primary sm" onclick="saveGeneral()">保存</button>
       </div>
@@ -4003,17 +4015,22 @@ function renderGeneral() {
             </div>`).join('')}
         </div>
       </div>
-      <div class="gen-row" style="align-items:flex-start;margin-top:14px">
-        <span class="gen-label" style="padding-top:8px">蒸馏/总结模型</span>
-        <div class="gen-sel-wrap">
-          <select id="g-distill" class="gen-sel">
-            <option value="">跟随各机器人绑定模型（默认）</option>
-            ${(state.models || []).map(m => `<option value="${esc(m.id)}" ${state.distillModel === m.id ? 'selected' : ''}>${esc(m.name || m.id)}（${esc(m.id)}）</option>`).join('')}
-          </select>
-          <div class="gen-hint">核心卡蒸馏、文件分段摘要、事件压缩、逐轮记忆提炼、精彩时刻、AI 归档等后台总结任务使用的模型；不指定则各自跟随机器人绑定的模型</div>
-        </div>
+      <p class="empty-hint" style="margin-top:10px">轻量方式只取标题/摘要，快且省资源；模型需要详细内容时会自动用浏览器抓取正文（web_fetch）。</p>
+    </div>`;
+}
+
+// ---- 设置页「生成」：输出长度 / 呈现方式 / 后台总结模型 ----
+// 这一组是从原来的「联网」里分出来的 —— 长文设置藏在一个叫「联网」的 Tab 下面，
+// 谁都找不到。输出相关的开关就应该有个叫得出口的地方。
+function renderGeneration() {
+  const lrOn = state.longReply === true;
+  return `
+    <div class="card gen-card">
+      <div class="card-title">生成（输出长度与呈现）
+        <span class="spacer"></span>
+        <button class="primary sm" onclick="saveGeneration()">保存</button>
       </div>
-      <div class="gen-row" style="margin-top:12px">
+      <div class="gen-row">
         <span class="gen-label">流式回复</span>
         <label class="switch" title="${state.streamReply === true ? '点击关闭全局流式回复' : '点击开启全局流式回复'}">
           <input type="checkbox" id="g-stream" ${state.streamReply === true ? 'checked' : ''}>
@@ -4023,17 +4040,17 @@ function renderGeneral() {
       </div>
       <div class="gen-row" style="margin-top:12px">
         <span class="gen-label">长文模式</span>
-        <label class="switch" title="${state.longReply === true ? '点击关闭全局长文模式' : '点击开启全局长文模式'}">
-          <input type="checkbox" id="g-long" ${state.longReply === true ? 'checked' : ''}>
+        <label class="switch" title="${lrOn ? '点击关闭全局长文模式' : '点击开启全局长文模式'}">
+          <input type="checkbox" id="g-long" ${lrOn ? 'checked' : ''}>
           <span class="slider"></span>
         </label>
-        <span class="gen-hint">全局默认 ${state.longReply === true ? '已开启' : '已关闭'}，各机器人可在「编辑」里单独覆盖</span>
+        <span class="gen-hint">全局默认 ${lrOn ? '已开启' : '已关闭'}，各机器人可在「编辑」里单独覆盖</span>
       </div>
       <div class="gen-row" style="margin-top:12px">
         <span class="gen-label">目标字数</span>
         <div class="gen-sel-wrap" style="display:flex;gap:10px;align-items:center">
-          <input id="g-long-target" type="number" min="0" step="500" value="${clampInt(state.longReplyTarget, 0, 0, 100000)}" style="width:120px">
-          <span class="gen-hint" style="margin:0">字（0 = 不限，由模型自己决定长度）</span>
+          <input id="g-long-target" type="number" min="0" step="500" value="${clampInt(state.longReplyTarget, 1200, 0, 100000)}" style="width:120px">
+          <span class="gen-hint" style="margin:0">字。<strong>这是长度刹车</strong>：长文开启后写到这个字数就收。<br>0 = 不限（会一路写到续写上限，慎用）</span>
         </div>
       </div>
       <div class="gen-row" style="margin-top:12px">
@@ -4045,8 +4062,35 @@ function renderGeneral() {
           <span class="gen-hint" style="margin:0">字（兜底，防止烧穿）</span>
         </div>
       </div>
-      <p class="empty-hint" style="margin-top:8px">长文模式管的是「模型自己写完了还接着写」—— 开了它才会朝<strong>目标字数</strong>去写。<br>目标超过 2000 字时，它会<strong>先列一份分段大纲</strong>（每段要点与字数），再逐段写完整篇，而不是想到哪写到哪。大纲只在内部使用，你看到的仍是成文。<br>另一件事不受这个开关影响：回复被模型上限<strong>截断</strong>时（话没说完就被掐断）会自动补全，否则你拿到的就是半截话。</p>
-      <p class="empty-hint" style="margin-top:10px">轻量方式只取标题/摘要，快且省资源；模型需要详细内容时会自动用浏览器抓取正文（web_fetch）。</p>
+      <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+      <div class="gen-row">
+        <span class="gen-label">听懂长度意图</span>
+        <label class="switch" title="${state.longReplyAuto === false ? '点击开启长度意图识别' : '点击关闭长度意图识别'}">
+          <input type="checkbox" id="g-long-auto" ${state.longReplyAuto === false ? '' : 'checked'}>
+          <span class="slider"></span>
+        </label>
+        <span class="gen-hint">你说「写长一点 / 长文本输出 / 写一篇 3000 字的…」，它<strong>自动按那个长度写</strong>，不用手动改设置；<br>说「简短一点 / 一句话概括」，它压短。只影响这一轮，不写回配置。</span>
+      </div>
+      <div class="gen-row" style="margin-top:12px">
+        <span class="gen-label">长档 / 短档</span>
+        <div class="gen-sel-wrap" style="display:flex;gap:10px;align-items:center">
+          <input id="g-long-len" type="number" min="500" max="100000" step="500" value="${clampInt(state.longReplyLongTarget, 3000, 500, 100000)}" style="width:100px">
+          <span class="gen-hint" style="margin:0">字（识别为「写长」时用）</span>
+          <input id="g-short-len" type="number" min="50" max="10000" step="50" value="${clampInt(state.longReplyShortTarget, 300, 50, 10000)}" style="width:100px">
+          <span class="gen-hint" style="margin:0">字（识别为「简短」时用）</span>
+        </div>
+      </div>
+      <div class="gen-row" style="align-items:flex-start;margin-top:14px">
+        <span class="gen-label" style="padding-top:8px">蒸馏/总结模型</span>
+        <div class="gen-sel-wrap">
+          <select id="g-distill" class="gen-sel">
+            <option value="">跟随各机器人绑定模型（默认）</option>
+            ${(state.models || []).map(m => `<option value="${esc(m.id)}" ${state.distillModel === m.id ? 'selected' : ''}>${esc(m.name || m.id)}（${esc(m.id)}）</option>`).join('')}
+          </select>
+          <div class="gen-hint">核心卡蒸馏、文件分段摘要、事件压缩、逐轮记忆提炼、精彩时刻、AI 归档等后台总结任务使用的模型；不指定则各自跟随机器人绑定的模型</div>
+        </div>
+      </div>
+      <p class="empty-hint" style="margin-top:10px">长文模式管的是「模型自己写完了还接着写」—— 开了它才会朝<strong>目标字数</strong>去写。目标超过 2000 字时它会<strong>先列一份分段大纲</strong>再逐段写，大纲只在内部使用，你看到的仍是成文。<br>另一件事不受任何开关影响：回复被模型上限<strong>截断</strong>时（话没说完就被掐断）会自动补全，否则你拿到的就是半截话。</p>
     </div>`;
 }
 
@@ -4055,22 +4099,32 @@ function pickMode(el) {
   document.querySelectorAll('#g-modes .mode-card').forEach(c => c.classList.toggle('active', c === el));
 }
 
+// 设置页「联网」分组：只管联网（开关 + 搜索方式）
 async function saveGeneral() {
-  const distillModel = $('#g-distill') ? $('#g-distill').value : '';
-  // 续写上限同样用 clampInt 收敛一次再提交：输入框的 min/max 只是提示，
-  // 手输 99 依然能提交 —— 服务端虽也有 clamp，但界面要立刻显示被改成了什么。
-  const longReplyTarget = clampInt($('#g-long-target') ? $('#g-long-target').value : undefined, 0, 0, 100000);
-  const longReplySegments = clampInt($('#g-long-seg') ? $('#g-long-seg').value : undefined, 12, 1, 30);
-  const longReplyMaxChars = clampInt($('#g-long-chars') ? $('#g-long-chars').value : undefined, 20000, 500, 100000);
   const r = await api('/api/config', 'PUT', {
     webSearch: !!$('#g-web').checked,
     searchMode: _gMode,
+  });
+  r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
+  if (r.ok) loadState();
+}
+
+// 设置页「生成」分组：输出长度 / 呈现 / 后台总结模型
+async function saveGeneration() {
+  const distillModel = $('#g-distill') ? $('#g-distill').value : '';
+  // 数值一律用 clampInt 收敛一次再提交：输入框的 min/max 只是提示，
+  // 手输 99 依然能提交 —— 服务端虽也有 clamp，但界面要立刻显示被改成了什么。
+  const r = await api('/api/config', 'PUT', {
     streamReply: !!$('#g-stream').checked,
     distillModel,
     longReply: !!$('#g-long').checked,
-    longReplyTarget,
-    longReplySegments,
-    longReplyMaxChars,
+    longReplyTarget: clampInt($('#g-long-target') ? $('#g-long-target').value : undefined, 1200, 0, 100000),
+    longReplySegments: clampInt($('#g-long-seg') ? $('#g-long-seg').value : undefined, 12, 1, 30),
+    longReplyMaxChars: clampInt($('#g-long-chars') ? $('#g-long-chars').value : undefined, 20000, 500, 100000),
+    // 长度意图识别：开关 + 长档 / 短档
+    longReplyAuto: !!$('#g-long-auto').checked,
+    longReplyLongTarget: clampInt($('#g-long-len') ? $('#g-long-len').value : undefined, 3000, 500, 100000),
+    longReplyShortTarget: clampInt($('#g-short-len') ? $('#g-short-len').value : undefined, 300, 50, 10000),
   });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   if (r.ok) loadState();

@@ -22,6 +22,11 @@ const {
   estimateSegments,
   continueMessages,
   isDuplicate,
+  INTENT_DEFAULTS,
+  INTENT_CHARS_FLOOR,
+  detectLengthIntent,
+  parseLengthChars,
+  applyIntent,
   planPrompt,
   parsePlan,
   fillPlanChars,
@@ -32,12 +37,16 @@ const {
 
 // ---------- resolveLongReply：三层优先级（机器人 > 全局 > 模型）----------
 
+// 长度意图识别的三个新字段。★ auto 默认 true —— 这是新功能，没配就该生效。
+const EXTRA = { auto: true, longTarget: INTENT_DEFAULTS.longTarget, shortTarget: INTENT_DEFAULTS.shortTarget };
+
 test('resolveLongReply：默认关闭（什么都没配时）', () => {
   assert.deepEqual(resolveLongReply({}, {}, {}), {
     enabled: false,
     target: DEFAULTS.target,
     segments: DEFAULTS.segments,
     maxChars: DEFAULTS.maxChars,
+    ...EXTRA,
   });
   // 显式关掉也应是同一套默认值（只是 enabled 为 false）
   assert.deepEqual(resolveLongReply({ longReply: false }, { longReply: false }, {}), {
@@ -45,13 +54,14 @@ test('resolveLongReply：默认关闭（什么都没配时）', () => {
     target: DEFAULTS.target,
     segments: DEFAULTS.segments,
     maxChars: DEFAULTS.maxChars,
+    ...EXTRA,
   });
 });
 
 test('resolveLongReply：三层都能开，取第一个显式 true', () => {
   // 用 DEFAULTS 而不是硬编码 —— 默认值调整过一次（段数 3→12、上限 8000→20000），
   // 写死数字会让这条用例在「只是改了默认值」时莫名其妙变红。
-  const base = { target: DEFAULTS.target, segments: DEFAULTS.segments, maxChars: DEFAULTS.maxChars };
+  const base = { target: DEFAULTS.target, segments: DEFAULTS.segments, maxChars: DEFAULTS.maxChars, ...EXTRA };
   // 机器人单独开
   assert.equal(resolveLongReply({}, { longReply: true }, {}).enabled, true);
   // 全局开
@@ -161,8 +171,11 @@ test('resolveLongReply：目标字数 角色 > 全局，空串视为未设', () 
   assert.equal(resolveLongReply({ longReplyTarget: 3000 }, { longReplyTarget: 8000 }, {}).target, 8000);
   // 角色留空（''）→ 回落全局，不能被当成 0
   assert.equal(resolveLongReply({ longReplyTarget: 3000 }, { longReplyTarget: '' }, {}).target, 3000);
-  // 什么都没设 → 0（不限）
-  assert.equal(resolveLongReply({}, {}, {}).target, 0);
+  // ★ 什么都没设 → 默认目标 1200，而不是 0（不限）。
+  //   0 的语义是「没写够就一直续」，长文一开就一路写到撞上限 —— 用户看到的就是「太长了」。
+  //   默认给个目标才是刹车；真要不限，显式填 0。
+  assert.equal(resolveLongReply({}, {}, {}).target, DEFAULTS.target);
+  assert.equal(resolveLongReply({ longReplyTarget: 0 }, {}, {}).target, 0, '显式填 0 才是不限');
 });
 
 test('resolveLongReply：目标字数被 clamp 到硬边界内', () => {
@@ -266,6 +279,103 @@ test('isDuplicate：比对前吃掉空白（拼接加的换行不该影响判定
 
 test('isDuplicate：首段（已写为空）不可能重复', () => {
   assert.equal(isDuplicate('任何内容，哪怕很长很长很长很长。', ''), false);
+});
+
+// ---------- 长度意图识别：用户说「写长一点」就该真的写长 ----------
+
+test('detectLengthIntent：拉长意图的几种说法', () => {
+  for (const s of ['写长一点', '来一篇长文', '详细说说', '展开讲讲', '多写点', '长文本输出']) {
+    assert.equal(detectLengthIntent(s).kind, 'long', `「${s}」应识别为拉长`);
+  }
+});
+
+test('detectLengthIntent：压短意图的几种说法', () => {
+  for (const s of ['简短一点', '一句话概括', '简要说明', '长话短说', '不用太长']) {
+    assert.equal(detectLengthIntent(s).kind, 'short', `「${s}」应识别为压短`);
+  }
+});
+
+test('detectLengthIntent：中性提问不触发（否则日常对话全被拉长）', () => {
+  for (const s of ['今天天气怎么样', '介绍一下你自己', '讲讲这个故事', '帮我看看这段代码']) {
+    assert.equal(detectLengthIntent(s).kind, 'none', `「${s}」不该触发长度意图`);
+  }
+});
+
+test('detectLengthIntent：显式字数优先于关键词', () => {
+  // 「详细」会判长，但显式 300 字更小 → 应该听字数的
+  assert.deepEqual(detectLengthIntent('详细说说，300字'), { kind: 'short', target: 300 });
+});
+
+test('detectLengthIntent：显式字数按 800 分长短', () => {
+  assert.equal(detectLengthIntent('写一篇 3000 字的小说').kind, 'long');
+  assert.equal(detectLengthIntent('写一篇 2000 字的文章').target, 2000);
+  assert.equal(detectLengthIntent('控制在 300 字以内').kind, 'short');
+});
+
+test('detectLengthIntent：长短词同时出现时，显式字数仍然最优先', () => {
+  assert.equal(detectLengthIntent('长话短说，写 3000 字').target, 3000);
+});
+
+test('parseLengthChars：区间取上限、中文数字、空值', () => {
+  assert.equal(parseLengthChars('2000-3000字'), 3000, '区间取更充分的那头');
+  assert.equal(parseLengthChars('800字以内'), 800);
+  assert.equal(parseLengthChars('不超过500字'), 500);
+  assert.equal(parseLengthChars('五千字'), 5000);
+  assert.equal(parseLengthChars('三百字'), 300);
+  assert.equal(parseLengthChars('随便写点'), 0);
+  // 「一千五」认不出来 —— 认不出来好过认成 1000
+  assert.equal(parseLengthChars('一千五百字'), 0);
+});
+
+test('detectLengthIntent：空消息返回 none（不炸）', () => {
+  assert.equal(detectLengthIntent('').kind, 'none');
+  assert.equal(detectLengthIntent(null).kind, 'none');
+});
+
+// ---------- applyIntent：意图怎么落到这一次回复上 ----------
+
+const LR_BASE = {
+  enabled: false, target: INTENT_DEFAULTS.longTarget === 3000 ? 1200 : 1200,
+  segments: 12, maxChars: 20000, auto: true,
+  longTarget: INTENT_DEFAULTS.longTarget, shortTarget: INTENT_DEFAULTS.shortTarget,
+};
+
+test('applyIntent：★ 识别到「写长」→ 无视开关临时开启多段输出', () => {
+  // 全局和角色都关着长文，但用户明说了要长 —— 这次就该写长，且不写回配置
+  const out = applyIntent({ ...LR_BASE, enabled: false }, detectLengthIntent('写长一点'));
+  assert.equal(out.enabled, true, '要长时无视开关');
+  assert.equal(out.target, INTENT_DEFAULTS.longTarget, '用长档目标');
+  assert.equal(out.intent, 'long');
+});
+
+test('applyIntent：识别到「写长」且带显式字数 → 用那个字数', () => {
+  const out = applyIntent({ ...LR_BASE }, detectLengthIntent('写一篇 5000 字的故事'));
+  assert.equal(out.target, 5000);
+});
+
+test('applyIntent：★ 识别到「简短」→ 关续写 + 给提示词（不能靠目标字数压短）', () => {
+  const out = applyIntent({ ...LR_BASE, enabled: true }, detectLengthIntent('简短一点'));
+  assert.equal(out.enabled, false, '短档不续写');
+  assert.equal(out.target, 0, '目标字数压不短已经写出来的内容');
+  assert.ok(out.hint.includes(String(INTENT_DEFAULTS.shortTarget)), '提示词里要写明字数上限');
+});
+
+test('applyIntent：无意图 + 长文开启 → 用配置目标（默认 1200 当刹车）', () => {
+  const out = applyIntent({ ...LR_BASE, enabled: true, target: 1200 }, { kind: 'none', target: null });
+  assert.equal(out.target, 1200);
+  assert.equal(out.hint, '');
+});
+
+test('applyIntent：无意图 + 长文关闭 → 目标归零（只写一段）', () => {
+  const out = applyIntent({ ...LR_BASE, enabled: false, target: 1200 }, { kind: 'none', target: null });
+  assert.equal(out.target, 0, '关着时给目标是形同虚设的（!enabled 会直接 return false）');
+  assert.equal(out.enabled, false);
+});
+
+test('applyIntent：不修改入参（意图只影响这一次回复）', () => {
+  const lr = { ...LR_BASE, enabled: false };
+  applyIntent(lr, detectLengthIntent('写长一点'));
+  assert.equal(lr.enabled, false, '不能把临时开启写回配置');
 });
 
 // ---------- 规划：提示语 ----------
