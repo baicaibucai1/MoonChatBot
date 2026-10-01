@@ -113,6 +113,12 @@ async function chatWithBot(botId, content, opts = {}) {
     },
   }] : [];
   let tools = [...(WEB_TOOLS || []), ...COLD_TOOLS];
+  // ---- 长度自主权：给不给模型「自己决定写多长」的工具 ----
+  // 关键词识别只能认显式说法，「帮我写个方案」该写多长只有模型自己清楚。
+  // 但权限必须由人控：默认「建议式」，它只能在设定的区间里要。
+  const perm = longreply.resolveLengthPerm(cfg, bot);
+  const lengthToolDef = longreply.lengthTool(perm);
+  if (lengthToolDef) tools.push(lengthToolDef);
   if (!tools.length) tools = undefined;
 
   // ---- 长文：先规划，再逐段写 ----
@@ -170,6 +176,7 @@ async function chatWithBot(botId, content, opts = {}) {
   // 用量记录：每轮成功用精确 usage，失败用本地估算兜底（失败请求同样计费）。
   let reply = '';
   let res = null;
+  let modelWantedLen = 0;  // 模型通过 set_reply_length 自定的字数（0 = 没声明）
   let streamedAll = '';   // 跨轮累积的已流式文本（replace 前缀约束）
   const MAX_ROUNDS = 3;
   // 流式推送前剥离【记录】元标记：模型按规则把它写在回复末尾，若随流式下发，
@@ -229,14 +236,67 @@ async function chatWithBot(botId, content, opts = {}) {
       } else if (tc.function.name === 'recall_memory') {
         const text = memory.readColdFile(botId, String(args.key || ''));
         content = text || `未找到可读取的冷记忆文件：${args.key}`;
+      } else if (tc.function.name === 'set_reply_length') {
+        // ★ 长度声明是**本地消费**的：它不由模型再用一次往返去读结果，
+        //   而是直接改写本次回复的续写参数（eff），然后回一句「知道了」。
+        //   所以这里不计入工具循环的往返价值 —— 把它当成「模型给自己的写作备忘」。
+        const want = longreply.clampLengthRequest(args.chars, perm);
+        if (!want) {
+          content = '长度自主权已关闭，请按默认长度作答。';
+        } else {
+          modelWantedLen = want.chars;
+          eff.target = want.chars;
+          // 模型要写长 → 必须开续写（哪怕长文开关是关的），否则目标数字毫无意义
+          if (want.chars > 0) eff.enabled = true;
+          content = want.clamped
+            ? `已记录：本次按 ${want.chars} 字作答（你请求的字数超出允许范围 ${want.min}–${want.max}，已收敛）。请接着写。`
+            : `已记录：本次按 ${want.chars} 字作答。请接着写。`;
+          console.log(`[bot:${botId}] 模型自定长度：要 ${args.chars} → 实际 ${want.chars} 字` +
+            `${want.clamped ? '（已收敛）' : ''}${args.reason ? `；理由：${String(args.reason).slice(0, 40)}` : ''}`);
+        }
       } else {
         content = '未知工具';
       }
       messages.push({ role: 'tool', tool_call_id: tc.id, content: String(content).slice(0, 8000) });
     }
+    // ★ 模型这一轮只声明了长度、一个字正文都没写 → 必须在**同一轮循环内**再走一次，
+    //   否则循环耗尽（MAX_ROUNDS）后 reply 为空，直接 return '' 会把整次回复丢掉。
+    //   这不是模型不听话：工具调用与正文分开返回是合规行为（不少模型收到 tool 结果后才动笔）。
+    //   所以补一条明确的「现在开始写」，把正文捞回来。
+    if (!reply && !res.content && toolCalls.some((tc) => tc.function.name === 'set_reply_length')) {
+      messages.push({ role: 'user', content: '（长度已记录。现在请直接开始写正文，不要再调用任何工具。）' });
+    }
   }
   if (!reply && res) reply = res.content || '';
   if (!reply) return '';
+
+  // ★ 模型在工具循环里才声明长度，而规划阶段跑在循环**之前** —— 这时如果
+  //   声明长度 > 2000 且还没大纲，就补一次规划。否则「模型自己要写 3000 字」
+  //   会退化成无大纲硬写，段落之间没有推进关系。
+  if (modelWantedLen > longreply.PLAN_THRESHOLD && !plan && eff.enabled) {
+    try {
+      const want = longreply.estimateSegments(eff.target, eff.segments);
+      const pr = await models.chat(
+        model,
+        [...messages, { role: 'user', content: longreply.planPrompt(eff.target, want) }],
+        { apiKey, maxTokens: 800 },
+      );
+      memory.recordUsage(botId, model.id, { usage: pr.usage, promptTokens: pr.promptTokens, ok: true });
+      const parsed = longreply.parsePlan(pr.content);
+      if (parsed.length >= 2) {
+        plan = longreply.fillPlanChars(parsed, eff.target);
+        console.log(`[bot:${botId}] 模型自定长度的补充规划：${plan.length} 段 / 目标 ${eff.target} 字`);
+        // 首段结构得让它看见 —— 与常规规划路径保持一致（否则它不知道这段在全局里的位置）。
+        // 注意：正文此刻已经在手上了，所以这条只作为「接下来接着写」的约束，
+        // 不会让模型重写首段（续写用的是 assistant prefix，它看得见自己写过什么）。
+        messages.push({ role: 'user', content: longreply.segPromptFirst(plan, eff.target) });
+      }
+    } catch (err) {
+      // 补规划失败不影响已写正文 —— 退化成「按目标续写」，与之前一致
+      memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
+      console.log(`[bot:${botId}] 模型自定长度的补充规划失败，按目标续写：${err.message}`);
+    }
+  }
 
   // 解析 AI 自动记录的关键剧情（【记录】xxx）→ 结构化事件流
   // ★ 抽成函数：分段续写下**每一段**都要跑一次 —— 否则上一段的【记录】会被埋在正文中间，

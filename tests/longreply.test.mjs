@@ -27,6 +27,12 @@ const {
   detectLengthIntent,
   parseLengthChars,
   applyIntent,
+  LENGTH_PERMISSIONS,
+  PERM_DEFAULTS,
+  lengthTool,
+  permRange,
+  resolveLengthPerm,
+  clampLengthRequest,
   planPrompt,
   parsePlan,
   fillPlanChars,
@@ -376,6 +382,71 @@ test('applyIntent：不修改入参（意图只影响这一次回复）', () => 
   const lr = { ...LR_BASE, enabled: false };
   applyIntent(lr, detectLengthIntent('写长一点'));
   assert.equal(lr.enabled, false, '不能把临时开启写回配置');
+});
+
+// ---------- 长度自主权：让模型自己决定写多长，但权限由人控 ----------
+
+test('resolveLengthPerm：默认「建议式」（既不关死也不放任）', () => {
+  const p = resolveLengthPerm({}, {});
+  assert.equal(p.mode, 'limited');
+  assert.equal(p.min, PERM_DEFAULTS.min);
+  assert.equal(p.max, PERM_DEFAULTS.max);
+});
+
+test('resolveLengthPerm：角色 > 全局，且只认白名单里的三档', () => {
+  // ⚠️ 签名是 (cfg, bot) —— 第一个参数是全局配置
+  assert.equal(resolveLengthPerm({ lengthPerm: 'full' }, {}).mode, 'full');
+  assert.equal(resolveLengthPerm({ lengthPerm: 'full' }, { lengthPerm: 'off' }).mode, 'off', '角色就近优先');
+  assert.equal(resolveLengthPerm({ lengthPerm: 'off' }, { lengthPerm: 'full' }).mode, 'full', '角色能把全局的 off 提上来');
+  // 手滑写个奇怪字符串 → 回落默认，不能变成「未知档位」
+  assert.equal(resolveLengthPerm({ lengthPerm: 'yes' }, {}).mode, PERM_DEFAULTS.mode);
+  assert.equal(resolveLengthPerm({ lengthPerm: 'yes' }, { lengthPerm: 'off' }).mode, 'off', '全局非法值不该挡住合法角色值');
+});
+
+test('★ permRange：off 不给工具，full 放开区间', () => {
+  assert.equal(permRange({ mode: 'off' }), null, 'off 时必须返回 null —— 调用方据此不挂工具');
+  assert.deepEqual(permRange({ mode: 'full' }), { min: 100, max: 100000 });
+  assert.deepEqual(permRange({ mode: 'limited', min: 500, max: 6000 }), { min: 500, max: 6000 });
+});
+
+test('permRange：min 配得比 max 大时不产生空区间（取 min 兜底）', () => {
+  // 手滑填反了 → 结果是「就按 min 这个数」，而不是一个 min>max 的区间（那会让 clamp 行为诡异）
+  assert.deepEqual(permRange({ mode: 'limited', min: 5000, max: 100 }), { min: 5000, max: 5000 });
+});
+
+test('lengthTool：off 时不该有工具，其它档位描述里带上真实区间', () => {
+  assert.equal(lengthTool({ mode: 'off' }), null);
+  const t = lengthTool({ mode: 'limited', min: 800, max: 4000 });
+  assert.equal(t.function.name, 'set_reply_length');
+  assert.ok(t.function.description.includes('800') && t.function.description.includes('4000'),
+    '描述里要写明可选区间，否则模型不知道该要多少');
+});
+
+test('★ clampLengthRequest：越界不报错，收敛到边界', () => {
+  const perm = { mode: 'limited', min: 500, max: 6000 };
+  // 要太多 → 给上限（不是拒绝，否则模型得重要一次，多一次往返）
+  assert.deepEqual(clampLengthRequest(20000, perm), { chars: 6000, clamped: true, min: 500, max: 6000 });
+  // 要太少 → 给下限
+  assert.deepEqual(clampLengthRequest(50, perm), { chars: 500, clamped: true, min: 500, max: 6000 });
+  // 区间内 → 原样
+  assert.deepEqual(clampLengthRequest(3000, perm), { chars: 3000, clamped: false, min: 500, max: 6000 });
+});
+
+test('clampLengthRequest：模型给不出数字时按上限（等于「按你能给的最长写」）', () => {
+  const perm = { mode: 'limited', min: 500, max: 6000 };
+  for (const bad of [undefined, null, 'abc', 0, -100, NaN]) {
+    assert.equal(clampLengthRequest(bad, perm).chars, 6000, `${String(bad)} 应回落到上限`);
+  }
+});
+
+test('clampLengthRequest：off 时返回 null（调用方据此拒绝）', () => {
+  assert.equal(clampLengthRequest(3000, { mode: 'off' }), null);
+});
+
+test('clampLengthRequest：full 档下区间放到最宽', () => {
+  const r = clampLengthRequest(50000, { mode: 'full' });
+  assert.equal(r.chars, 50000, 'full 档下 5 万字以内应原样通过');
+  assert.equal(r.clamped, false);
 });
 
 // ---------- 规划：提示语 ----------

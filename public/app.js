@@ -1096,6 +1096,12 @@ function openBotSettings(id) {
             <option value="true" ${b.longReplyAuto === true ? 'selected' : ''}>开启</option>
             <option value="false" ${b.longReplyAuto === false ? 'selected' : ''}>关闭</option>
           </select></div>
+          <div class="field"><label>长度自主权</label><select id="f-length-perm">
+            <option value="" ${b.lengthPerm === undefined || b.lengthPerm === null ? 'selected' : ''}>跟随全局设置（当前：${{ off: '关闭', limited: '建议式', full: '全权' }[state.lengthPerm || 'limited']}）</option>
+            <option value="off" ${b.lengthPerm === 'off' ? 'selected' : ''}>关闭</option>
+            <option value="limited" ${b.lengthPerm === 'limited' ? 'selected' : ''}>建议式</option>
+            <option value="full" ${b.lengthPerm === 'full' ? 'selected' : ''}>全权</option>
+          </select></div>
           <div class="field"><label>被截断时</label><div class="value">${IC_CHECK}<span class="lb">自动补全，不受此开关影响</span></div></div>
         </div>
         <div class="frm-hint">这里只管角色本体。QQ 连接（AppID / AppSecret / 运行环境）在角色卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
@@ -3382,6 +3388,8 @@ async function saveBot(id) {
       : undefined,
     // 长度意图识别：空 = 跟随全局（闲聊角色可以单独关掉，免得被「详细」两个字拉到 3000 字）
     longReplyAuto: $('#f-long-auto') ? ($('#f-long-auto').value === 'true' ? true : $('#f-long-auto').value === 'false' ? false : undefined) : undefined,
+    // 长度自主权：空 = 跟随全局；三档之一 = 单独覆盖
+    lengthPerm: $('#f-length-perm') && $('#f-length-perm').value ? $('#f-length-perm').value : undefined,
   };
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
@@ -4035,6 +4043,8 @@ function renderGeneral() {
 //   一套结构同时容纳「开关行 / 单输入行 / 双输入行 / 下拉行」，不再各自打补丁。
 function renderGeneration() {
   const lrOn = state.longReply === true;
+  // 三档选中的那份状态要跟着 state 走 —— 否则保存一次、切走再回来，选中态就丢了
+  _gPerm = state.lengthPerm || 'limited';
   const hint = (t) => `<div style="margin-top:6px;font-size:11.5px;line-height:1.65;color:var(--on-surface-faint)">${t}</div>`;
   const label = (t) => `<div style="font-size:12.5px;font-weight:600;color:var(--on-surface);margin-bottom:8px">${t}</div>`;
   const num = (id, v, min, max, step, w) => `<input id="${id}" type="number" min="${min}" max="${max}" step="${step}" value="${v}" style="width:${w}px">`;
@@ -4085,6 +4095,27 @@ function renderGeneration() {
             ${num('g-short-len', clampInt(state.longReplyShortTarget, 300, 50, 10000), 50, 10000, 50, 110)}${unit('字 · 简短时')}
           </div>` + hint('长档超过 2000 字会先让模型列一份分段大纲再逐段写；大纲只在内部使用，你看到的仍是成文。'))}
 
+        ${box(`${label('长度自主权（让模型自己决定写多长）')}
+          <div class="mode-cards" id="g-perm">
+            ${[
+              { v: 'off', n: '关闭', d: '长度只由上面的设置决定，模型无权改' },
+              { v: 'limited', n: '建议式', d: '模型可申请长度，但只能在下方区间里选' },
+              { v: 'full', n: '全权', d: '区间放开到 100–100000，基本由它自己定' },
+            ].map(m => `
+              <div class="mode-card ${(state.lengthPerm || 'limited') === m.v ? 'active' : ''}" data-p="${m.v}" onclick="pickPerm(this)">
+                <div class="mode-name">${m.n}</div>
+                <div class="mode-desc">${m.d}</div>
+              </div>`).join('')}
+          </div>`
+          + hint('模型会在动笔写长内容前<strong>先声明一个字数</strong>（如「这次要 3000 字」），续写引擎就按那个数走。简短问答它不会声明。<br>「建议式」是为它留出判断空间、又不让它失控 —— 越界会<strong>自动收敛到区间边界</strong>，而不是报错。'))}
+
+        ${box(`${label('允许区间（建议式生效）')}
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            ${num('g-len-min', clampInt(state.lengthMin, 500, 100, 50000), 100, 50000, 100, 110)}${unit('字 · 最少')}
+            <span style="width:8px"></span>
+            ${num('g-len-max', clampInt(state.lengthMax, 6000, 100, 100000), 100, 100000, 500, 110)}${unit('字 · 最多')}
+          </div>` + hint('模型申请的字数会被夹在这个区间内。选「全权」时此区间不生效（放开为 100–100000）。'))}
+
         ${box(`${label('蒸馏 / 总结模型')}
           <select id="g-distill" class="gen-sel" style="width:100%">
             <option value="">跟随各机器人绑定模型（默认）</option>
@@ -4099,6 +4130,13 @@ function renderGeneration() {
 function pickMode(el) {
   _gMode = el.dataset.m;
   document.querySelectorAll('#g-modes .mode-card').forEach(c => c.classList.toggle('active', c === el));
+}
+
+// 长度自主权三档：只是切换选中态，保存时由 saveGeneration 读取
+let _gPerm = 'limited';
+function pickPerm(el) {
+  _gPerm = el.dataset.p;
+  document.querySelectorAll('#g-perm .mode-card').forEach(c => c.classList.toggle('active', c === el));
 }
 
 // 设置页「联网」分组：只管联网（开关 + 搜索方式）
@@ -4127,6 +4165,10 @@ async function saveGeneration() {
     longReplyAuto: !!$('#g-long-auto').checked,
     longReplyLongTarget: clampInt($('#g-long-len') ? $('#g-long-len').value : undefined, 3000, 500, 100000),
     longReplyShortTarget: clampInt($('#g-short-len') ? $('#g-short-len').value : undefined, 300, 50, 10000),
+    // 长度自主权：三档 + 允许区间
+    lengthPerm: _gPerm,
+    lengthMin: clampInt($('#g-len-min') ? $('#g-len-min').value : undefined, 500, 100, 50000),
+    lengthMax: clampInt($('#g-len-max') ? $('#g-len-max').value : undefined, 6000, 100, 100000),
   });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   if (r.ok) loadState();
