@@ -16,6 +16,9 @@ dist-setup/
 # 本地临时诊断/核对产物：一次一个目录（.tmp-diagnostics/ .tmp-c8/ …），用通配统一收口
 .tmp-*/
 
+# 真机验证脚本（scripts/verify-*.mjs）产出的截图：每次跑都不同，仅供本地肉眼核对
+scripts/shots/
+
 # dev:sandbox 的运行时状态（PID / 端口 / 沙箱目录），会随进程启停变化，不进版本库
 # ↓ 已被下面整条 /.workbuddy/ 覆盖，保留注释说明这个文件的来历
 # .workbuddy/dev-sandbox.json

@@ -2156,3 +2156,104 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   .session .s-ops button { opacity: .85; }
   .model-card:hover, .stat-card:hover, .mode-card:hover { transform: none; }
 }
+
+/* =========================================================
+   长文写作进度条（composer 上方）
+   —— 只在长文多段写作时出现；写完淡出，不占位（height 0 → auto 的过渡用 max-height 做）
+   ========================================================= */
+.chat-progress {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0 14px;
+  transition: max-height .22s ease, opacity .22s ease, padding .22s ease;
+}
+.chat-progress.on {
+  max-height: 56px;
+  opacity: 1;
+  padding: 10px 14px 2px;
+}
+.chat-progress .cp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.chat-progress .cp-text {
+  font-size: 12px;
+  /* 次级信息：用 on-surface-variant 而不是正文色，避免和气泡抢注意力 */
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;   /* 段数/字数跳动时宽度不抖 */
+}
+.chat-progress .cp-bar {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  overflow: hidden;
+}
+.chat-progress .cp-fill {
+  height: 100%;
+  width: 0;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  transition: width .3s ease;
+}
+/* 不确定进度（无大纲、只有目标字数）：总量不知道，做流动动画而不是假装有百分比。
+   用一个比容器宽的渐变条横向平移 —— 比 transform 动画兼容性好，且不触发重排。 */
+.chat-progress .cp-bar.indeterminate .cp-fill {
+  width: 40%;
+  background: linear-gradient(90deg,
+    transparent, var(--accent) 40%, var(--accent) 60%, transparent);
+  animation: cp-slide 1.35s ease-in-out infinite;
+}
+@keyframes cp-slide {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(310%); }
+}
+/* 用户关掉动效时别闪 —— 让它停下来并保持满宽的一半，至少还能看出「在忙」 */
+@media (prefers-reduced-motion: reduce) {
+  .chat-progress .cp-bar.indeterminate .cp-fill {
+    animation: none;
+    transform: translateX(75%);
+  }
+}
+
+/* =========================================================
+   输出设置弹层（发送按钮旁）
+   —— 「标签 + 说明」在左，「控件」在右的单行结构；
+      与设置页的「标签在上 / 控件在下」不同：这里是窄弹层，逐行更省纵向空间
+   ========================================================= */
+.modal-card.os-card { max-width: 460px; width: calc(100vw - 48px); }
+.os-sub {
+  font-size: 12px;
+  color: var(--on-surface-variant);
+}
+.os-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--outline);
+}
+.os-row:last-child { border-bottom: 0; }
+.os-row .os-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--on-surface);
+}
+.os-row .os-desc {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--on-surface-variant);
+}
+/* 控件固定一个可读宽度：让「跟随全局（当前：建议式）」这类长选项不被压成两行 */
+.os-row > select,
+.os-row > input {
+  flex: 0 0 190px;
+  width: 190px;
+}
+@media (max-width: 520px) {
+  .os-row { flex-direction: column; align-items: stretch; gap: 6px; }
+  .os-row > select, .os-row > input { flex: 1 1 auto; width: 100%; }
+}

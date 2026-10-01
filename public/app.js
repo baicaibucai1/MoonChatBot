@@ -584,8 +584,13 @@ function renderChatTabHtml(b) {
           <button class="danger sm" onclick="clearThread('${id}','${tid}')">清空</button>
         </div>
         <div class="session-list" id="session-list"><div class="empty-hint">加载中…</div></div>
+        <div class="chat-progress" id="chat-progress">
+          <div class="cp-head"><span class="cp-text"></span></div>
+          <div class="cp-bar"><div class="cp-fill"></div></div>
+        </div>
         <div class="chat-input">
           <textarea id="f-chat" rows="1" placeholder="与 ${esc(b.name || b.id)} 说话… Enter 发送，Shift+Enter 换行" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${id}')}"></textarea>
+          <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这个角色接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
           <button class="primary sm" onclick="directChat('${id}')">发送</button>
         </div>
       </div>
@@ -2195,7 +2200,7 @@ async function loadSessions(id, tid) {
 //                            可安全回落一次性 POST /api/bots/:id/chat
 //   noFallback 为真        ：请求已经打到服务端（user 消息已落库，回复可能也已生成）
 //                            → 绝不能重放，否则同一条 user 消息会被写两遍
-async function streamBotChat(id, content, tid, onDelta) {
+async function streamBotChat(id, content, tid, onDelta, onProgress) {
   let resp;
   try {
     resp = await fetch(API_BASE + `/api/bots/${id}/chat/stream`, {
@@ -2212,6 +2217,7 @@ async function streamBotChat(id, content, tid, onDelta) {
   await readAdminSSE(resp.body, (ev) => {
     saw = true;
     if (ev.type === 'text') { if (onDelta) onDelta(String(ev.d || '')); }
+    else if (ev.type === 'progress') { if (onProgress) { try { onProgress(ev.p || {}); } catch {} } }
     else if (ev.type === 'done') done = ev;
     else if (ev.type === 'err') srvErr = ev.err || '调用失败';
   }, () => { /* 传输层异常：交由下面的「零事件」判定统一处理 */ });
@@ -2239,6 +2245,152 @@ function appendUserBubble(container, content) {
     <div class="bubble md">${md(content)}<div class="time">${new Date().toLocaleString()}</div></div>`;
   container.appendChild(el);
   container.scrollTop = container.scrollHeight;
+}
+
+// ---- 输出设置弹层（发送按钮旁）----
+// 为什么单独做一个：这几个开关是「边说边调」的 —— 想让它这次写短点、这次别联网，
+// 不该逼用户离开对话去翻角色设置弹窗（那里还混着模型 / 提示词 / 渠道等一堆无关项）。
+// 所以这里只放「影响下一次回复形态」的四项，且**只覆盖当前角色**。
+//
+// ⚠️ 三个值语义必须与角色设置弹窗完全一致（'' = 跟随全局 / true / false），
+//    否则同一份配置从两个入口看到的状态会互相矛盾 —— 这是「同一操作全局唯一切入口」
+//    的一个刻意例外：入口两处，但**写的是同一份字段、同一套三态语义**。
+function openOutputSheet(id) {
+  const old = $('#output-sheet');
+  if (old) old.remove();
+  const b = (state.bots || []).find((x) => x.id === id);
+  if (!b) return;
+  const tri = (v) => (v === true ? 'true' : v === false ? 'false' : '');
+  const lrOn = longReplyEnabled(b);
+  // 全局目标字数（给占位符用）：与角色设置弹窗同一个算法，clamp 到 [0,100000]
+  const lrTarget = clampInt(state.longReplyTarget, 0, 0, 100000);
+  const gPerm = { off: '关闭', limited: '建议式', full: '全权' }[state.lengthPerm || 'limited'];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'output-sheet';
+  overlay.innerHTML = `
+    <div class="modal-card os-card">
+      <div class="modal-head">
+        <span>${IC_SLIDERS}<span class="lb">输出设置</span></span>
+        <span class="spacer"></span>
+        <span class="os-sub">仅影响「${esc(b.name || b.id)}」的下一次回复</span>
+      </div>
+      <div class="modal-body">
+        <div class="os-row">
+          <div class="os-label">长文模式<div class="os-desc">分多段续写，把长内容写完整</div></div>
+          <select id="os-long">
+            <option value="" ${tri(b.longReply) === '' ? 'selected' : ''}>跟随全局（当前：${lrOn ? '开启' : '关闭'}）</option>
+            <option value="true" ${b.longReply === true ? 'selected' : ''}>开启</option>
+            <option value="false" ${b.longReply === false ? 'selected' : ''}>关闭</option>
+          </select>
+        </div>
+        <div class="os-row">
+          <div class="os-label">目标字数<div class="os-desc">留空跟随全局；填 0 = 不限长度</div></div>
+          <input id="os-target" type="number" min="0" step="500" placeholder="跟随全局（${lrTarget || '不限'}）"
+                 value="${b.longReplyTarget === undefined || b.longReplyTarget === null ? '' : b.longReplyTarget}">
+        </div>
+        <div class="os-row">
+          <div class="os-label">听懂长度意图<div class="os-desc">你说「写长一点 / 简短」时自动调整</div></div>
+          <select id="os-auto">
+            <option value="" ${tri(b.longReplyAuto) === '' ? 'selected' : ''}>跟随全局（当前：${state.longReplyAuto === false ? '关闭' : '开启'}）</option>
+            <option value="true" ${b.longReplyAuto === true ? 'selected' : ''}>开启</option>
+            <option value="false" ${b.longReplyAuto === false ? 'selected' : ''}>关闭</option>
+          </select>
+        </div>
+        <div class="os-row">
+          <div class="os-label">长度自主权<div class="os-desc">让模型自己决定这次写多长</div></div>
+          <select id="os-perm">
+            <option value="" ${tri(b.lengthPerm) === '' ? 'selected' : ''}>跟随全局（当前：${gPerm}）</option>
+            <option value="off" ${b.lengthPerm === 'off' ? 'selected' : ''}>关闭</option>
+            <option value="limited" ${b.lengthPerm === 'limited' ? 'selected' : ''}>建议式</option>
+            <option value="full" ${b.lengthPerm === 'full' ? 'selected' : ''}>全权</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-foot cf-foot">
+        <button class="ghost" onclick="closeOutputSheet()">取消</button>
+        <button class="primary" onclick="saveOutputSheet('${b.id}')">保存</button>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeOutputSheet(); });
+  document.body.appendChild(overlay);
+}
+function closeOutputSheet() {
+  const el = $('#output-sheet');
+  if (el) el.remove();
+}
+// 只改这四个字段，其余原样带过去。
+// ⚠️ 必须提交**完整** bots 数组（每个元素都是完整对象）—— PUT /api/config 是整份覆盖，
+//    只送 { id } 会把别的角色的配置全抹掉（saveBot 也是这么做的，见上）。
+async function saveOutputSheet(id) {
+  const bots = (state.bots || []).map((x) => ({ ...x }));
+  const b = bots.find((x) => x.id === id);
+  if (!b) return closeOutputSheet();
+  const triOf = (sel) => {
+    const el = $(sel);
+    if (!el || !el.value) return undefined;
+    return el.value === 'true';
+  };
+  const tEl = $('#os-target');
+  b.longReply = triOf('#os-long');
+  b.longReplyTarget = tEl && tEl.value.trim() !== '' ? clampInt(tEl.value, 0, 0, 100000) : undefined;
+  b.longReplyAuto = triOf('#os-auto');
+  b.lengthPerm = $('#os-perm') && $('#os-perm').value ? $('#os-perm').value : undefined;
+  const r = await api('/api/config', 'PUT', { bots });
+  if (r.ok) { closeOutputSheet(); await loadState(); toast('已更新输出设置', 'ok'); }
+  else toast(r.err, 'err');
+}
+
+// ---- 长文写作进度条 ----
+// 挂在输入条上方（composer 顶部），只在长文多段写作时出现，写完自动淡出。
+//
+// 两种形态，按服务端给的 pct 是否为 null 分：
+//   pct 是数字 → **确定进度**：条子按百分比填充 + 「第 2/5 段 · 1234/3000 字」
+//   pct 是 null → **不确定进度**：条子做流动动画（无大纲、只有目标字数，总量不知道）
+// 为什么不由前端自己按字数算百分比：字数是对不上的（服务端 chars 用的是 streamClean
+// 之后的长度，但「目标」是软的，写超很正常），前端算必然出现「99% 卡住」或「超过 100%」。
+// 段数是服务端唯一确知且离散的量，所以进度只信 pct。
+let _progTimer = null;
+function setProgress(p) {
+  const box = $('#chat-progress');
+  if (!box) return;
+  const phase = p && p.phase;
+  if (!phase || phase === 'done') { hideProgress(); return; }
+  const bar = box.querySelector('.cp-fill');
+  const txt = box.querySelector('.cp-text');
+  const wrap = box.querySelector('.cp-bar');
+  if (!bar || !txt || !wrap) return;
+  const segTotal = Number(p.segTotal) || 0;
+  const seg = Number(p.seg) || 0;
+  const chars = Number(p.chars) || 0;
+  const target = Number(p.target) || 0;
+  // 有确定 pct → 实心填充；否则流动条（class 切 indeterminate，CSS 里给动画）
+  if (p.pct === null || p.pct === undefined) {
+    wrap.classList.add('indeterminate');
+    bar.style.width = '';
+  } else {
+    wrap.classList.remove('indeterminate');
+    bar.style.width = p.pct + '%';
+  }
+  // 文案：能说段数就说段数（信息量最大），否则说字数，再否则只说在忙什么
+  let label;
+  if (phase === 'plan') label = '正在规划结构…';
+  else if (segTotal > 0) label = `正在写第 ${Math.max(1, seg)}/${segTotal} 段`;
+  else if (target > 0) label = `正在写 · ${chars}/${target} 字`;
+  else label = `正在写 · ${chars} 字`;
+  txt.textContent = label;
+  box.classList.add('on');
+  // 安全网：万一服务端没发 done（连接被掐），15 秒后自己收掉，别让条子永远挂着
+  clearTimeout(_progTimer);
+  _progTimer = setTimeout(hideProgress, 15000);
+}
+function hideProgress() {
+  clearTimeout(_progTimer);
+  const box = $('#chat-progress');
+  if (!box) return;
+  box.classList.remove('on');
+  const bar = box.querySelector('.cp-fill');
+  if (bar) bar.style.width = '';
 }
 
 // 流式气泡的绘制器：先当「思考中」占位，收到首字后原地变成逐字增长的 md 气泡。
@@ -2299,7 +2451,7 @@ async function directChat(id) {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    });
+    }, (p) => setProgress(p));
     if (r && r.ok) {
       paint(r.reply, false);
       toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
@@ -2314,6 +2466,7 @@ async function directChat(id) {
       toast('对话失败: ' + err.message, 'err');
     }
   } finally {
+    hideProgress();
     _chatting.delete(id);
     _streaming.delete(id);
     renderSidebar();
@@ -2388,7 +2541,7 @@ async function modalChat(id, tid) {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    });
+    }, (p) => setProgress(p));
     if (r && r.ok) paint(r.reply, false);
   } catch (err) {
     if (!err.noFallback) {
@@ -2399,6 +2552,7 @@ async function modalChat(id, tid) {
       toast('对话失败: ' + err.message, 'err');
     }
   } finally {
+    hideProgress();
     _chatting.delete(id);
     _streaming.delete(id);
     renderSidebar();
@@ -4566,6 +4720,8 @@ $('#btn-add-bot').addEventListener('click', () => { view = { type: 'bot-form' };
 Object.assign(window, {
   switchThread, newThread, renameThreadUI, delThread, clearThread,
   switchBotTab, openBotSettings, closeBotSettings,
+  // 输出设置弹层（发送按钮旁）
+  openOutputSheet, closeOutputSheet, saveOutputSheet,
   // 挂在 oncontextmenu 上：lint 的 no-unused-vars 只认 onclick 里的引用
   sideCtx,
 });

@@ -22,6 +22,7 @@ const {
   estimateSegments,
   continueMessages,
   isDuplicate,
+  progressOf,
   INTENT_DEFAULTS,
   INTENT_CHARS_FLOOR,
   detectLengthIntent,
@@ -285,6 +286,48 @@ test('isDuplicate：比对前吃掉空白（拼接加的换行不该影响判定
 
 test('isDuplicate：首段（已写为空）不可能重复', () => {
   assert.equal(isDuplicate('任何内容，哪怕很长很长很长很长。', ''), false);
+});
+
+// ---------- progressOf：长文写作进度（界面进度条的数据源）----------
+
+test('progressOf：有大纲时按段数给百分比', () => {
+  const p = progressOf({ phase: 'write', seg: 3, segTotal: 5, chars: 1800, target: 3000 });
+  assert.equal(p.pct, 60);
+  assert.equal(p.seg, 3);
+  assert.equal(p.segTotal, 5);
+  assert.equal(p.chars, 1800);
+  assert.equal(p.target, 3000);
+});
+
+test('progressOf：无大纲（段数 0）不给百分比 —— 让前端画流动条而不是假的进度', () => {
+  // ★ 这条是刻意的：字数目标是软的，写超很正常，按字数算必然出现「99% 卡住」或 >100%
+  const p = progressOf({ phase: 'write', seg: 0, segTotal: 0, chars: 1200, target: 3000 });
+  assert.equal(p.pct, null);
+  assert.equal(p.chars, 1200);
+});
+
+test('progressOf：规划阶段恒为 0', () => {
+  assert.equal(progressOf({ phase: 'plan', target: 3000 }).pct, 0);
+});
+
+test('progressOf：收尾一律 100 —— 否则条子会停在 97% 被气泡收尾抹掉', () => {
+  // seg 停在倒数第二格也不能回退
+  assert.equal(progressOf({ phase: 'done', seg: 4, segTotal: 5, chars: 9000, target: 3000 }).pct, 100);
+  // 写超目标（chars > target）也必须封顶 100
+  assert.equal(progressOf({ phase: 'done', seg: 5, segTotal: 5, chars: 9999, target: 3000 }).pct, 100);
+});
+
+test('progressOf：段数超出大纲总段数时百分比封顶 100，不溢出', () => {
+  assert.equal(progressOf({ phase: 'write', seg: 7, segTotal: 5 }).pct, 100);
+});
+
+test('progressOf：脏输入不炸（缺参 / 非数字 / 负数 / 未知阶段）', () => {
+  const p = progressOf({});
+  assert.equal(p.pct, null);
+  assert.equal(p.phase, 'write');    // 未知阶段兜底成 write
+  assert.equal(p.seg, 0);
+  assert.equal(progressOf({ phase: 'zzz', seg: -3, chars: 'abc' }).seg, 0);
+  assert.equal(progressOf().phase, 'write');   // 完全不传参也不抛
 });
 
 // ---------- 长度意图识别：用户说「写长一点」就该真的写长 ----------

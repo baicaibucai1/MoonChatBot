@@ -156,7 +156,14 @@ test('流式接口返回 text/event-stream 且事件序为 start → text… →
   assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
   assert.equal(events[0].type, 'start', '首帧应是 start（已写入 user 消息）');
   assert.equal(events[events.length - 1].type, 'done', '末帧应是 done');
-  assert.ok(events.slice(1, -1).every((e) => e.type === 'text'), '中间应全是 text 帧');
+  // ★ 中间帧允许 text 与 progress 两种：
+  //   progress 是长文进度条的数据源（{phase,seg,segTotal,chars,target,pct}），
+  //   与正文走**两条独立信道** —— 混进 text 里前端就得去解析控制字符了。
+  //   这里只要求「除了这两种，不许出现别的事件类型」。
+  const mid = events.slice(1, -1);
+  assert.ok(mid.every((e) => e.type === 'text' || e.type === 'progress'),
+    `中间应只有 text / progress 帧，实际出现：${[...new Set(mid.map((e) => e.type))].join(',')}`);
+  assert.ok(mid.some((e) => e.type === 'text'), '中间至少要有 text 帧');
 });
 
 test('每个模型分片对应一帧 text（后端没把流攒成一次性返回）', async () => {
@@ -181,6 +188,33 @@ test('done 帧带回 reply / threadId / pushed（与一次性 /chat 同构的收
   assert.equal(done.reply, FULL);
   assert.equal(done.pushed, false, '沙箱副本没设主 ID，不应触发推送');
   assert.ok(done.threadId, 'done 必须带上选定的线程 id');
+});
+
+test('progress 帧结构合法：阶段 + 段数 + 字数，且收尾帧 pct 为 100', async () => {
+  const { events } = await rawStream();
+  const prog = events.filter((e) => e.type === 'progress').map((e) => e.p);
+  assert.ok(prog.length > 0, '流式回复应至少下发一次 progress（前端靠它画进度条）');
+  for (const p of prog) {
+    assert.ok(['plan', 'write', 'done'].includes(p.phase), `未知阶段：${p.phase}`);
+    assert.equal(typeof p.seg, 'number');
+    assert.equal(typeof p.segTotal, 'number');
+    assert.equal(typeof p.chars, 'number');
+    // pct 为 null = 「不确定进度」（无大纲），前端画流动条；为数字时必须落在 0..100
+    if (p.pct !== null) assert.ok(p.pct >= 0 && p.pct <= 100, `pct 越界：${p.pct}`);
+  }
+  // ★ 末帧必须是 done + pct 100：否则进度条会卡在 9x% 然后被气泡收尾直接抹掉，看着像没写完
+  const last = prog[prog.length - 1];
+  assert.equal(last.phase, 'done', '最后一次 progress 应是 done');
+  assert.equal(last.pct, 100);
+});
+
+test('progress 的 chars 用 streamClean 之后的长度 —— 与气泡里显示的是同一个字符串', async () => {
+  const { events } = await rawStream();
+  const prog = events.filter((e) => e.type === 'progress').map((e) => e.p);
+  const done = prog[prog.length - 1];
+  // ★ 不能拿模型输出的原始长度：【记录】会被剥掉，按原始长度画进度条会走到 100%+ 再被截回。
+  assert.ok(done.chars <= FULL.length, `progress.chars(${done.chars}) 不该超过正文长度(${FULL.length})`);
+  assert.equal(done.chars, FULL.length, '收尾时 chars 应恰好等于最终正文长度');
 });
 
 test('缺 content 时在写 SSE 头之前就 400 早退（不落库、不建流）', async () => {

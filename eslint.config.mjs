@@ -94,6 +94,15 @@ export default [
     rules: CORRECTNESS,
   },
   {
+    // 真机验证脚本（scripts/verify-*.mjs）：含大量 page.evaluate(fn) ——
+    // 回调被序列化后送到浏览器里执行，里面的 document 是合法的浏览器全局。
+    // 与上面 lib/search.js 同一个理由，只是这些脚本整篇都在写跨上下文代码。
+    files: ['scripts/verify-*.mjs'],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
+  {
     // 前端：原生 <script>（非 module），靠全局作用域共享顶层函数，
     // 正是为了配合 index.html 里的内联 onclick="fn()"
     files: ['public/**/*.js'],

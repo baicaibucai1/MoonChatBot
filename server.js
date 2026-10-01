@@ -64,6 +64,8 @@ function makeChatFn(botId) {
 
 // 核心对话逻辑：记忆 + 历史 + 模型调用 + 关键剧情自动记录
 // opts.onDelta(累积全文)：提供时走流式（chatStreamCollect），每轮增量回调（跨轮累积拼接）
+// opts.onProgress(进度对象)：提供时下发长文写作进度（阶段 / 段数 / 字数），见 longreply.progressOf。
+//   与 onDelta 分开是有意的 —— 正文和进度是两条独立的信道，混在一起就得在正文里塞控制字符。
 // 返回模型回复（已剥离【记录】标记）；失败抛错。不负责写入会话记录。
 async function chatWithBot(botId, content, opts = {}) {
   const cfg = app.getConfig();
@@ -142,8 +144,18 @@ async function chatWithBot(botId, content, opts = {}) {
   // 压短靠提示词而不是目标字数：目标只管「没写够就继续」，已经写长了的目标压不短
   if (eff.hint) messages.push({ role: 'user', content: eff.hint });
 
+  // 进度上报（可选的 callback）：调用方没给就整个是空转，不影响任何行为。
+  // 包一层 try 是因为它纯属「锦上添花」，任何异常都不该连累正文生成。
+  const emitProgress = (o) => {
+    if (!opts.onProgress) return;
+    try { opts.onProgress(longreply.progressOf(o)); } catch {}
+  };
+  // 有大纲时总段数就是大纲段数；没有则给 0（表示「不确定」，前端画流动条而不是百分比）
+  const segTotal = () => (plan ? plan.length : 0);
+
   let plan = null;
   if (eff.enabled && eff.target > longreply.PLAN_THRESHOLD) {
+    emitProgress({ phase: 'plan', chars: 0, target: eff.target });
     const want = longreply.estimateSegments(eff.target, eff.segments);
     try {
       // 规划请求只做规划：明确禁止写正文，且给一个较小的 maxTokens（大纲不该长篇大论）
@@ -170,6 +182,8 @@ async function chatWithBot(botId, content, opts = {}) {
   }
   // 规划成功才给首段挂上结构（规划失败/不需要时 messages 保持原样，行为与之前完全一致）
   if (plan) messages.push({ role: 'user', content: longreply.segPromptFirst(plan, eff.target) });
+  // 规划阶段结束 → 进入写作阶段。此刻若已有大纲，总段数就已知，前端可以开始画确定的百分比。
+  emitProgress({ phase: 'write', seg: 0, segTotal: segTotal(), chars: 0, target: eff.target });
 
   // 调用模型（最多 3 轮工具循环）：模型可自主决定调用 web_search / web_fetch，
   // 服务端在本地执行搜索/抓正文后把结果回传，模型基于结果作答。
@@ -296,6 +310,8 @@ async function chatWithBot(botId, content, opts = {}) {
       memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
       console.log(`[bot:${botId}] 模型自定长度的补充规划失败，按目标续写：${err.message}`);
     }
+    // 补充规划改变了总段数（从「不确定」变成 N 段）→ 重新告诉前端一次
+    emitProgress({ phase: 'write', seg: 0, segTotal: segTotal(), chars: reply.length, target: eff.target });
   }
 
   // 解析 AI 自动记录的关键剧情（【记录】xxx）→ 结构化事件流
@@ -383,6 +399,15 @@ async function chatWithBot(botId, content, opts = {}) {
       `（${truncated ? '被截断→补全本段' : plan ? `按大纲写第 ${planIdx + 1}/${plan.length} 段` : '按目标追加'}）` +
       ` → 累计 ${reply.length} 字`);
     finishReason = segRes.finishReason;
+    // 进度：这一段落袋了 → 段数 +1、字数更新。放在拼接之后，保证 chars 与界面上看到的正文同步
+    // （chars 用 streamClean 后的长度 —— 和气泡里显示的是同一个字符串，否则进度条会走到 103%）。
+    emitProgress({
+      phase: 'write',
+      seg: segCount,
+      segTotal: segTotal(),
+      chars: streamClean(reply).length,
+      target: eff.target,
+    });
     // 流式纠正：本段末尾的【记录】在流式中已被 streamClean 吃掉，但拼接后的全文才是最终态，
     // 再下发一次保证前端气泡与最终入库内容完全一致。
     if (opts.onDelta) { try { opts.onDelta(streamClean(reply)); } catch {} }
@@ -400,6 +425,14 @@ async function chatWithBot(botId, content, opts = {}) {
     console.log(`[bot:${botId}] 长文完成：共 ${segCount} 段 / ${reply.length} 字` +
       `（止于：${why}；${goal}；上限 ${eff.segments} 段 / ${eff.maxChars} 字）`);
   }
+  // 收尾进度：阶段置 done、pct 给满 —— 否则条子会停在「97%」然后被气泡收尾抹掉，看着像没写完。
+  emitProgress({
+    phase: 'done',
+    seg: segCount,
+    segTotal: segTotal(),
+    chars: streamClean(reply).length,
+    target: eff.target,
+  });
 
   // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成
   const chatFn = makeChatFn(botId);
