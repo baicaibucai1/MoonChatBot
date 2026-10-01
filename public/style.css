@@ -1520,6 +1520,24 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 /* 发送按钮与输入框等高对齐 */
 .ingest-box .primary, .chat-input .primary { flex-shrink: 0; margin: 0; height: 38px; }
 
+/* 输入条里的次要按钮（如「输出」）也必须与输入框同高。
+   ⚠️ 为什么要在 style.css 里补这一条：输入条是 `align-items: flex-end`（底边对齐），
+   而 design.css 把 .primary 固定成 44 高、.sm 只有 28 高 —— 两者底边齐平但高度差 16px，
+   视觉上就是「发送高出一截、输出缩在下面」，中心更是差了 8px。
+   设计规范里写的就是「输入条按钮 = 与输入框等高」，所以这里把它抬到同一档，
+   而不是去缩发送（缩了反而更小一号）。
+   ⚠️ 作用域只到「输入条内的 ghost.sm」—— 别写成 `.modal-foot .ghost.sm`：
+   弹窗底部的次要按钮（取消/关闭）不带 .sm，是 32 高，不该被这条规则带跑。
+   卡片标题栏那些 .sm 小按钮同理，不属于输入条。 */
+.chat-input .ghost.sm,
+.ingest-box .ghost.sm {
+  height: var(--btn-h-lg);
+  min-width: var(--btn-h-lg);
+  padding: 0 var(--btn-pad);
+  border-radius: var(--r-full);
+  font-size: var(--btn-fs);
+}
+
 /* 侧边栏机器人头像 */
 .side-avatar {
   width: 26px; height: 26px; border-radius: 8px; overflow: hidden;
