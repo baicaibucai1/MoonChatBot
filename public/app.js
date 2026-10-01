@@ -55,6 +55,10 @@ const IC_FOLDER = ICON('<path d="M2.6 12.2V4.6a1 1 0 0 1 1-1h2.6l1.4 1.6h5.2a1 1
 const IC_BULB = ICON('<path d="M8 2.4a3.8 3.8 0 0 0-2.2 6.9c.4.3.6.7.6 1.1v.4h3.2v-.4c0-.4.2-.8.6-1.1A3.8 3.8 0 0 0 8 2.4z"/><path d="M6.6 13h2.8"/>');
 const IC_LINK = ICON('<path d="M7 9.6a2.6 2.6 0 0 0 3.7 0l1.8-1.8a2.6 2.6 0 1 0-3.7-3.7L8 4.9"/><path d="M9 6.4a2.6 2.6 0 0 0-3.7 0L3.5 8.2a2.6 2.6 0 1 0 3.7 3.7L8 11.1"/>');
 const IC_SPARKLE = ICON('<path d="M8 2.2l1.5 4.3L13.8 8l-4.3 1.5L8 13.8 6.5 9.5 2.2 8l4.3-1.5z"/>');
+// 「生成」分组用滑块而不是四角星：★ IC_SPARKLE 在小尺寸（15px）下四角收成一点，
+// 看起来就是个**小太阳**，而它原本的语义是「精彩/高光」，跟输出长度无关。
+// 滑块（两条轨道 + 两个把手）在 15px 下结构依然清楚，语义也对得上「调输出长度」。
+const IC_SLIDERS = ICON('<path d="M2.5 4.6h2.4M7.5 4.6h6M2.5 11.4h5.4M10.5 11.4h3"/><circle cx="6.2" cy="4.6" r="1.5"/><circle cx="9.2" cy="11.4" r="1.5"/>');
 const IC_STAR = ICON('<path d="M8 1.9l2 4.2 4.6.6-3.4 3.2.9 4.6L8 12.3l-4.1 2.2.9-4.6L1.4 6.7l4.6-.6z"/>');
 const IC_MOON = ICON('<path d="M13.2 9.6A5.7 5.7 0 0 1 6.4 2.8a5.7 5.7 0 1 0 6.8 6.8z"/>');
 const IC_SUN = ICON('<circle cx="8" cy="8" r="3"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.8 3.8l1.1 1.1M11.1 11.1l1.1 1.1M12.2 3.8l-1.1 1.1M4.9 11.1l-1.1 1.1"/>');
@@ -1343,7 +1347,7 @@ let _gKey = '';      // 当前正在编辑的全局文件 key
 //   现在「联网」只管联网（开关 + 搜索方式），跟生成相关的一律进「生成」。
 const SETTING_TABS = [
   { id: 'appearance', n: '外观', ic: IC_PALETTE },
-  { id: 'generation', n: '生成', ic: IC_SPARKLE },
+  { id: 'generation', n: '生成', ic: IC_SLIDERS },
   { id: 'general', n: '联网', ic: IC_GLOBE },
   { id: 'global', n: '全局设定', ic: IC_LAYERS },
   { id: 'stats', n: '用量统计', ic: IC_CHART },
@@ -3997,100 +4001,98 @@ function renderGeneral() {
         <span class="spacer"></span>
         <button class="primary sm" onclick="saveGeneral()">保存</button>
       </div>
-      <div class="gen-row">
-        <span class="gen-label">允许联网</span>
-        <label class="switch" title="${state.webSearch === true ? '点击关闭全局联网' : '点击开启全局联网'}">
-          <input type="checkbox" id="g-web" ${state.webSearch === true ? 'checked' : ''}>
-          <span class="slider"></span>
-        </label>
-        <span class="gen-hint">全局默认 ${state.webSearch === true ? '已开启' : '已关闭'}，各机器人可在「编辑」里单独覆盖</span>
-      </div>
-      <div class="gen-row" style="align-items:flex-start;margin-top:14px">
-        <span class="gen-label" style="padding-top:2px">搜索方式</span>
-        <div class="mode-cards" id="g-modes">
-          ${modes.map(m => `
-            <div class="mode-card ${_gMode === m.v ? 'active' : ''}" data-m="${m.v}" onclick="pickMode(this)">
-              <div class="mode-name">${m.n}</div>
-              <div class="mode-desc">${m.d}</div>
-            </div>`).join('')}
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="padding:14px 16px;border:1px solid var(--outline);border-radius:var(--r-m);background:var(--surface)">
+          <div style="font-size:12.5px;font-weight:600;margin-bottom:8px">允许联网</div>
+          <label class="switch" title="${state.webSearch === true ? '点击关闭全局联网' : '点击开启全局联网'}">
+            <input type="checkbox" id="g-web" ${state.webSearch === true ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>
+          <div style="margin-top:6px;font-size:11.5px;line-height:1.65;color:var(--on-surface-faint)">全局默认<strong>${state.webSearch === true ? '已开启' : '已关闭'}</strong>，各机器人可在「编辑」里单独覆盖。</div>
+        </div>
+        <div style="padding:14px 16px;border:1px solid var(--outline);border-radius:var(--r-m);background:var(--surface)">
+          <div style="font-size:12.5px;font-weight:600;margin-bottom:10px">搜索方式</div>
+          <div class="mode-cards" id="g-modes">
+            ${modes.map(m => `
+              <div class="mode-card ${_gMode === m.v ? 'active' : ''}" data-m="${m.v}" onclick="pickMode(this)">
+                <div class="mode-name">${m.n}</div>
+                <div class="mode-desc">${m.d}</div>
+              </div>`).join('')}
+          </div>
         </div>
       </div>
-      <p class="empty-hint" style="margin-top:10px">轻量方式只取标题/摘要，快且省资源；模型需要详细内容时会自动用浏览器抓取正文（web_fetch）。</p>
+      <p class="empty-hint" style="margin-top:14px">轻量方式只取标题/摘要，快且省资源；模型需要详细内容时会自动用浏览器抓取正文（web_fetch）。</p>
     </div>`;
 }
 
 // ---- 设置页「生成」：输出长度 / 呈现方式 / 后台总结模型 ----
 // 这一组是从原来的「联网」里分出来的 —— 长文设置藏在一个叫「联网」的 Tab 下面，
 // 谁都找不到。输出相关的开关就应该有个叫得出口的地方。
+//
+// ★ 排版没有复用 .gen-row（那套是「64px 标签 + 内容」的单行结构，见 design.css）：
+//   它只够放「标签 + 一个开关」，一旦一行里要塞两个输入框或两段说明，
+//   说明文字会被挤成窄栏、输入框甩行。这里改用**标签在上、控件在下、说明占满整行**，
+//   一套结构同时容纳「开关行 / 单输入行 / 双输入行 / 下拉行」，不再各自打补丁。
 function renderGeneration() {
   const lrOn = state.longReply === true;
+  const hint = (t) => `<div style="margin-top:6px;font-size:11.5px;line-height:1.65;color:var(--on-surface-faint)">${t}</div>`;
+  const label = (t) => `<div style="font-size:12.5px;font-weight:600;color:var(--on-surface);margin-bottom:8px">${t}</div>`;
+  const num = (id, v, min, max, step, w) => `<input id="${id}" type="number" min="${min}" max="${max}" step="${step}" value="${v}" style="width:${w}px">`;
+  const unit = (t) => `<span style="font-size:12px;color:var(--on-surface-variant)">${t}</span>`;
+  const box = (inner) => `<div style="padding:14px 16px;border:1px solid var(--outline);border-radius:var(--r-m);background:var(--surface)">${inner}</div>`;
+  const wrap = (inner) => `<div style="display:flex;flex-direction:column;gap:12px">${inner}</div>`;
   return `
     <div class="card gen-card">
       <div class="card-title">生成（输出长度与呈现）
         <span class="spacer"></span>
         <button class="primary sm" onclick="saveGeneration()">保存</button>
       </div>
-      <div class="gen-row">
-        <span class="gen-label">流式回复</span>
-        <label class="switch" title="${state.streamReply === true ? '点击关闭全局流式回复' : '点击开启全局流式回复'}">
-          <input type="checkbox" id="g-stream" ${state.streamReply === true ? 'checked' : ''}>
-          <span class="slider"></span>
-        </label>
-        <span class="gen-hint">开启后单聊使用官方流式消息（打字机效果 + Markdown），需机器人具备相应权限；失败自动回退普通文本</span>
-      </div>
-      <div class="gen-row" style="margin-top:12px">
-        <span class="gen-label">长文模式</span>
-        <label class="switch" title="${lrOn ? '点击关闭全局长文模式' : '点击开启全局长文模式'}">
-          <input type="checkbox" id="g-long" ${lrOn ? 'checked' : ''}>
-          <span class="slider"></span>
-        </label>
-        <span class="gen-hint">全局默认 ${lrOn ? '已开启' : '已关闭'}，各机器人可在「编辑」里单独覆盖</span>
-      </div>
-      <div class="gen-row" style="margin-top:12px">
-        <span class="gen-label">目标字数</span>
-        <div class="gen-sel-wrap" style="display:flex;gap:10px;align-items:center">
-          <input id="g-long-target" type="number" min="0" step="500" value="${clampInt(state.longReplyTarget, 1200, 0, 100000)}" style="width:120px">
-          <span class="gen-hint" style="margin:0">字。<strong>这是长度刹车</strong>：长文开启后写到这个字数就收。<br>0 = 不限（会一路写到续写上限，慎用）</span>
-        </div>
-      </div>
-      <div class="gen-row" style="margin-top:12px">
-        <span class="gen-label">续写上限</span>
-        <div class="gen-sel-wrap" style="display:flex;gap:10px;align-items:center">
-          <input id="g-long-seg" type="number" min="1" max="30" value="${clampInt(state.longReplySegments, 12, 1, 30)}" style="width:88px">
-          <span class="gen-hint" style="margin:0">段</span>
-          <input id="g-long-chars" type="number" min="500" max="100000" step="500" value="${clampInt(state.longReplyMaxChars, 20000, 500, 100000)}" style="width:120px">
-          <span class="gen-hint" style="margin:0">字（兜底，防止烧穿）</span>
-        </div>
-      </div>
-      <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
-      <div class="gen-row">
-        <span class="gen-label">听懂长度意图</span>
-        <label class="switch" title="${state.longReplyAuto === false ? '点击开启长度意图识别' : '点击关闭长度意图识别'}">
-          <input type="checkbox" id="g-long-auto" ${state.longReplyAuto === false ? '' : 'checked'}>
-          <span class="slider"></span>
-        </label>
-        <span class="gen-hint">你说「写长一点 / 长文本输出 / 写一篇 3000 字的…」，它<strong>自动按那个长度写</strong>，不用手动改设置；<br>说「简短一点 / 一句话概括」，它压短。只影响这一轮，不写回配置。</span>
-      </div>
-      <div class="gen-row" style="margin-top:12px">
-        <span class="gen-label">长档 / 短档</span>
-        <div class="gen-sel-wrap" style="display:flex;gap:10px;align-items:center">
-          <input id="g-long-len" type="number" min="500" max="100000" step="500" value="${clampInt(state.longReplyLongTarget, 3000, 500, 100000)}" style="width:100px">
-          <span class="gen-hint" style="margin:0">字（识别为「写长」时用）</span>
-          <input id="g-short-len" type="number" min="50" max="10000" step="50" value="${clampInt(state.longReplyShortTarget, 300, 50, 10000)}" style="width:100px">
-          <span class="gen-hint" style="margin:0">字（识别为「简短」时用）</span>
-        </div>
-      </div>
-      <div class="gen-row" style="align-items:flex-start;margin-top:14px">
-        <span class="gen-label" style="padding-top:8px">蒸馏/总结模型</span>
-        <div class="gen-sel-wrap">
-          <select id="g-distill" class="gen-sel">
+      ${wrap(`
+        ${box(`${label('流式回复')}
+          <label class="switch" title="${state.streamReply === true ? '点击关闭全局流式回复' : '点击开启全局流式回复'}">
+            <input type="checkbox" id="g-stream" ${state.streamReply === true ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>` + hint('开启后单聊使用官方流式消息（打字机效果 + Markdown），需机器人具备相应权限；失败自动回退普通文本'))}
+
+        ${box(`${label('长文模式')}
+          <label class="switch" title="${lrOn ? '点击关闭全局长文模式' : '点击开启全局长文模式'}">
+            <input type="checkbox" id="g-long" ${lrOn ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>` + hint(`全局默认<strong>${lrOn ? '已开启' : '已关闭'}</strong>，各机器人可在「编辑」里单独覆盖。开启后模型才会朝下面写的目标字数去写。`))}
+
+        ${box(`${label('目标字数')}
+          <div style="display:flex;align-items:center;gap:10px">${num('g-long-target', clampInt(state.longReplyTarget, 1200, 0, 100000), 0, 100000, 500, 130)}${unit('字')}</div>`
+          + hint('<strong>这是长度刹车</strong>：长文开启后写到这个字数就收。<br>填 <strong>0 = 不限</strong>，会一路写到「续写上限」为止（慎用）。'))}
+
+        ${box(`${label('续写上限（兜底，防止烧穿）')}
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            ${num('g-long-seg', clampInt(state.longReplySegments, 12, 1, 30), 1, 30, 1, 80)}${unit('段')}
+            <span style="width:8px"></span>
+            ${num('g-long-chars', clampInt(state.longReplyMaxChars, 20000, 500, 100000), 500, 100000, 500, 110)}${unit('字')}
+          </div>` + hint('写到这么多就不再往下续了 —— 目标字数设成 0（不限）时，全靠这个兜住。'))}
+
+        ${box(`${label('听懂长度意图')}
+          <label class="switch" title="${state.longReplyAuto === false ? '点击开启长度意图识别' : '点击关闭长度意图识别'}">
+            <input type="checkbox" id="g-long-auto" ${state.longReplyAuto === false ? '' : 'checked'}>
+            <span class="slider"></span>
+          </label>`
+          + hint('你说「写长一点 / 长文本输出 / 写一篇 3000 字的…」，它会<strong>直接按那个长度写</strong>，不用手动改设置；说「简短一点 / 一句话概括」则压短。<br>只影响这一轮回复，不会改这里的配置。'))}
+
+        ${box(`${label('长档 / 短档（识别到意图时用哪个长度）')}
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            ${num('g-long-len', clampInt(state.longReplyLongTarget, 3000, 500, 100000), 500, 100000, 500, 110)}${unit('字 · 写长时')}
+            <span style="width:8px"></span>
+            ${num('g-short-len', clampInt(state.longReplyShortTarget, 300, 50, 10000), 50, 10000, 50, 110)}${unit('字 · 简短时')}
+          </div>` + hint('长档超过 2000 字会先让模型列一份分段大纲再逐段写；大纲只在内部使用，你看到的仍是成文。'))}
+
+        ${box(`${label('蒸馏 / 总结模型')}
+          <select id="g-distill" class="gen-sel" style="width:100%">
             <option value="">跟随各机器人绑定模型（默认）</option>
             ${(state.models || []).map(m => `<option value="${esc(m.id)}" ${state.distillModel === m.id ? 'selected' : ''}>${esc(m.name || m.id)}（${esc(m.id)}）</option>`).join('')}
-          </select>
-          <div class="gen-hint">核心卡蒸馏、文件分段摘要、事件压缩、逐轮记忆提炼、精彩时刻、AI 归档等后台总结任务使用的模型；不指定则各自跟随机器人绑定的模型</div>
-        </div>
-      </div>
-      <p class="empty-hint" style="margin-top:10px">长文模式管的是「模型自己写完了还接着写」—— 开了它才会朝<strong>目标字数</strong>去写。目标超过 2000 字时它会<strong>先列一份分段大纲</strong>再逐段写，大纲只在内部使用，你看到的仍是成文。<br>另一件事不受任何开关影响：回复被模型上限<strong>截断</strong>时（话没说完就被掐断）会自动补全，否则你拿到的就是半截话。</p>
+          </select>`
+          + hint('核心卡蒸馏、文件分段摘要、事件压缩、逐轮记忆提炼、精彩时刻、AI 归档等后台总结任务使用的模型。'))}
+      `)}
+      <p class="empty-hint" style="margin-top:14px">另一件事<strong>不受任何开关影响</strong>：回复被模型上限<strong>截断</strong>时（话没说完就被掐断）会自动补全，否则你拿到的就是半截话。</p>
     </div>`;
 }
 
