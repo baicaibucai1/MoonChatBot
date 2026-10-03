@@ -55,8 +55,54 @@ let router;
 before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
-  test('条目总数稳定在 59（... + 工作区的 6 条：列表/注入/读/写/删/改名）', () => {
-    assert.equal(router.routes.length, 59);
+  test('条目总数稳定在 67（... + 角色池的 8 条：列表/新建/详情/改写/删除/历史/回滚/写手引用）', () => {
+    assert.equal(router.routes.length, 67);
+  });
+
+  test('★ characters 域守「先具体后通配」：/history 与 /rollback 必须排在 /:id 之前', () => {
+    // 为什么这条必须钉死：/:id 是通配，如果排在 /:id/history 前面，
+    // 请求 /api/characters/CHR1/history 会先命中 /:id 那条，
+    // 而它的正则末尾有 $ 锚定 → 匹配失败 → 路由继续下探 → 报「接口不存在」。
+    // 症状是「接口明明写了却说不存在」，极难定位。
+    const idx = (pred) => router.routes.findIndex(pred);
+    const iHistory = idx((r) => r.re && r.re.source.includes('/history$'));
+    const iRollback = idx((r) => r.re && r.re.source.includes('/rollback$'));
+    // /:id 通配：以 characters/ 开头、以 $ 结尾、且不含 /history 或 /rollback
+    const iDetail = idx((r) => r.re
+      && r.re.source.includes('characters')
+      && r.re.source.endsWith(')$')
+      && !r.re.source.includes('/history')
+      && !r.re.source.includes('/rollback'));
+    assert.ok(iHistory >= 0, '应存在 /api/characters/:id/history 条目');
+    assert.ok(iRollback >= 0, '应存在 /api/characters/:id/rollback 条目');
+    assert.ok(iDetail >= 0, '应存在 /api/characters/:id 条目');
+    assert.ok(iHistory < iDetail, `history 必须排在 :id 之前（当前 ${iHistory} vs ${iDetail}）`);
+    assert.ok(iRollback < iDetail, `rollback 必须排在 :id 之前（当前 ${iRollback} vs ${iDetail}）`);
+  });
+
+  test('★ characters 域能正确提取捕获组（不因多包方括号而永不匹配）', () => {
+    // 曾经的坑：ID_CLASS 本身已含方括号，再包一层会拼出 [[\w...]] 永远不匹配。
+    const e = router.matchEntry('GET', '/api/characters/CHRabc123');
+    assert.ok(e && e.re, '应命中角色详情条目');
+    const m = e.re.exec('/api/characters/CHRabc123');
+    assert.equal(m[1], 'CHRabc123');
+
+    const eh = router.matchEntry('GET', '/api/characters/CHRabc123/history');
+    assert.ok(eh && eh.re, '应命中历史档条目');
+    assert.equal(eh.re.exec('/api/characters/CHRabc123/history')[1], 'CHRabc123');
+
+    const er = router.matchEntry('POST', '/api/characters/CHRabc123/rollback');
+    assert.ok(er && er.re, '应命中回滚条目');
+    assert.equal(er.re.exec('/api/characters/CHRabc123/rollback')[1], 'CHRabc123');
+
+    const eb = router.matchEntry('PUT', '/api/bots/BOT1/characters');
+    assert.ok(eb && eb.re, '应命中写手角色引用条目');
+    assert.equal(eb.re.exec('/api/bots/BOT1/characters')[1], 'BOT1');
+  });
+
+  test('characters 域的非法 id 不命中（路径穿越防护）', () => {
+    assert.equal(router.matchEntry('GET', '/api/characters/a/b'), null);
+    assert.equal(router.matchEntry('GET', '/api/characters/'), null);
   });
 
   test('workspace 域守「先具体后通配」：/inject 与 /:key/rename 必须排在 /:key 之前', () => {

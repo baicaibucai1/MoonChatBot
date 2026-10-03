@@ -13,6 +13,7 @@ const search = require('./lib/search');
 const workspace = require('./lib/workspace');
 const longreply = require('./lib/longreply');
 const BotManager = require('./lib/bots');
+const charactersMigrate = require('./lib/characters-migrate');
 
 // ---- 拆分后引入的模块（批 1：HTTP 层 + 路由层 + ID 常量）----
 const { ID_RE, ADMIN_ID_RE } = require('./lib/ids');
@@ -22,6 +23,8 @@ const { applyCors, handlePreflight, serveStatic } = require('./lib/http/static')
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const AVATAR_DIR = path.join(ROOT, 'avatars');
+// 记忆根目录：迁移时要按 botId 找到 memory/<botId>/persona.md
+const MEMORY_DIR_OF_APP = path.join(ROOT, 'memory');
 fs.mkdirSync(AVATAR_DIR, { recursive: true });
 
 // MIME 表与 CORS 放行（含桌面壳跨域白名单）已搬到 lib/http/static.js
@@ -1560,6 +1563,31 @@ async function adminEnsureEdits(cfg, model, baseMessages, apiKey, replyText, emi
 
 
 // ---- API 路由实现已迁至 lib/http/（路由表）与 lib/routes/（各域 handler）----
+
+// 存量迁移：旧「角色卡」配置 → 「写手卡 + 角色池」
+// ★ 幂等：只在 config.characters 不存在时真正执行；重复启动无副作用。
+// 迁移结果会打印出来（首次启动时用户能看到自己哪些角色被提取了）。
+// 失败绝不阻断启动 —— 面板还能用，用户可以在面板里人工处理。
+try {
+  const pre = store.getConfig();
+  const rep = charactersMigrate.migrate(pre, {
+    memoryDirOf: (id) => path.join(MEMORY_DIR_OF_APP, id),
+  });
+  if (rep.ran) {
+    store.saveConfig(pre);
+    console.log('[迁移] 已升级为「写手卡 + 角色池」');
+    console.log(`  写手: ${rep.writers} 个`);
+    if (rep.created.length) {
+      for (const c of rep.created) console.log(`  提取角色: ${c.name}（${c.charId}）← ${c.source}`);
+    } else {
+      console.log('  未提取到角色（persona.md 均为空模板）');
+    }
+  } else if (rep.writers) {
+    store.saveConfig(pre); // 补齐了新 bot 的写手字段
+  }
+} catch (err) {
+  console.warn('[迁移] 失败，已跳过（面板仍可用）:', err.message);
+}
 
 const cfg = store.getConfig();
 const PORT = cfg.port || 4357;
