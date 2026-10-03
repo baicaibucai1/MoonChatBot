@@ -3195,12 +3195,14 @@ function scanActionJson(reply, key) {
 }
 function extractCreateModel(reply) { return scanActionJson(reply, 'createModel'); }
 
-// 提取编辑建议（记忆/全局/机器人配置），返回 { type, payload } 或 null
+// 提取编辑建议（记忆/全局/机器人配置/角色卡），返回 { type, payload } 或 null
 function extractEdit(reply) {
   const m = scanActionJson(reply, 'editMemory');
   if (m) return { type: 'memory', payload: m };
   const g = scanActionJson(reply, 'editGlobal');
   if (g) return { type: 'global', payload: g };
+  const c = scanActionJson(reply, 'editCharacter');
+  if (c) return { type: 'character_edit', payload: { ...c, patch: c.patch || c.fields || {} } };
   const b = scanActionJson(reply, 'editBot');
   if (b) return { type: 'bot', payload: b };
   return null;
@@ -3216,6 +3218,10 @@ function renderEditBar(ed) {
   else if (ed.type === 'core') label = `管理员建议修改人格核心卡：${p.botId}`;
   else if (ed.type === 'global') label = `管理员建议修改全局文件：「${p.key}」`;
   else if (ed.type === 'ws_inject') label = `管理员建议把工作区草稿「${p.key}」注入到 ${p.targetType === 'global' ? '全局设定' : (p.targetId || '?') + ' 的记忆库'}（目标文件 ${p.destKey || p.key}.md）`;
+  else if (ed.type === 'character_edit') {
+    const ks = Object.keys(p.patch || {}).join('、') || '无字段';
+    label = `建议修改角色「${p.name || p.characterId}」的 ${ks}${p.reason ? `　原因：${p.reason}` : ''}`;
+  }
   else label = `管理员建议更新机器人配置：${p.id || ''}`;
   return `<div class="admin-msg ai"><div class="admin-bubble admin-action admin-write">
     <span class="admin-action-label">${IC_SETTINGS}<span class="lb">是否同意此更改？</span><br><span class="admin-action-sub">${esc(label)}</span></span>
@@ -3244,6 +3250,17 @@ async function previewEdit(btn) {
   const p = ed.payload || {};
   let content;
   if (ed.type === 'bot' || ed.type === 'core') content = JSON.stringify(p, null, 2);
+  else if (ed.type === 'character_edit') {
+    // 角色改动看「旧 → 新」比看裸 JSON 有用得多：光看新文本判断不出改了哪儿
+    const cur = ((state.characters || []).find(c => c.id === p.characterId)) || {};
+    const lines = [];
+    for (const [k, v] of Object.entries(p.patch || {})) {
+      const oldV = Array.isArray(cur[k]) ? cur[k].join('、') : (cur[k] || '（空）');
+      const newV = Array.isArray(v) ? v.join('、') : String(v ?? '');
+      lines.push(`【${k}】\n  改前：${oldV}\n  改后：${newV}`);
+    }
+    content = lines.join('\n\n') || '（没有要改的字段）';
+  }
   else if (ed.type === 'ws_inject') {
     const r = await api(`/api/workspace/${encodeURIComponent(p.key)}`).catch(() => ({ ok: false }));
     content = r.ok ? (r.content || '（空）') : ('读取失败：' + (r.err || ''));
@@ -3251,6 +3268,7 @@ async function previewEdit(btn) {
   const title = ed.type === 'memory' ? `预览：${p.botId} 记忆「${p.key}」`
     : ed.type === 'global' ? `预览：全局「${p.key}」`
       : ed.type === 'core' ? `预览：${p.botId} 人格核心卡`
+        : ed.type === 'character_edit' ? `预览：角色「${p.name || p.characterId}」的改动`
         : ed.type === 'ws_inject' ? `预览：工作区「${p.key}」写入${p.targetType === 'global' ? '全局' : '「' + p.targetId + '」'}「${p.destKey || p.key}」`
           : `预览：机器人「${p.id}」配置`;
   const overlay = document.createElement('div');
@@ -3278,12 +3296,21 @@ async function confirmEdit(btn) {
   else if (ed.type === 'core') desc = `将覆盖 ${p.botId} 的人格核心卡`;
   else if (ed.type === 'global') desc = `将覆盖全局文件「${p.key}」的内容`;
   else if (ed.type === 'ws_inject') desc = `将把工作区草稿「${p.key}」注入到 ${p.targetType === 'global' ? '全局设定' : (p.targetId || '?') + ' 的记忆库'}（写入为「${p.destKey || p.key}」）`;
+  else if (ed.type === 'character_edit') {
+    const ks = Object.keys(p.patch || {}).join('、') || '无字段';
+    desc = `将修改角色「${p.name || p.characterId}」的 ${ks}（旧版本会自动留档，可回滚）`;
+  }
   else desc = `将更新机器人「${p.id}」的配置`;
   if (!(await uiConfirm({ title: '确认应用更改', message: `${desc}，\n确认应用？`, okText: '确认应用' }))) return;
   let r;
   if (ed.type === 'memory') {
     if (!p.botId || !p.key) return toast('缺少 botId 或 key', 'err');
     r = await api(`/api/memory/${p.botId}/files/${p.key}`, 'PUT', { content: p.content || '' });
+  } else if (ed.type === 'character_edit') {
+    if (!p.characterId) return toast('缺少 characterId', 'err');
+    // ★ 走 PUT /api/characters/:id —— 服务端内部调 characters.update()，
+    //   会自动把「改前状态」推进 history，回滚能力由它保证，前端不用管。
+    r = await api(`/api/characters/${encodeURIComponent(p.characterId)}`, 'PUT', p.patch || {});
   } else if (ed.type === 'ws_inject') {
     if (!p.key) return toast('缺少工作区文件名', 'err');
     r = await api('/api/workspace/inject', 'POST', {

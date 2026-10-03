@@ -363,3 +363,81 @@ test('★ 回归：字段名不会被误当成角色名', () => {
   assert.notEqual(ex.name, '名字');
   assert.notEqual(ex.name, '基本信息');
 });
+
+// ---------- buildEditPatch：写手工具参数 → 合法 patch ----------
+// 这段是「写手改角色卡」的入口过滤，弄错就会出安全问题（能改 id/history）
+// 或体验问题（生成一条空建议让用户白点一次确认）。
+
+test('buildEditPatch：白名单外的键一律丢弃（防伪造版本档）', () => {
+  const p = characters.buildEditPatch({
+    id: 'CHRfake', history: [{ by: 'ai' }], source: '伪造来源', ts: 1,
+    persona: '新设定',
+  });
+  assert.deepEqual(Object.keys(p), ['persona']);
+  assert.equal(p.id, undefined);
+  assert.equal(p.history, undefined);
+});
+
+test('buildEditPatch：avatar 默认禁改（图片归形象库阶段）', () => {
+  const p = characters.buildEditPatch({ avatar: 'x.png', traits: '冷静' });
+  assert.equal(p.avatar, undefined);
+  assert.equal(p.traits, '冷静');
+});
+
+test('buildEditPatch：可显式放开被禁字段', () => {
+  const p = characters.buildEditPatch({ avatar: 'x.png' }, { deny: [] });
+  assert.equal(p.avatar, 'x.png');
+});
+
+test('buildEditPatch：null / undefined 视为「未提供」而非「清空」', () => {
+  // ★ 区别很重要：模型没提的字段不该被清掉，否则改一项会误伤其他项
+  const p = characters.buildEditPatch({ persona: 'A', traits: null, age: undefined });
+  assert.deepEqual(Object.keys(p), ['persona']);
+});
+
+test('buildEditPatch：空字符串是有效值（允许显式清空）', () => {
+  const p = characters.buildEditPatch({ traits: '' });
+  assert.deepEqual(Object.keys(p), ['traits']);
+  assert.equal(p.traits, '');
+});
+
+test('buildEditPatch：没有任何可改字段时返回空对象（上层据此回绝）', () => {
+  assert.deepEqual(characters.buildEditPatch({}), {});
+  assert.deepEqual(characters.buildEditPatch(null), {});
+  assert.deepEqual(characters.buildEditPatch({ reason: '只是想说点什么' }), {});
+});
+
+// ---------- 提议 → 确认 的语义：提议阶段绝不能改到池子 ----------
+
+test('★ 不变量：提议阶段不落盘（patch 是独立副本，改它不影响角色）', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银', persona: '原始设定' }, 'user');
+  const patch = characters.buildEditPatch({ persona: '改写后的设定' });
+  // 仅构造建议：没有调 update → 角色必须纹丝不动
+  assert.equal(characters.find(pool, c.id).persona, '原始设定');
+  assert.equal(c.history.length, 1, '提议不产生版本档');
+  // 用户点了确认后才会走到 update
+  const r = characters.update(pool, c.id, patch, 'ai');
+  assert.equal(r.ok, true);
+  assert.equal(characters.find(pool, c.id).persona, '改写后的设定');
+  assert.equal(c.history.length, 2, '确认写入才产生版本档');
+});
+
+test('★ 确认写入后能一路回滚到 AI 改写前', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银', persona: '原始设定' }, 'user');
+  characters.update(pool, c.id, { persona: 'AI 改写版' }, 'ai');
+  // history[0] 是「改之前」的快照
+  const rb = characters.rollback(pool, c.id, 0, 'user');
+  assert.equal(rb.ok, true);
+  assert.equal(characters.find(pool, c.id).persona, '原始设定');
+});
+
+test('★ 版本档记录改写者（by=ai），用户能看出是谁动的', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  characters.update(pool, c.id, { traits: 'AI 加的' }, 'ai');
+  const last = c.history[c.history.length - 1];
+  assert.equal(last.by, 'ai');
+  assert.deepEqual(last.changed, ['traits']);
+});

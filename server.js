@@ -93,17 +93,20 @@ function buildWriterBlock(cfg, bot) {
   lines.push('- 不要问用户"你希望我叙述还是扮演"——自己判断，直接写。');
 
   // ---- 角色池 ----
+  // ★ 名字旁边必须带 id：写手要用 propose_character_edit 改卡就得知道 id，
+  //   否则它只能靠名字猜，而名字可能重复/将来可能改。
   if (active.length) {
     lines.push('');
     lines.push(`【你的角色（共 ${active.length} 位）】`);
     for (const ch of active) {
       lines.push('');
+      lines.push(`（id: ${ch.id}）`);
       lines.push(c.brief(ch, { full: true }));
     }
   } else if (all.length) {
     lines.push('');
     lines.push(`【你的角色】当前没有选定要写的角色。角色池里有 ${all.length} 位可选：`
-      + all.slice(0, 20).map((x) => x.name).join('、')
+      + all.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')
       + (all.length > 20 ? ' …' : '')
       + '。可以在面板里选定角色后再聊。');
   } else {
@@ -117,15 +120,31 @@ function buildWriterBlock(cfg, bot) {
   lines.push('【关于改写角色设定】');
   lines.push('剧情发展需要时（如角色成长、关系变化），你可以提议修改角色设定。'
     + '修改会进入待确认队列，用户点了确认才生效，且旧版本会留档可回滚，所以你不用担心改坏。');
+  lines.push('要改就用 propose_character_edit 工具（字段：characterId / name / persona / traits / '
+    + 'age / appearance / background / reason），只需给出你要改的那几项。'
+    + '记不清角色 id 时先用 list_characters 查。');
   lines.push('不要直接断言"我已经改了设定"——要说明这是提议，等用户确认。');
 
   return lines.join('\n');
+}
+
+// 供写手的 list_characters 工具使用：返回角色池名单 + 当前写手选定了哪些
+function listCharactersFor(bot, cfg) {
+  const c = require('./lib/characters');
+  const all = c.list(cfg.characters);
+  if (!all.length) return '角色池是空的。你可以在剧情中创造人物，并建议用户把他们加进池子。';
+  const active = new Set(Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : []);
+  const lines = all.map((x) => `- ${x.name}（id: ${x.id}）${active.has(x.id) ? ' ← 你当前选定' : ''}`
+    + (x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : ''));
+  return `【角色池】共 ${all.length} 位\n` + lines.join('\n');
 }
 
 // 核心对话逻辑：记忆 + 历史 + 模型调用 + 关键剧情自动记录
 // opts.onDelta(累积全文)：提供时走流式（chatStreamCollect），每轮增量回调（跨轮累积拼接）
 // opts.onProgress(进度对象)：提供时下发长文写作进度（阶段 / 段数 / 字数），见 longreply.progressOf。
 //   与 onDelta 分开是有意的 —— 正文和进度是两条独立的信道，混在一起就得在正文里塞控制字符。
+// opts.onPending(edit, summary)：提供时接收「待确认写操作」（如写手提议改角色卡）。
+//   同样单独一条信道：它是控制流，必须由用户点确认才落盘。
 // 返回模型回复（已剥离【记录】标记）；失败抛错。不负责写入会话记录。
 async function chatWithBot(botId, content, opts = {}) {
   const cfg = app.getConfig();
@@ -182,6 +201,45 @@ async function chatWithBot(botId, content, opts = {}) {
   const perm = longreply.resolveLengthPerm(cfg, bot);
   const lengthToolDef = longreply.lengthTool(perm);
   if (lengthToolDef) tools.push(lengthToolDef);
+
+  // ---- 角色池工具：写手改角色卡（用户决策「可以改，但必须可回滚」）----
+  // ★ 只「提议」，不落盘：写盘动作交给用户在面板点「确认应用」。
+  //   原因和 propose_* 系列一致 —— 模型改人设属于高危写操作，必须过人。
+  //   落盘时走的是 PUT /api/characters/:id，那条路由内部调 characters.update()，
+  //   版本档（改前状态推 history）是自动的，这里不用重复实现。
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'propose_character_edit',
+      description: '【写操作·需确认】提议修改角色池里某位角色的设定（如角色成长、关系变化、补充外表/背景）。'
+        + '不会立刻生效——会生成一条待确认建议，用户点「确认应用」后才写入，且旧版本自动留档可回滚。'
+        + '不要在正文里断言「我已经改了」，只需说明这是提议。',
+      parameters: {
+        type: 'object',
+        properties: {
+          characterId: { type: 'string', description: '角色 ID（从【你的角色】里的 id 获取；不确定就先看看当前角色列表）' },
+          name: { type: 'string', description: '角色名（可选，仅在需要改名时给）' },
+          persona: { type: 'string', description: '改写后的角色设定全文（可选，要整体替换就整段给）' },
+          traits: { type: 'string', description: '性格特点（可选）' },
+          age: { type: 'string', description: '年龄（可选）' },
+          appearance: { type: 'string', description: '外表形象（可选）' },
+          background: { type: 'string', description: '背景故事（可选）' },
+          reason: { type: 'string', description: '为什么改（一句话，会展示给用户，帮助他判断是否同意）' },
+        },
+        required: ['characterId'],
+      },
+    },
+  });
+  // 只读：让写手能自己查到角色 id / 全池名单（否则它只能靠 prompt 里注入的部分猜）
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'list_characters',
+      description: '查看角色池里有哪些角色（返回 id、名字、是否为本写手当前选定）。',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  });
+
   if (!tools.length) tools = undefined;
 
   // ---- 长文：先规划，再逐段写 ----
@@ -328,6 +386,38 @@ async function chatWithBot(botId, content, opts = {}) {
             : `已记录：本次按 ${want.chars} 字作答。请接着写。`;
           console.log(`[bot:${botId}] 模型自定长度：要 ${args.chars} → 实际 ${want.chars} 字` +
             `${want.clamped ? '（已收敛）' : ''}${args.reason ? `；理由：${String(args.reason).slice(0, 40)}` : ''}`);
+        }
+      } else if (tc.function.name === 'list_characters') {
+        content = listCharactersFor(bot, cfg);
+      } else if (tc.function.name === 'propose_character_edit') {
+        // ★ 只生成待确认建议，不落盘。落盘在用户点「确认应用」后走
+        //   PUT /api/characters/:id（那条路由内部调 characters.update，自动留版本档）。
+        const C = require('./lib/characters');
+        const all = C.list(cfg.characters);
+        const ch = C.find(all, String(args.characterId || ''));
+        if (!ch) {
+          content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`
+            + (all.length ? `当前池里有：${all.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')}` : '');
+        } else {
+          const patch = C.buildEditPatch(args);
+          if (!Object.keys(patch).length) {
+            content = '你没有给出任何要修改的字段。请至少给一项（如 persona / traits / appearance / background）。';
+          } else {
+            const fields = Object.keys(patch).join('、');
+            const reason = String(args.reason || '').trim();
+            // 待确认事件走 opts.onPending（与管理员侧 emit({type:'pending'}) 语义一致）：
+            // 面板对话是 SSE，没有 emit 这个闭包，得由路由层注入回调转发。
+            if (opts.onPending) {
+              try {
+                opts.onPending({
+                  type: 'character_edit',
+                  payload: { characterId: ch.id, patch, name: ch.name, reason },
+                }, `待确认：改角色「${ch.name}」的 ${fields}`);
+              } catch {}
+            }
+            content = `已生成对角色「${ch.name}」的修改建议（${fields}），等待用户在面板确认。`
+              + '请以「提议」的口吻告知用户，不要说「已经改好了」。';
+          }
         }
       } else {
         content = '未知工具';
@@ -802,7 +892,7 @@ function buildAdminSystem(cfg, botId) {
   lines.push('- 新增模型：create_model（用户确认服务信息后即可添加，立即生效、无需再确认）；');
   lines.push('- 工作区（草稿台）：ws_write_file / ws_list_files / ws_read_file / ws_delete_file（写入与读写草稿，免确认，安全操作）；起草前先 ws_list_files 看看有没有现成的，避免重复造轮子；');
   lines.push('- 注入建议：propose_ws_inject —— 【需确认】把工作区草稿注入到机器人记忆库（targetType=bot + targetId）或全局设定（targetType=global）；这是会真正改动 AI 记忆的一步，务必先说清「注入什么、给谁、为什么」。');
-  lines.push('- 编辑建议：propose_memory_edit / propose_memory_tier / propose_core_edit / propose_global_edit / propose_bot_config_edit —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；propose_memory_tier 用于建议记忆文件的层级（1=无条件强制注入 2=摘要索引 3=冷记忆）；propose_core_edit 用于建议人格核心卡（每轮注入的蒸馏人格）的新内容。');
+  lines.push('- 编辑建议：propose_memory_edit / propose_memory_tier / propose_core_edit / propose_global_edit / propose_bot_config_edit / propose_character_edit —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；propose_memory_tier 用于建议记忆文件的层级（1=无条件强制注入 2=摘要索引 3=冷记忆）；propose_core_edit 用于建议人格核心卡（每轮注入的蒸馏人格）的新内容；propose_character_edit 用于建议角色池里某位角色（用 list_characters 查 id）的设定修改，旧版本会留档可回滚。');
   lines.push('- 联网：web_search / web_fetch（仅在面板开启联网时可用）。');
   lines.push('规则：需要机器人/模型/记忆/会话信息时，先调用对应读取工具获取真实内容，不要凭记忆猜测；判断问题、给建议都基于工具返回的原文。');
   lines.push('若当前模型端点不支持工具调用，系统会自动降级为纯文本模式；此时遵循以下【纯文本约定】输出结构（不要写成工具调用）：');
@@ -1201,9 +1291,39 @@ function adminToolSchemas(webEnabled) {
             historyLimit: { type: 'number', description: '历史记忆条数（可选）' },
             webSearch: { type: 'boolean', description: '联网开关（可选，true/false）' },
             searchMode: { type: 'string', description: '搜索方式 auto/light/browser（可选）' },
+            activeCharacterIds: { type: 'array', items: { type: 'string' }, description: '该写手选定的角色 id 列表（可选，会过滤掉不存在的 id）' },
           },
           required: ['id'],
         },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_character_edit',
+        description: '【写操作·需确认】给出角色池里某位角色的设定修改建议（如成长、关系变化、补充外表/背景），不落盘。用户确认后才会写入，旧版本自动留档可回滚。',
+        parameters: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: '角色 ID' },
+            name: { type: 'string', description: '角色名（可选）' },
+            persona: { type: 'string', description: '改写后的角色设定全文（可选）' },
+            traits: { type: 'string', description: '性格特点（可选）' },
+            age: { type: 'string', description: '年龄（可选）' },
+            appearance: { type: 'string', description: '外表形象（可选）' },
+            background: { type: 'string', description: '背景故事（可选）' },
+            reason: { type: 'string', description: '为什么改（一句话，展示给用户帮助判断）' },
+          },
+          required: ['characterId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_characters',
+        description: '查看角色池里有哪些角色（返回 id、名字、标签）。',
+        parameters: { type: 'object', properties: {}, required: [] },
       },
     },
   ];
@@ -1459,12 +1579,38 @@ async function runAdminTool(cfg, name, args = {}) {
   if (name === 'propose_bot_config_edit') {
     const b = mustBot(args.id);
     const upd = {};
-    for (const k of ['name', 'modelId', 'historyLimit', 'webSearch', 'searchMode', 'avatar', 'sandbox']) {
+    for (const k of ['name', 'modelId', 'historyLimit', 'webSearch', 'searchMode', 'avatar', 'sandbox', 'kind', 'activeCharacterIds']) {
       if (args[k] !== undefined && args[k] !== null) upd[k] = args[k];
+    }
+    // activeCharacterIds 只收池里真实存在的 id（防悬空引用）
+    if (Array.isArray(upd.activeCharacterIds)) {
+      const valid = new Set((cfg.characters || []).map((x) => x.id));
+      upd.activeCharacterIds = upd.activeCharacterIds.map((x) => String(x)).filter((x) => valid.has(x));
     }
     const payload = { type: 'bot', payload: { id: b.id, ...upd } };
     const keys = Object.keys(upd).join('、') || '（无字段）';
     return { text: `已生成对机器人 ${b.name || b.id} 的配置修改建议（${keys}），等待用户确认。`, summary: `待确认：${b.name || b.id} 配置`, pending: payload };
+  }
+
+  // 管理员侧的角色卡改写建议（与写手侧的 propose_character_edit 共用一套待确认机制）
+  if (name === 'propose_character_edit') {
+    const c = require('./lib/characters');
+    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    if (!ch) throw new Error('角色不存在: ' + args.characterId);
+    const patch = c.buildEditPatch(args);
+    if (!Object.keys(patch).length) throw new Error('至少要给一个要改的字段');
+    const payload = { type: 'character_edit', payload: { characterId: ch.id, patch, name: ch.name, reason: String(args.reason || '') } };
+    const keys = Object.keys(patch).join('、');
+    return { text: `已生成对角色「${ch.name}」的修改建议（${keys}），等待用户确认。`, summary: `待确认：改角色「${ch.name}」`, pending: payload };
+  }
+
+  // 管理员侧：列出角色池
+  if (name === 'list_characters') {
+    const c = require('./lib/characters');
+    const all = c.list(cfg.characters);
+    const lines = all.map((x) => `- ${x.name}（id: ${x.id}）${x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : ''}`);
+    const text = lines.length ? `【角色池】共 ${all.length} 位\n` + lines.join('\n') : '【角色池】（空）';
+    return { text, summary: `角色池 ${all.length} 位`, pending: null };
   }
 
   // ---- 提炼精彩时刻（自动落盘，可反复重新生成） ----
@@ -1613,7 +1759,7 @@ async function adminEnsureEdits(cfg, model, baseMessages, apiKey, replyText, emi
   const tools = adminToolSchemas(webEnabled);
   // 工具过程/待确认事件透传给原 emit；中间的赘述文本不再转发
   const silent = (ev) => { if (ev.type !== 'text') emit(ev); };
-  const tip = { role: 'user', content: '（自动提示）你刚才只是用文字描述了修改/注入建议。请改用工具正式提交：改记忆用 propose_memory_edit、改全局用 propose_global_edit、改机器人配置用 propose_bot_config_edit、把工作区草稿注入用 propose_ws_inject（content 必须是可直接替换的完整新正文；若草稿还没写进工作区，先 ws_write_file）。若确实无需修改，请简短回复“无需修改”。' };
+  const tip = { role: 'user', content: '（自动提示）你刚才只是用文字描述了修改/注入建议。请改用工具正式提交：改记忆用 propose_memory_edit、改全局用 propose_global_edit、改机器人配置用 propose_bot_config_edit、改角色设定用 propose_character_edit（先用 list_characters 查角色 id）、把工作区草稿注入用 propose_ws_inject（content 必须是可直接替换的完整新正文；若草稿还没写进工作区，先 ws_write_file）。若确实无需修改，请简短回复“无需修改”。' };
   const m2 = baseMessages.concat([{ role: 'assistant', content: replyText || null }, tip]);
   await streamAdminAgent(cfg, model, m2, apiKey, tools, silent);
   return true;
