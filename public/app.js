@@ -3193,6 +3193,7 @@ function openAdminPanel() {
             { k: 'cfg', icon: IC_SETTINGS, name: '配置模型' },
             { k: 'prompt', icon: IC_PENCIL, name: '编写提示词' },
             { k: 'edit', icon: IC_PENCIL, name: '改写记忆' },
+            { k: 'chars', icon: IC_USERS, name: '角色池' },
             { k: 'summary', icon: IC_LAYERS, name: '总结会话' },
             { k: 'mem', icon: IC_MEMORY, name: '总结记忆' },
   ];
@@ -3201,7 +3202,7 @@ function openAdminPanel() {
       <div class="modal-head">
         <div class="admin-head-l">
           <span class="admin-title">${IC_BOT}<span class="lb">面板管理员</span></span>
-          <span class="admin-sub">配置模型 · 提示词 · 总结 · Agent 工具 · 编辑需你确认</span>
+          <span class="admin-sub">配置模型 · 提示词 · 角色池 · 总结 · 编辑需你确认</span>
         </div>
         <span class="spacer"></span>
         <select id="admin-model" class="admin-model-sel" onchange="adminPickModel(this.value)" ${usable.length ? '' : 'disabled'}>
@@ -3294,6 +3295,7 @@ function adminQuick(type) {
   if (type === 'model') prompt = '请帮我创建/接入一个新模型：先用 get_panel_state 查看现有模型避免重复；信息不足时用 web_search 查官方 API 地址与模型 ID，再用 create_model 工具直接添加（无需确认）。';
   else if (type === 'edit') prompt = botName ? `请使用工具完整读取写手「${botName}」的记忆库文件与最近会话，诊断人设/表述/设定问题。如需修改，用 propose_memory_edit / propose_global_edit / propose_bot_config_edit 提交修改建议（我会确认后才会真正写入）。` : '请使用工具读取当前写手记忆库与最近会话进行诊断；需要修改时用 propose_* 工具提交建议（用户确认后才写入）。';
   else if (type === 'cfg') prompt = '请先调用 get_panel_state / list_robots 了解现状，再评估模型与全局配置并给出具体建议（选型、参数、联网）。';
+  else if (type === 'chars') prompt = '请先调用 list_characters 查看当前角色池，然后告诉我池子里有哪些角色、各自被哪些写手选用，并指出哪些角色的设定还比较单薄、值得补充。如需调整或新增角色，用 propose_character_edit / propose_character_create 提交建议（我会确认后才会真正写入）。';
   else if (type === 'prompt') prompt = '请为写手写一份高质量的人设提示词（Markdown，含角色背景、性格、说话风格、行为准则）；如你想基于现有记忆库改写，请先用 read_memory_file 读取原文再产出，并可用 propose_global_edit 提供全局提示词修改建议。';
   else if (type === 'summary') prompt = botName ? `请使用 read_sessions 读取写手「${botName}」最近的会话记录并总结，提炼关键信息与后续建议。` : '请使用 read_sessions 读取当前写手最近会话并总结。';
   else if (type === 'mem') prompt = botName ? `请使用 list_memory_files / read_memory_file 浏览写手「${botName}」的记忆库，总结当前设定并指出可优化处。` : '请使用工具读取当前写手的记忆库并总结设定。';
@@ -3304,15 +3306,26 @@ function adminQuick(type) {
 const ADMIN_TOOL_META = {
   list_robots: [IC_MEMORY, '写手列表'],
   get_panel_state: [IC_LAYERS, '面板概况'],
+  list_characters: [IC_USERS, '角色池'],
   list_memory_files: [IC_MEMORY, '记忆库'],
   read_memory_file: [IC_FILE, '读取记忆'],
   read_sessions: [IC_CHAT, '读取会话'],
   read_global_files: [IC_SETTINGS, '全局文件'],
   read_global_file: [IC_SETTINGS, '全局文件'],
   create_model: [IC_PLUS, '新增模型'],
+  summarize_moments: [IC_SPARKLE, '提炼精彩时刻'],
   propose_memory_edit: [IC_PENCIL, '待确认·记忆'],
+  propose_memory_tier: [IC_LAYERS, '待确认·层级'],
+  propose_core_edit: [IC_PENCIL, '待确认·核心卡'],
   propose_global_edit: [IC_PENCIL, '待确认·全局'],
-  propose_bot_config_edit: [IC_PENCIL, '待确认·配置'],
+  propose_bot_config_edit: [IC_PENCIL, '待确认·写手配置'],
+  propose_character_edit: [IC_USERS, '待确认·角色'],
+  propose_character_create: [IC_PLUS, '待确认·新建角色'],
+  ws_write_file: [IC_FILE, '写工作区'],
+  ws_list_files: [IC_FILE, '工作区'],
+  ws_read_file: [IC_FILE, '读工作区'],
+  ws_delete_file: [IC_TRASH, '删工作区'],
+  propose_ws_inject: [IC_INJECT, '待确认·注入'],
   web_search: [IC_GLOBE, '联网搜索'],
   web_fetch: [IC_LINK, '抓取网页'],
   list_admin_sessions: [IC_LAYERS, '历史会话'],
@@ -3595,6 +3608,8 @@ function extractEdit(reply) {
   if (g) return { type: 'global', payload: g };
   const c = scanActionJson(reply, 'editCharacter');
   if (c) return { type: 'character_edit', payload: { ...c, patch: c.patch || c.fields || {} } };
+  const nc = scanActionJson(reply, 'createCharacter');
+  if (nc) return { type: 'character_create', payload: nc };
   const b = scanActionJson(reply, 'editBot');
   if (b) return { type: 'bot', payload: b };
   return null;
@@ -3612,9 +3627,12 @@ function renderEditBar(ed) {
   else if (ed.type === 'ws_inject') label = `管理员建议把工作区草稿「${p.key}」注入到 ${p.targetType === 'global' ? '全局设定' : (p.targetId || '?') + ' 的记忆库'}（目标文件 ${p.destKey || p.key}.md）`;
   else if (ed.type === 'character_edit') {
     const ks = Object.keys(p.patch || {}).join('、') || '无字段';
-    label = `建议修改角色「${p.name || p.characterId}」的 ${ks}${p.reason ? `　原因：${p.reason}` : ''}`;
+    label = `管理员建议修改角色「${p.name || p.characterId}」的 ${ks}${p.reason ? `　原因：${p.reason}` : ''}`;
   }
-  else label = `管理员建议更新机器人配置：${p.id || ''}`;
+  else if (ed.type === 'character_create') {
+    label = `管理员建议在角色池新建角色「${p.name}」${p.reason ? `　原因：${p.reason}` : ''}`;
+  }
+  else label = `管理员建议更新写手配置：${p.id || ''}`;
   return `<div class="admin-msg ai"><div class="admin-bubble admin-action admin-write">
     <span class="admin-action-label">${IC_SETTINGS}<span class="lb">是否同意此更改？</span><br><span class="admin-action-sub">${esc(label)}</span></span>
     <span class="spacer"></span>
@@ -3647,11 +3665,21 @@ async function previewEdit(btn) {
     const cur = ((state.characters || []).find(c => c.id === p.characterId)) || {};
     const lines = [];
     for (const [k, v] of Object.entries(p.patch || {})) {
+      const label = (CHR_FIELDS.find(f => f[0] === k) || [k, k])[1];
       const oldV = Array.isArray(cur[k]) ? cur[k].join('、') : (cur[k] || '（空）');
       const newV = Array.isArray(v) ? v.join('、') : String(v ?? '');
-      lines.push(`【${k}】\n  改前：${oldV}\n  改后：${newV}`);
+      lines.push(`【${label}】\n  改前：${oldV}\n  改后：${newV}`);
     }
     content = lines.join('\n\n') || '（没有要改的字段）';
+  }
+  else if (ed.type === 'character_create') {
+    // 新建：直接把将写入的字段摊开，用户一眼看清要建一个什么样的人
+    const lines = [];
+    for (const [k, ph] of CHR_FIELDS) {
+      const v = Array.isArray(p[k]) ? p[k].join('、') : String(p[k] ?? '');
+      if (v.trim()) lines.push(`【${ph}】\n${v}`);
+    }
+    content = lines.join('\n\n') || '（没有内容）';
   }
   else if (ed.type === 'ws_inject') {
     const r = await api(`/api/workspace/${encodeURIComponent(p.key)}`).catch(() => ({ ok: false }));
@@ -3661,8 +3689,9 @@ async function previewEdit(btn) {
     : ed.type === 'global' ? `预览：全局「${p.key}」`
       : ed.type === 'core' ? `预览：${p.botId} 人格核心卡`
         : ed.type === 'character_edit' ? `预览：角色「${p.name || p.characterId}」的改动`
+        : ed.type === 'character_create' ? `预览：新建角色「${p.name}」`
         : ed.type === 'ws_inject' ? `预览：工作区「${p.key}」写入${p.targetType === 'global' ? '全局' : '「' + p.targetId + '」'}「${p.destKey || p.key}」`
-          : `预览：机器人「${p.id}」配置`;
+          : `预览：写手「${p.id}」配置`;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'edit-preview';
@@ -3692,7 +3721,10 @@ async function confirmEdit(btn) {
     const ks = Object.keys(p.patch || {}).join('、') || '无字段';
     desc = `将修改角色「${p.name || p.characterId}」的 ${ks}（旧版本会自动留档，可回滚）`;
   }
-  else desc = `将更新机器人「${p.id}」的配置`;
+  else if (ed.type === 'character_create') {
+    desc = `将在角色池新建角色「${p.name}」`;
+  }
+  else desc = `将更新写手「${p.id}」的配置`;
   if (!(await uiConfirm({ title: '确认应用更改', message: `${desc}，\n确认应用？`, okText: '确认应用' }))) return;
   let r;
   if (ed.type === 'memory') {
@@ -3703,6 +3735,14 @@ async function confirmEdit(btn) {
     // ★ 走 PUT /api/characters/:id —— 服务端内部调 characters.update()，
     //   会自动把「改前状态」推进 history，回滚能力由它保证，前端不用管。
     r = await api(`/api/characters/${encodeURIComponent(p.characterId)}`, 'PUT', p.patch || {});
+  } else if (ed.type === 'character_create') {
+    if (!p.name) return toast('缺少角色名', 'err');
+    // POST /api/characters 内部调 characters.create()，首版会自动进历史档
+    r = await api('/api/characters', 'POST', {
+      name: p.name, persona: p.persona, traits: p.traits, age: p.age,
+      appearance: p.appearance, background: p.background, tags: p.tags,
+      source: 'admin',
+    });
   } else if (ed.type === 'ws_inject') {
     if (!p.key) return toast('缺少工作区文件名', 'err');
     r = await api('/api/workspace/inject', 'POST', {
@@ -3719,7 +3759,7 @@ async function confirmEdit(btn) {
     r = await api(`/api/global/files/${p.key}`, 'PUT', { content: p.content || '' });
   } else {
     const bots = (state.bots || []).map(b => b.id === p.id ? { ...b, ...p } : b);
-    if (!bots.some(b => b.id === p.id)) return toast('机器人不存在：' + p.id, 'err');
+    if (!bots.some(b => b.id === p.id)) return toast('写手不存在：' + p.id, 'err');
     r = await api('/api/config', 'PUT', { bots });
   }
   if (r.ok) {

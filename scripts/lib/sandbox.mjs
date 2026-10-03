@@ -70,6 +70,44 @@ export async function patchSandboxConfig(dir, opts = {}) {
   const cfgPath = path.join(dir, 'config.json');
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
 
+  // ★ 兜底：config.json 是运行时数据（未入库，可能被用户清空成 0 写手）。
+  //   而探针 / 前端测试都按 bots[0].id 拼 :id 参数，没有写手就跑不了。
+  //   所以沙箱自己造一位「探针写手」+ 一位探针角色 —— 只存在于副本里，绝不碰真实 config。
+  //   ★ 字段必须对齐 api-baseline.json 里 entry:cors-allowed 记录的完整 shape，
+  //     否则基线会报「消失 N 项」的假偏差（shape 是结构性契约，缺字段就算变更）。
+  if (!(cfg.bots || []).length) {
+    // ★ 数组字段都放至少一个元素：shape 是「结构性契约」，空数组会让
+    //   heartbeats[].* / moments[].* / activeCharacterIds[] 这些内层字段整批消失，
+    //   基线就会报「消失 N 项」的假偏差（内容本身是假的，只有形状有意义）。
+    cfg.bots = [{
+      id: 'BOT1', name: '探针写手', kind: 'writer',
+      modelId: (cfg.models || [])[0]?.id || '',
+      enabled: false, sandbox: false, personaFile: 'persona', avatar: '',
+      useGlobal: false, webSearch: false, searchMode: 'auto',
+      historyLimit: 10, intents: ['probe-intent'],
+      activeCharacterIds: ['CHRprobe0001'],
+      moments: [{ title: '探针时刻', quote: '一句台词', summary: '一段摘要' }],
+      heartbeats: [{
+        enabled: false, mode: 'random', tone: 'natural', prompt: '探针心跳',
+        intervalMin: 60, minMin: 30, maxMin: 120,
+        tasks: [{ time: '09:00', prompt: '探针任务' }],
+      }],
+    }];
+  }
+  if (!(cfg.characters || []).length) {
+    cfg.characters = [{
+      id: 'CHRprobe0001', ts: 1700000000000, name: '探针角色',
+      persona: '沙箱探针用的角色设定。', traits: '沉稳', age: '18',
+      appearance: '黑发', background: '来历不明', tags: ['探针'], avatar: '',
+      source: 'probe',
+      // history 也要有元素（含 by/ts + 全字段快照），否则内层字段整批消失
+      history: [{
+        by: 'user', ts: 1700000000000, name: '探针角色', persona: '沙箱探针用的角色设定。',
+        traits: '沉稳', age: '18', appearance: '黑发', background: '来历不明', tags: ['探针'], avatar: '',
+      }],
+    }];
+  }
+
   for (const bot of cfg.bots || []) {
     if (enableBots) continue;         // 保留原样（会真连 QQ）
     bot.enabled = false;              // sync() 会直接 continue，不连 QQ
@@ -86,7 +124,64 @@ export async function patchSandboxConfig(dir, opts = {}) {
 
   const botId = (cfg.bots || [])[0]?.id;
   if (!botId) throw new Error('config.json 里没有机器人，无法确定 :id 探针参数');
+
+  // ★ 种一份可复现的运行时数据（只写副本）：会话 / 分支 / 管理员会话 / 用量日志。
+  //   不种的话这些接口返回空数组 → shape 缩水 → 基线会报「消失 N 项」的假偏差，
+  //   而且回归价值随之降低（空数组测不出字段结构）。
+  seedRuntimeData(dir, cfg.bots[0]);
   return { port: cfg.port, botId };
+}
+
+// 在沙箱副本内种入固定运行时数据。全部是「只有形状有意义」的假数据。
+function seedRuntimeData(dir, bot) {
+  const memo = path.join(dir, 'memory');
+  const botDir = path.join(memo, bot.id);
+  fs.mkdirSync(botDir, { recursive: true });
+
+  // 主会话：threads.migrateIfNeeded() 首次读到 sessions.jsonl 会自动搬成默认线程，
+  // 所以这里只写「旧格式」，迁移逻辑由被测代码自己跑 —— 顺带测到迁移路径。
+  const seedMsgs = [
+    { role: 'user', content: '你好，介绍一下你自己。', ts: 1700000000000 },
+    { role: 'assistant', content: '我是沙箱探针写手。', ts: 1700000001000 },
+  ];
+  fs.writeFileSync(path.join(botDir, 'sessions.jsonl'),
+    seedMsgs.map((m) => JSON.stringify(m)).join('\n') + '\n', 'utf8');
+
+  // 经历事件流（api:mem-layers 里 state.events[] 的形状来源）
+  fs.writeFileSync(path.join(botDir, 'events.jsonl'),
+    JSON.stringify({ ts: 1700000001000, actors: ['探针角色'], event: '探针事件', emotion: '平静', importance: 3, source: 'auto' }) + '\n', 'utf8');
+
+  // 人格核心卡（api:mem-layers 里 state.core 的形状来源；不种就是 null，shape 会缩水）
+  fs.writeFileSync(path.join(botDir, 'persona_core.json'), JSON.stringify({
+    ts: 1700000000000, manual: false, seedHash: 'probe-seed-hash',
+    core: {
+      identity: '沙箱探针写手', tone: '平稳', relationship_state: '初次见面',
+      boundaries: '仅用于探针', evolved_notes: '无',
+    },
+  }, null, 2) + '\n', 'utf8');
+
+  // 归档分支（api:mem-branches 的形状来源）
+  const branchesDir = path.join(botDir, 'branches');
+  fs.mkdirSync(branchesDir, { recursive: true });
+  fs.writeFileSync(path.join(branchesDir, '1700000002000.jsonl'),
+    JSON.stringify({ role: 'assistant', content: '分支内容。', ts: 1700000002000 }) + '\n', 'utf8');
+
+  // 管理员会话（api:admin-sessions 的形状来源）
+  const adminDir = path.join(memo, 'admin');
+  fs.mkdirSync(adminDir, { recursive: true });
+  const adminMsgs = [
+    { id: 'probe', ts: 1700000010000, role: 'user', content: '帮我看看面板状态。' },
+    { id: 'probe', ts: 1700000011000, role: 'assistant', content: '面板一切正常。' },
+  ];
+  fs.writeFileSync(path.join(adminDir, 'sessions.jsonl'),
+    adminMsgs.map((m) => JSON.stringify(m)).join('\n') + '\n', 'utf8');
+
+  // 用量日志（api:usage 的形状来源）
+  const usage = [
+    { ts: 1700000001000, botId: bot.id, modelId: bot.modelId || 'probe-model', promptTokens: 100, completionTokens: 50, totalTokens: 150, ok: true },
+  ];
+  fs.writeFileSync(path.join(memo, 'usage.jsonl'),
+    usage.map((u) => JSON.stringify(u)).join('\n') + '\n', 'utf8');
 }
 
 export async function startServer(dir, port) {

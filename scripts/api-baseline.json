@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generatedAt": "2026-10-03T13:47:50.397Z",
+    "generatedAt": "2026-10-03T15:07:09.820Z",
     "node": "v22.22.2",
     "sourceSha": "<unknown>",
     "probeCount": 100,
@@ -703,6 +703,12 @@
         "state.summaries.content.name:string",
         "state.summaries.content.sections:array",
         "state.summaries.content:object",
+        "state.summaries.persona.empty:boolean",
+        "state.summaries.persona.exists:boolean",
+        "state.summaries.persona.fresh:boolean",
+        "state.summaries.persona.name:string",
+        "state.summaries.persona.sections:array",
+        "state.summaries.persona:object",
         "state.summaries.plot.empty:boolean",
         "state.summaries.plot.exists:boolean",
         "state.summaries.plot.fresh:boolean",
@@ -1995,7 +2001,7 @@
       ],
       "captured": {
         "ok": "false",
-        "err": "机器人不存在"
+        "err": "写手不存在"
       }
     },
     {
