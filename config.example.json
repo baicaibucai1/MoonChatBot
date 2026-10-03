@@ -1,0 +1,38 @@
+{
+  "port": 4357,
+  "bots": [
+    {
+      "id": "BOT1",
+      "name": "我的机器人",
+      "appId": "你的AppID",
+      "appSecret": "env:MOONCHATBOT_SECRET 或直接填密钥",
+      "modelId": "siliconflow",
+      "sandbox": true,
+      "enabled": true,
+      "historyLimit": 10,
+      "personaFile": "",
+      "avatar": "",
+      "intents": ["GROUP_AND_C2C_EVENT", "PUBLIC_GUILD_MESSAGES"]
+    }
+  ],
+  "models": [
+    {
+      "id": "siliconflow",
+      "name": "硅基流动 Qwen2.5",
+      "baseURL": "https://api.siliconflow.cn/v1",
+      "model": "Qwen/Qwen2.5-7B-Instruct",
+      "apiKeyEnv": "SILICONFLOW_API_KEY",
+      "temperature": 0.7,
+      "maxTokens": 0
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek V4 Flash",
+      "baseURL": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-flash",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "temperature": 0.7,
+      "maxTokens": 0
+    }
+  ]
+}

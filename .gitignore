@@ -1,0 +1,40 @@
+node_modules/
+playwright-browsers/
+.env
+config.json
+
+# 运行时数据目录 —— 必须锚定到仓库根，否则会连 lib/memory/ 一起吞掉
+# （批 3 会把 lib/memory.js 拆成 lib/memory/ 目录，未锚定的 `memory/` 规则会让它整个不被跟踪）
+/memory/
+/avatars/
+/logs/
+*.log
+
+# 桌面版（desktop/）编译产物：安装包走 GitHub Releases，不进版本库
+dist-setup/
+
+# 本地临时诊断/核对产物：一次一个目录（.tmp-diagnostics/ .tmp-c8/ …），用通配统一收口
+.tmp-*/
+
+# 真机验证脚本（scripts/verify-*.mjs）产出的截图：每次跑都不同，仅供本地肉眼核对
+scripts/shots/
+
+# dev:sandbox 的运行时状态（PID / 端口 / 沙箱目录），会随进程启停变化，不进版本库
+# ↓ 已被下面整条 /.workbuddy/ 覆盖，保留注释说明这个文件的来历
+# .workbuddy/dev-sandbox.json
+
+# dev 会话日志：同上，属于本地工作笔记
+# （注意：以前这条是靠上面未锚定的 `memory/` 规则顺带覆盖的；该规则已锚定到根，
+#   所以要在这里显式写一次，否则 .workbuddy/memory/ 会变成待提交文件）
+/.workbuddy/memory/
+
+# 收口：.workbuddy/ 整个是本地工作笔记 / 核对脚本 / 截图的落脚处（一直以来也没有
+# 任何文件进过版本库），整体忽略免得每次 git status 都挂一屏待提交文件。
+# ★ 只影响 git 跟踪范围，不动磁盘上的任何东西。
+/.workbuddy/
+
+# 阶段性推演/分析文档：属于本地工作笔记，不进版本库
+# （架构拆分方案.md / 角色化改造方案.md 是活文档，要跟着代码一起走，故不在此列）
+优化建议.md
+打包exe可行性评估.md
+重构评估结论.md

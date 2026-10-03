@@ -1,0 +1,26 @@
+{
+  "name": "moonchatbot",
+  "version": "1.1.0",
+  "description": "QQ 机器人管理面板：多机器人 + 记忆文档 + 模型接入",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node setup.js",
+    "start.cmd": "start",
+    "up": "node server.js",
+    "lint": "eslint .",
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "baseline": "node scripts/api-baseline.mjs",
+    "baseline:check": "node scripts/api-baseline.mjs --check",
+    "audit:regex": "node scripts/regex-audit.mjs",
+    "dev:sandbox": "node scripts/dev-sandbox.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.62.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0"
+  }
+}
