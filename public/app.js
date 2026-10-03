@@ -34,6 +34,10 @@ const IC_MEMORY = ICON('<circle cx="8" cy="8" r="5.5"/><path d="M8 5.5v5M5.5 8h5
 const IC_CHANNEL = ICON('<circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/><path d="M4.6 4.6a4.8 4.8 0 0 0 0 6.8M11.4 4.6a4.8 4.8 0 0 1 0 6.8M2.6 2.6a7.6 7.6 0 0 0 0 10.8M13.4 2.6a7.6 7.6 0 0 1 0 10.8"/>');
 const IC_HEART = ICON('<path d="M8 13.2S2.5 9.8 2.5 6.1A3.1 3.1 0 0 1 8 4.2a3.1 3.1 0 0 1 5.5 1.9c0 3.7-5.5 7.1-5.5 7.1z"/>');
 const IC_PALETTE = ICON('<path d="M8 2.5a5.5 5.5 0 0 0 0 11c.9 0 1.4-.6 1.4-1.2 0-.4-.2-.7-.4-1-.2-.2-.3-.5-.3-.8 0-.6.5-1.1 1.1-1.1H10a3.5 3.5 0 0 0 3.5-3.6A5.6 5.6 0 0 0 8 2.5z"/><circle cx="5.6" cy="7" r=".85" fill="currentColor" stroke="none"/><circle cx="7.8" cy="5.3" r=".85" fill="currentColor" stroke="none"/><circle cx="10.3" cy="6.2" r=".85" fill="currentColor" stroke="none"/>');
+// 角色池：两个人形（前一个实心、后一个描边）——「笔下的人物们」，比单个头像更贴语义
+const IC_USERS = ICON('<circle cx="6" cy="5.6" r="2.3"/><path d="M1.8 13.2c0-2.3 1.9-3.6 4.2-3.6s4.2 1.3 4.2 3.6"/><path d="M11 3.6a2.3 2.3 0 0 1 0 4.4M12 9.8c1.5.3 2.4 1.4 2.4 3.4"/>');
+// 版本档：时钟箭头 —— 「历史版本，可回滚」
+const IC_HISTORY = ICON('<path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8"/><path d="M2.4 2.8v2.8h2.8"/><path d="M8 5.4V8l1.9 1.4"/>');
 const IC_GLOBE = ICON('<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11"/><ellipse cx="8" cy="8" rx="2.5" ry="5.5"/>');
 const IC_LAYERS = ICON('<path d="M8 2.2 2.4 5.4 8 8.6l5.6-3.2z"/><path d="M2.4 8.2 8 11.4l5.6-3.2"/><path d="M2.4 11 8 14.2 13.6 11"/>');
 const IC_CHART = ICON('<path d="M3 13V8.5M6.3 13V3.5M9.7 13V6.5M13 13V2.5"/>');
@@ -87,6 +91,7 @@ const IC_INJECT = ICON('<path d="M8 2.8v6.8M5.2 6.8 8 9.6l2.8-2.8M3 12.8h10"/>')
 
 const BOT_TABS = [
   { id: 'chat', n: '对话', ic: IC_CHAT },
+  { id: 'characters', n: '角色', ic: IC_USERS },
   { id: 'memory', n: '记忆', ic: IC_MEMORY },
   { id: 'gallery', n: '画廊', ic: IC_PALETTE },
   { id: 'channel', n: '渠道', ic: IC_CHANNEL },
@@ -339,7 +344,7 @@ function sideCtx(ev, id) {
   menu.id = 'side-ctx';
   menu.innerHTML = `
     <div class="ctx-head">${esc(b.name || b.id)}</div>
-    <div class="ctx-item" data-a="fav">${IC_STAR}<span class="lb">${favored ? '取消收藏' : '收藏此角色'}</span></div>`;
+    <div class="ctx-item" data-a="fav">${IC_STAR}<span class="lb">${favored ? '取消收藏' : '收藏此写手'}</span></div>`;
   document.body.appendChild(menu);
   // 贴着鼠标放，但不许溢出视口（先量尺寸再定位，所以得先 append）
   const pad = 8;
@@ -428,11 +433,25 @@ function renderSidebar() {
         ${botFavored(b.id) ? `<span class="side-fav" title="已收藏 · 右键可取消">${IC_STAR}</span>` : ''}
       </div>`;
       }).join('')
-    : '<div class="side-empty">暂无角色</div>';
-  // 底部按钮状态指示（设置/模型）
+    : '<div class="side-empty">暂无写手</div>';
+  // 底部按钮状态指示（设置/模型/工作区）
+  // ⚠️ 高亮判据用「onclick 里有对应的打开函数名」，不能用 view.type 直接比 ——
+  //   view.type 是 'models'/'model-form' 等多个值，而 onclick 写的是 openModels()。
   document.querySelectorAll('.side-btns .settings-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.getAttribute('onclick').includes(view.type));
+    const fn = btn.getAttribute('onclick') || '';
+    const active = (fn.includes('openSettings') && view.type === 'settings')
+      || (fn.includes('openModels') && (view.type === 'models' || view.type === 'model' || view.type === 'model-form'))
+      || (fn.includes('openWorkspace') && view.type === 'workspace');
+    btn.classList.toggle('active', active);
   });
+  // 「角色池」是列表区的一个条目（不是底部按钮），单独维护高亮 + 角色数
+  const charsItem = document.getElementById('side-chars');
+  if (charsItem) {
+    charsItem.classList.toggle('active', view.type === 'chars');
+    const meta = document.getElementById('side-chars-meta');
+    const n = (state.characters || []).length;
+    if (meta) meta.textContent = n ? `${n} 位角色 · 全体写手共用` : '还没有角色';
+  }
 }
 
 // 新建线程（返回新线程 id；失败返回 null）
@@ -508,6 +527,7 @@ function renderMain() {
   if (view.type === 'model') return renderModelDetail(view.id);
   if (view.type === 'settings') return renderSettings();
   if (view.type === 'workspace') return renderWorkspace();
+  if (view.type === 'chars') return renderCharacterPool();
   return renderBotDetail(view.id);
 }
 
@@ -534,7 +554,7 @@ function ensureDefaultThread(botId) {
 function emptyThreadsCard(id, pending) {
   if (pending) return '<div class="card"><div class="empty-hint">正在准备第一条对话…</div></div>';
   return `<div class="card">
-      <div class="empty-hint">这个角色还没有对话。</div>
+      <div class="empty-hint">这位写手还没有对话。</div>
       <div class="empty-thread-actions"><button class="primary sm" onclick="newThread('${id}')">${IC_PLUS}<span class="lb">新建对话</span></button></div>
     </div>`;
 }
@@ -590,7 +610,7 @@ function renderChatTabHtml(b) {
         </div>
         <div class="chat-input">
           <textarea id="f-chat" rows="1" placeholder="与 ${esc(b.name || b.id)} 说话… Enter 发送，Shift+Enter 换行" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${id}')}"></textarea>
-          <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这个角色接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
+          <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这位写手接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
           <button class="primary sm" onclick="directChat('${id}')">发送</button>
         </div>
       </div>
@@ -730,6 +750,375 @@ function avatarInner(b) {
 // 「精彩时刻」由 AI 从记忆档案 + 最近对话里提炼的高光片段。原先挂在角色卡第二行、
 // 挤成横排小条（因为角色卡是窄条横幅，怕把对话视线往下挤）；现在独立成标签页，
 // 空间充裕 → 改成卡片网格，摘要与台词**默认全展开**（画廊是用来浏览的，不该再藏一层）。
+// 「角色」标签页：这位写手笔下的角色（从全局角色池里挑选）
+// ------------------------------------------------------------------
+// ★ 认知：bot 是**写手**，角色是它笔下的人物，存在全局共享的池子里。
+//   所以这里管的是「这位写手要用哪几位角色」，而不是「这位角色是谁」。
+//   池子本身（新建 / 编辑 / 删除）在全局「角色池」页 —— 左侧栏入口。
+function renderCharactersTabHtml(b) {
+  const all = state.characters || [];
+  const activeIds = Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : [];
+  const mine = activeIds.map(id => all.find(c => c.id === id)).filter(Boolean);
+  const rest = all.filter(c => !activeIds.includes(c.id));
+
+  const head = `<div class="card-title">${IC_USERS}<span class="lb">写手的角色</span>
+      <span class="spacer"></span>
+      <span class="ch-count">已选 ${mine.length} / 池中 ${all.length}</span>
+      <button class="ghost sm" onclick="openCharacterPool()" title="打开全局角色池：新建 / 编辑 / 删除角色">${IC_USERS}<span class="lb">角色池</span></button>
+    </div>`;
+
+  if (!all.length) {
+    return `<div class="card ch-card">${head}
+      <div class="gal-empty">
+        <div class="gal-empty-ic">${IC_USERS}</div>
+        <div class="gal-empty-t">角色池还是空的</div>
+        <div class="gal-empty-h">角色是写手笔下的人物。去角色池里建一位，或者直接跟写手聊——它可以在剧情里创造人物并建议你加进池子。</div>
+        <div class="gal-empty-act"><button class="primary sm" onclick="openCharacterPool()">${IC_PLUS}<span class="lb">去角色池新建</span></button></div>
+      </div>
+    </div>`;
+  }
+
+  const mineCards = mine.length
+    ? mine.map(c => `
+      <div class="ch-item">
+        <div class="ch-avatar">${characterAvatarInner(c)}</div>
+        <div class="ch-main">
+          <div class="ch-name">${esc(c.name)}</div>
+          <div class="ch-meta">${esc(c.id)}${c.age ? ' · ' + esc(c.age) : ''}${c.tags?.length ? ' · ' + c.tags.map(t => esc(t)).join(' / ') : ''}</div>
+          ${c.persona ? `<div class="ch-snippet">${esc(snippet(c.persona, 90))}</div>` : ''}
+        </div>
+        <div class="ch-acts">
+          <button class="ghost sm" onclick="characterHistory('${c.id}')" title="查看历史版本，可回滚">${IC_HISTORY}<span class="lb">版本</span></button>
+          <button class="ghost sm" onclick="characterEdit('${c.id}')" title="编辑角色设定">${IC_SETTINGS}<span class="lb">编辑</span></button>
+          <button class="ghost sm" onclick="characterDetach('${b.id}','${c.id}')" title="从这位写手的角色里移除（不影响角色池）">移除</button>
+        </div>
+      </div>`).join('')
+    : `<div class="ch-hint">这位写手还没选角色。${rest.length ? '从下面挑一位，或者先跟它聊一会儿让它自己提议。' : ''}</div>`;
+
+  const addPanel = rest.length
+    ? `<div class="ch-add">
+        <div class="ch-add-t">从角色池添加</div>
+        <div class="ch-add-list">
+          ${rest.map(c => `<button class="ch-chip" onclick="characterAttach('${b.id}','${c.id}')" title="加进这位写手的角色">${IC_PLUS}<span class="ch-chip-n">${esc(c.name)}</span></button>`).join('')}
+        </div>
+      </div>`
+    : '';
+
+  return `<div class="card ch-card">${head}
+    <div class="ch-list">${mineCards}</div>
+    ${addPanel}
+  </div>`;
+}
+
+// 角色头像：现在还没有形象库，先用「名字首字」的占位块 —— 比空白更容易分辨
+function characterAvatarInner(c) {
+  const ch = String((c && c.name) || '?').trim().charAt(0) || '?';
+  return esc(ch);
+}
+
+// 截断到 n 字（角色简介在列表里只露个头，全文在编辑弹窗里看）
+// ★ 顺手剥掉 Markdown 标记：persona 常常是手写的 `# 人格\n## 基本信息 …`，
+//   直接截断会把井号原样显示出来，列表看起来像没洗干净。剥掉后是纯文本摘要。
+function snippet(text, n) {
+  const s = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')      // 代码块
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')   // 行首标题井号
+    .replace(/^\s{0,3}[-*+]\s+/gm, '')    // 行首列表符号
+    .replace(/^\s{0,3}>\s?/gm, '')        // 行首引用
+    .replace(/\*\*(.+?)\*\*/g, '$1')      // 粗体
+    .replace(/\*(.+?)\*/g, '$1')          // 斜体
+    .replace(/`([^`]+)`/g, '$1')          // 行内代码
+    .replace(/\s+/g, ' ')
+    .trim();
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+// 拉取角色池（列表接口同时带回 usedBy，用来显示「被哪些写手使用」）
+async function loadCharacters() {
+  const r = await api('/api/characters');
+  if (r && r.ok) {
+    state.characters = r.characters || [];
+    // 只有当前正停在这个标签页时才重绘 —— 否则会把用户正在看的别的页面顶掉
+    if (view.type === 'bot' && _botTab === 'characters') {
+      const b = (state.bots || []).find(x => x.id === view.id);
+      const el = document.querySelector('.bot-tab-body');
+      if (b && el) el.innerHTML = renderCharactersTabHtml(b);
+    } else if (view.type === 'chars') {
+      renderMain();
+    }
+  }
+  return state.characters || [];
+}
+
+// 把角色加进写手（先本地算好完整数组再 PUT —— 见 memory 里「PUT 是整份覆盖」那条坑）
+async function characterAttach(botId, charId) {
+  const b = (state.bots || []).find(x => x.id === botId);
+  if (!b) return toast('写手不存在', 'err');
+  const ids = Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds.slice() : [];
+  if (!ids.includes(charId)) ids.push(charId);
+  await saveWriterCharacters(botId, ids);
+}
+
+// 从写手的角色里移除（不影响角色池本身）
+async function characterDetach(botId, charId) {
+  const b = (state.bots || []).find(x => x.id === botId);
+  if (!b) return;
+  const ids = (b.activeCharacterIds || []).filter(x => x !== charId);
+  await saveWriterCharacters(botId, ids);
+}
+
+async function saveWriterCharacters(botId, ids) {
+  const r = await api(`/api/bots/${encodeURIComponent(botId)}/characters`, 'PUT', { characterIds: ids });
+  if (!r.ok) return toast(r.err || '保存失败', 'err');
+  // 本地同步（避免等一次 loadState 才看到变化）
+  const b = (state.bots || []).find(x => x.id === botId);
+  if (b) b.activeCharacterIds = r.activeCharacterIds || ids;
+  if (r.rejected && r.rejected.length) toast(`已忽略 ${r.rejected.length} 个无效角色 id`, '');
+  renderMain();
+}
+
+// 角色可编辑字段（与后端 lib/characters.js 的 EDITABLE_FIELDS 对齐）
+const CHR_FIELDS = [
+  ['name', '角色名', '例：银'],
+  ['persona', '角色设定', '这个人物是谁：身份、性格、说话方式、与主人的关系……（写手改写剧情时会读它）'],
+  ['traits', '性格特点', '例：表面冷淡、内里依恋；不擅长表达情绪'],
+  ['age', '年龄', '例：外表 8 岁'],
+  ['appearance', '外表形象', '例：银发红瞳的仿真机器人男孩'],
+  ['background', '背景故事', '出身、经历、来到故事里之前发生过什么'],
+];
+
+// 新建 / 编辑角色（同一个弹窗，id 为空即新建）
+function openCharacterEditModal(charId, opts) {
+  const c = charId ? (state.characters || []).find(x => x.id === charId) : null;
+  const isNew = !c;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'chr-edit-modal';
+  overlay.innerHTML = `
+    <div class="modal-card chr-edit-modal">
+      <div class="modal-head">
+        <span>${IC_USERS}<span class="lb">${isNew ? '新建角色' : '编辑角色'}</span></span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('chr-edit-modal').remove()">${IC_CLOSE}<span class="lb">关闭</span></button>
+      </div>
+      <div class="modal-body">
+        ${isNew ? '' : `<p class="empty-hint" style="margin:0 0 10px">角色 id：<code>${esc(c.id)}</code>　保存在全局角色池，所有写手共用。改动会自动留档，可回滚。</p>`}
+        ${CHR_FIELDS.map(([k, label, ph]) => `
+          <label class="frm">${label}</label>
+          ${k === 'name'
+            ? `<input id="chr-${k}" type="text" placeholder="${esc(ph)}" value="${esc((c && c[k]) || '')}">`
+            : `<textarea id="chr-${k}" rows="${k === 'persona' ? 5 : 2}" placeholder="${esc(ph)}">${esc((c && c[k]) || '')}</textarea>`}
+        `).join('')}
+        <label class="frm">标签（逗号分隔）</label>
+        <input id="chr-tags" type="text" placeholder="例：主角, 机器人, 未来" value="${esc(((c && c.tags) || []).join(', '))}">
+        <div class="chr-modal-acts">
+          <button class="primary" onclick="saveCharacter(${isNew ? 'null' : `'${c.id}'`})">${isNew ? '创建角色' : '保存修改'}</button>
+          ${isNew ? '' : `<button class="ghost sm" onclick="characterHistory('${c.id}')">${IC_HISTORY}<span class="lb">版本档</span></button>`}
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  const first = document.getElementById('chr-name');
+  if (first) first.focus();
+}
+
+// 从标签页 / 全局池页进来的编辑入口
+function characterEdit(id) { openCharacterEditModal(id); }
+
+async function saveCharacter(id) {
+  const body = {};
+  for (const [k] of CHR_FIELDS) {
+    const el = $(`#chr-${k}`);
+    if (el) body[k] = el.value.trim();
+  }
+  const tagsEl = $('#chr-tags');
+  if (tagsEl) body.tags = tagsEl.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  if (!body.name) return toast('角色名不能为空', 'err');
+
+  let r;
+  if (id) {
+    r = await api(`/api/characters/${encodeURIComponent(id)}`, 'PUT', body);
+  } else {
+    r = await api('/api/characters', 'POST', body);
+  }
+  if (!r.ok) return toast(r.err || '保存失败', 'err');
+  toast(id ? `已保存${r.changed && r.changed.length ? '（' + r.changed.join('、') + '）' : ''}` : '角色已创建', 'ok');
+  const m = document.getElementById('chr-edit-modal');
+  if (m) m.remove();
+  await loadCharacters();
+  if (view.type === 'chars') renderMain();
+}
+
+// 删除角色（★ 连根拔：提示会同时清掉哪些写手的引用）
+async function characterDelete(id) {
+  const c = (state.characters || []).find(x => x.id === id);
+  if (!c) return;
+  const usedBy = c.usedBy || [];
+  const warn = usedBy.length
+    ? `\n⚠️ 有 ${usedBy.length} 位写手正在用它：${usedBy.map(u => u.name).join('、')}。\n删除后会从这些写手的角色里一并移除。`
+    : '';
+  if (!(await uiConfirm({
+    title: '删除角色',
+    message: `确定把「${c.name}」从角色池里删除？${warn}\n此操作不可撤销（版本档也会一起删掉）。`,
+    okText: '删除', danger: true,
+  }))) return;
+  const r = await api(`/api/characters/${encodeURIComponent(id)}`, 'DELETE');
+  if (!r.ok) return toast(r.err || '删除失败', 'err');
+  toast(r.prunedBots ? `已删除（同时清理了 ${r.prunedBots} 位写手的引用）` : '已删除', 'ok');
+  await loadCharacters();
+  if (view.type === 'chars') renderMain();
+}
+
+// 版本档：列出历史版本，任选一版回滚
+async function characterHistory(id) {
+  const c = (state.characters || []).find(x => x.id === id);
+  const r = await api(`/api/characters/${encodeURIComponent(id)}/history`);
+  if (!r.ok) return toast(r.err || '读取版本档失败', 'err');
+  const hist = r.history || [];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'chr-hist-modal';
+  overlay.innerHTML = `
+    <div class="modal-card chr-hist-modal">
+      <div class="modal-head">
+        <span>${IC_HISTORY}<span class="lb">版本档 · ${esc((c && c.name) || id)}</span></span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('chr-hist-modal').remove()">${IC_CLOSE}<span class="lb">关闭</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="empty-hint" style="margin:0 0 10px">每次改动前，旧版本都会自动存档。回滚会把当年那份设定原样恢复；回滚本身也会留档，所以再想回去也可以。</p>
+        ${hist.length ? hist.map(h => {
+          // ★ 展示重点：这次改的是哪几个字段，以及**它们改之前长什么样**。
+          //   snapshot 存的是全量（回滚需要），但用户关心的是「我改了什么」——
+          //   只把 changed 里的字段拎出来显示，其他字段不必占版面。
+          const chg = Array.isArray(h.changed) ? h.changed.filter(k => k !== 'rollback') : [];
+          const fields = chg.length
+            ? chg.map(k => {
+              const meta = CHR_FIELDS.find(f => f[0] === k);
+              const label = meta ? meta[1] : k;
+              const val = k === 'tags'
+                ? ((h[k] || []).join(' / ') || '（空）')
+                : (String(h[k] ?? '').trim() || '（空）');
+              return `<div class="chr-hist-field"><span class="chr-hist-fn">${esc(label)}</span>`
+                + `<span class="chr-hist-fv">${esc(snippet(val, 100))}</span></div>`;
+            }).join('')
+            : `<div class="chr-hist-body">${esc(snippet(h.persona || h.name || '', 180))}</div>`;
+          return `
+          <div class="chr-hist-item">
+            <div class="chr-hist-head">
+              <span class="chr-hist-time">${esc(fmtTime(h.ts))}</span>
+              <span class="chr-hist-by ${h.by === 'ai' ? 'ai' : ''}">${h.by === 'ai' ? '写手改写' : '你编辑'}</span>
+              ${chg.length ? `<span class="chr-hist-chg">改动：${esc(chg.map(k => (CHR_FIELDS.find(f => f[0] === k) || [k, k])[1]).join('、'))}</span>` : ''}
+              <span class="spacer"></span>
+              <button class="ghost sm" onclick="characterRollback('${id}', ${h.index})">回滚到此版本</button>
+            </div>
+            ${fields}
+          </div>`;
+        }).join('')
+          : '<div class="empty-hint">还没有历史版本 —— 这个角色从建立到现在没被改过。</div>'}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+async function characterRollback(id, index) {
+  if (!(await uiConfirm({ title: '回滚角色设定', message: '将把角色设定恢复到这个历史版本。\n当前版本会先存进版本档，所以回滚之后还能再改回来。', okText: '回滚' }))) return;
+  const r = await api(`/api/characters/${encodeURIComponent(id)}/rollback`, 'POST', { index });
+  if (!r.ok) return toast(r.err || '回滚失败', 'err');
+  toast('已回滚到该版本', 'ok');
+  const m = document.getElementById('chr-hist-modal');
+  if (m) m.remove();
+  await loadCharacters();
+  if (view.type === 'chars') renderMain();
+}
+
+// 时间戳格式化（版本档里显示「谁在什么时候改的」）
+function fmtTime(ts) {
+  const d = new Date(Number(ts) || 0);
+  if (!Number.isFinite(d.getTime()) || d.getTime() <= 0) return '未知时间';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// ---- 全局角色池页（左侧栏入口；不属于任何一位写手）----
+function openCharacterPool() {
+  view = { type: 'chars' };
+  renderSidebar(); renderMain();
+}
+
+function renderCharacterPool() {
+  main.innerHTML = characterPoolHtml();
+}
+
+// 角色池页的 HTML（拆出来是为了搜索时能只重绘这块，不必经 renderMain）
+function characterPoolHtml() {
+  const all = state.characters || [];
+  const q = String(_charQuery || '').trim().toLowerCase();
+  const list = q ? all.filter(c =>
+    String(c.name || '').toLowerCase().includes(q)
+    || String(c.persona || '').toLowerCase().includes(q)
+    || (c.tags || []).some(t => String(t).toLowerCase().includes(q))) : all;
+
+  const rows = list.length ? list.map(c => {
+    const usedBy = c.usedBy || [];
+    return `
+    <div class="ch-item">
+      <div class="ch-avatar">${characterAvatarInner(c)}</div>
+      <div class="ch-main">
+        <div class="ch-name">${esc(c.name)}<span class="ch-id">${esc(c.id)}</span></div>
+        <div class="ch-meta">${[
+          c.age ? esc(c.age) : '',
+          c.tags?.length ? c.tags.map(t => esc(t)).join(' / ') : '',
+          (c.historyCount || 0) ? `${c.historyCount} 个历史版本` : '',
+        ].filter(Boolean).join(' · ') || '（无更多信息）'}</div>
+        ${c.persona ? `<div class="ch-snippet">${esc(snippet(c.persona, 120))}</div>` : ''}
+        <div class="ch-usedby">${usedBy.length
+          ? `被 ${usedBy.map(u => esc(u.name)).join('、')} 使用`
+          : '还没有写手选用'}</div>
+      </div>
+      <div class="ch-acts">
+        <button class="ghost sm" onclick="characterHistory('${c.id}')">${IC_HISTORY}<span class="lb">版本</span></button>
+        <button class="ghost sm" onclick="characterEdit('${c.id}')">${IC_SETTINGS}<span class="lb">编辑</span></button>
+        <button class="ghost sm ghost-del" onclick="characterDelete('${c.id}')">删除</button>
+      </div>
+    </div>`;
+  }).join('') : `<div class="gal-empty">
+      <div class="gal-empty-ic">${IC_USERS}</div>
+      <div class="gal-empty-t">${q ? '没有匹配的角色' : '角色池还是空的'}</div>
+      <div class="gal-empty-h">${q ? '换个关键词试试' : '角色是写手笔下的人物。建一位，然后在写手的「角色」标签页里选它。'}</div>
+      ${q ? '' : `<div class="gal-empty-act"><button class="primary sm" onclick="characterEdit()">${IC_PLUS}<span class="lb">新建角色</span></button></div>`}
+    </div>`;
+
+  return `
+    <div class="card ch-card">
+      <div class="card-title">${IC_USERS}<span class="lb">角色池</span>
+        <span class="spacer"></span>
+        <input id="chr-search" class="chr-search" type="search" placeholder="搜索角色名 / 设定 / 标签"
+               value="${esc(_charQuery || '')}" oninput="characterSearch(this.value)">
+        <span class="ch-count">共 ${all.length} 位</span>
+        <button class="primary sm" onclick="characterEdit()">${IC_PLUS}<span class="lb">新建角色</span></button>
+      </div>
+      <p class="empty-hint" style="margin:0 0 10px">角色池是全体写手共用的：写手从池子里挑选自己要写的角色；写手在剧情里改写角色设定时，会以「待确认建议」的形式给你，确认后才写入，旧版本自动留档可回滚。</p>
+      <div class="ch-list">${rows}</div>
+    </div>`;
+}
+
+let _charQuery = '';
+function characterSearch(v) {
+  _charQuery = v;
+  // 只重绘列表，不重建输入框（否则每敲一个字光标就跳掉）
+  const card = document.querySelector('.ch-card');
+  if (!card) return renderCharacterPool();
+  const tmp = document.createElement('div');
+  tmp.innerHTML = characterPoolHtml();
+  card.replaceWith(tmp.firstElementChild);
+  const el = document.getElementById('chr-search');
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+
+// 「记忆画廊」标签页：AI 提炼的精彩时刻
 function renderGalleryTabHtml(b) {
   const arr = Array.isArray(b.moments) && b.moments.length ? b.moments : null;
   const gen = `<button class="ghost sm gal-gen" onclick="momentsGen('${b.id}')"
@@ -742,7 +1131,7 @@ function renderGalleryTabHtml(b) {
       <div class="gal-empty">
         <div class="gal-empty-ic">${IC_SPARKLE}</div>
         <div class="gal-empty-t">还没有精彩时刻</div>
-        <div class="gal-empty-h">让 AI 从这个角色的记忆档案与最近对话里，提炼出值得留存的高光片段</div>
+        <div class="gal-empty-h">让 AI 从这位写手的记忆档案与最近对话里，提炼出值得留存的高光片段</div>
       </div>
     </div>`;
   }
@@ -791,16 +1180,17 @@ async function momentDel(id, index) {
 function renderBotDetail(id) {
   const b = (state.bots || []).find(x => x.id === id);
   if (!b) {
-    main.innerHTML = `<div class="card"><div class="empty-hint">选择一个角色，或点击左侧 ${IC_PLUS} 添加。</div></div>`;
+    main.innerHTML = `<div class="card"><div class="empty-hint">选择一位写手，或点击左侧 ${IC_PLUS} 添加。</div></div>`;
     return;
   }
   const tab = BOT_TABS.some(x => x.id === _botTab) ? _botTab : 'chat';
   _botTab = tab;
   const body = tab === 'chat' ? renderChatTabHtml(b)
-    : tab === 'memory' ? renderMemoryTabHtml(b)
-      : tab === 'gallery' ? renderGalleryTabHtml(b)
-        : tab === 'channel' ? renderChannelTabHtml(b)
-          : renderHeartTabHtml(b);
+    : tab === 'characters' ? renderCharactersTabHtml(b)
+      : tab === 'memory' ? renderMemoryTabHtml(b)
+        : tab === 'gallery' ? renderGalleryTabHtml(b)
+          : tab === 'channel' ? renderChannelTabHtml(b)
+            : renderHeartTabHtml(b);
 
   main.innerHTML = `
     ${renderBotCard(b)}
@@ -819,6 +1209,8 @@ function renderBotDetail(id) {
     }
     // 标签条重绘后（此时布局刚落定）把当前对话滚进视野
     requestAnimationFrame(scrollActiveThreadTab);
+  } else if (tab === 'characters') {
+    loadCharacters();
   } else if (tab === 'memory') {
     loadMemoryFiles(id);
     loadMemLayers(id);
@@ -867,7 +1259,7 @@ function renderBotCard(b) {
           </div>
         </div>
         <div class="bc-actions">
-          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑角色信息：名称 / 头像 / 模型 / 记忆条数 / 联网 / 流式">${IC_SETTINGS}<span class="lb">设置</span></button>
+          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑写手信息：名称 / 头像 / 模型 / 记忆条数 / 联网 / 流式">${IC_SETTINGS}<span class="lb">设置</span></button>
           <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
         </div>
       </div>
@@ -972,12 +1364,12 @@ function renderChannelTabHtml(b) {
         ${on ? badge(st) : '<span class="status-chip"><span class="chip-dot off"></span>未连接</span>'}
       </div>
       <div class="chan-lead">
-        <label class="switch" title="开启后本角色会登录下方的 QQ 官方机器人">
+        <label class="switch" title="开启后本写手会登录下方的 QQ 官方机器人">
           <input type="checkbox" id="ch-enabled" ${on ? 'checked' : ''}>
           <span class="slider"></span>
         </label>
         <span class="chan-lead-text">连接 QQ
-          <span class="chan-lead-sub">开启后本角色会以 AppID + AppSecret 登录 QQ 官方机器人，收发单聊 / 群聊 / 频道消息。不开启也不影响面板里的对话、记忆与心跳 —— 不连 QQ 是完整可用的形态。</span>
+          <span class="chan-lead-sub">开启后本写手会以 AppID + AppSecret 登录 QQ 官方机器人，收发单聊 / 群聊 / 频道消息。不开启也不影响面板里的对话、记忆与心跳 —— 不连 QQ 是完整可用的形态。</span>
         </span>
       </div>
       <div class="grid-3">
@@ -1045,7 +1437,7 @@ function openBotSettings(id) {
   overlay.innerHTML = `
     <div class="modal-card bot-settings-modal">
       <div class="modal-head">
-        <span>设置角色 — ${esc(b.name || b.id)}</span>
+        <span>设置写手 — ${esc(b.name || b.id)}</span>
         <span class="spacer"></span>
         <button class="ghost sm" onclick="closeBotSettings()">${IC_CLOSE}<span class="lb">关闭</span></button>
       </div>
@@ -1109,7 +1501,7 @@ function openBotSettings(id) {
           </select></div>
           <div class="field"><label>被截断时</label><div class="value">${IC_CHECK}<span class="lb">自动补全，不受此开关影响</span></div></div>
         </div>
-        <div class="frm-hint">这里只管角色本体。QQ 连接（AppID / AppSecret / 运行环境）在角色卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
+        <div class="frm-hint">这里只管写手本体。QQ 连接（AppID / AppSecret / 运行环境）在写手卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
       </div>
       <div class="modal-foot cf-foot">
         <button class="ghost" onclick="closeBotSettings()">取消</button>
@@ -1152,7 +1544,7 @@ function hbModeSel(el) {
 function hbTaskRowHtml(time, prompt) {
   return `<div class="hb-task-row">
     <input class="hb-t-time" type="text" placeholder="HH:MM" value="${esc(time)}">
-    <input class="hb-t-prompt" type="text" placeholder="该时间点要机器人做的事 / 提示词" value="${esc(prompt)}">
+    <input class="hb-t-prompt" type="text" placeholder="该时间点要写手做的事 / 提示词" value="${esc(prompt)}">
     <button class="ghost sm" onclick="this.closest('.hb-task-row').remove()" title="删除该时间点">${IC_CLOSE}</button>
   </div>`;
 }
@@ -1268,7 +1660,7 @@ function renderHeartCard(b) {
     : [Object.assign({}, b.heartbeat || {})];
   return `
     <div class="card heart-card">
-      <div class="card-title">${IC_HEART}<span class="lb">心跳任务（机器人主动发言）</span>
+      <div class="card-title">${IC_HEART}<span class="lb">心跳任务（写手主动发言）</span>
         <span class="spacer"></span>
         <span class="hb-status" id="hb-status" style="font-size:10px;color:var(--text-faint)"></span>
         <button class="ghost sm" onclick="hbAddBlock('${esc(b.id)}')">${IC_PLUS}<span class="lb">新增任务</span></button>
@@ -1381,7 +1773,7 @@ function renderSettings() {
   const show = (id) => id === tab ? '' : ' style="display:none"';
   const globalCard = `
     <div class="card">
-      <div class="card-title">全局设定（机器人勾选「采用全局设定」时生效）
+      <div class="card-title">全局设定（写手勾选「采用全局设定」时生效）
         <span class="spacer"></span>
         <button class="ghost sm" onclick="newGlobalFile()">${IC_PLUS}<span class="lb">新增文件</span></button>
       </div>
@@ -1571,7 +1963,7 @@ async function loadUsageStats() {
       ${cards.map(c => `<div class="stat-card"><label>${esc(c.label)}</label><div data-count="${c.val}">0</div><span>${esc(c.sub)}</span></div>`).join('')}
     </div>
     <div class="stat-sec">
-      <label>按机器人</label>
+      <label>按写手</label>
       ${byBot.length ? byBot.map(x => `
         <div class="bar-row">
           <span class="bar-label">${esc(x.botId)}</span>
@@ -2645,7 +3037,7 @@ function exportSessions(id, tid) {
   const bot = (state.bots || []).find(x => x.id === id);
   const th = tid ? threadsOf(id).threads.find(x => x.id === tid) : null;
   const lines = list.map(s => {
-    const who = s.role === 'assistant' ? (bot?.name || '角色') : '用户';
+    const who = s.role === 'assistant' ? (bot?.name || '写手') : '用户';
     return `[${new Date(s.ts).toLocaleString()}] ${who}\n${s.content}`;
   });
   const head = `${bot?.name || id}${th ? ' · ' + (th.title || '') : ''} 对话记录（${list.length} 条）`;
@@ -2823,7 +3215,7 @@ function openAdminPanel() {
         <span class="at-cap">正在操作</span>
         <span class="at-name">${esc(nowBot.name || nowBot.id)}</span>
         <span class="at-id">${esc(nowBot.id)} · ${nowBot.sandbox === false ? '正式' : '沙箱'}</span>
-        <span class="at-sub">管理员将读取 / 建议修改该机器人的记忆与会话，确认前绝不写入</span>
+        <span class="at-sub">管理员将读取 / 建议修改该写手的记忆与会话，确认前绝不写入</span>
       </div>` : ''}
       <div class="admin-layout">
         <div class="admin-chat-col">
@@ -2894,23 +3286,23 @@ function adminClear() {
   if (msgs) msgs.innerHTML = '';
 }
 
-// 快捷指令：组织 prompt 并发送（botIdOverride 决定注入哪个机器人的上下文）
+// 快捷指令：组织 prompt 并发送（botIdOverride 决定注入哪位写手的上下文）
 function adminQuick(type) {
   const botId = currentBotId();
   const botName = currentBotName();
   let prompt = '';
   if (type === 'model') prompt = '请帮我创建/接入一个新模型：先用 get_panel_state 查看现有模型避免重复；信息不足时用 web_search 查官方 API 地址与模型 ID，再用 create_model 工具直接添加（无需确认）。';
-  else if (type === 'edit') prompt = botName ? `请使用工具完整读取机器人「${botName}」的记忆库文件与最近会话，诊断人设/表述/设定问题。如需修改，用 propose_memory_edit / propose_global_edit / propose_bot_config_edit 提交修改建议（我会确认后才会真正写入）。` : '请使用工具读取当前机器人记忆库与最近会话进行诊断；需要修改时用 propose_* 工具提交建议（用户确认后才写入）。';
+  else if (type === 'edit') prompt = botName ? `请使用工具完整读取写手「${botName}」的记忆库文件与最近会话，诊断人设/表述/设定问题。如需修改，用 propose_memory_edit / propose_global_edit / propose_bot_config_edit 提交修改建议（我会确认后才会真正写入）。` : '请使用工具读取当前写手记忆库与最近会话进行诊断；需要修改时用 propose_* 工具提交建议（用户确认后才写入）。';
   else if (type === 'cfg') prompt = '请先调用 get_panel_state / list_robots 了解现状，再评估模型与全局配置并给出具体建议（选型、参数、联网）。';
-  else if (type === 'prompt') prompt = '请为机器人写一份高质量的人设提示词（Markdown，含角色背景、性格、说话风格、行为准则）；如你想基于现有记忆库改写，请先用 read_memory_file 读取原文再产出，并可用 propose_global_edit 提供全局提示词修改建议。';
-  else if (type === 'summary') prompt = botName ? `请使用 read_sessions 读取机器人「${botName}」最近的会话记录并总结，提炼关键信息与后续建议。` : '请使用 read_sessions 读取当前机器人最近会话并总结。';
-  else if (type === 'mem') prompt = botName ? `请使用 list_memory_files / read_memory_file 浏览机器人「${botName}」的记忆库，总结当前设定并指出可优化处。` : '请使用工具读取当前机器人的记忆库并总结设定。';
+  else if (type === 'prompt') prompt = '请为写手写一份高质量的人设提示词（Markdown，含角色背景、性格、说话风格、行为准则）；如你想基于现有记忆库改写，请先用 read_memory_file 读取原文再产出，并可用 propose_global_edit 提供全局提示词修改建议。';
+  else if (type === 'summary') prompt = botName ? `请使用 read_sessions 读取写手「${botName}」最近的会话记录并总结，提炼关键信息与后续建议。` : '请使用 read_sessions 读取当前写手最近会话并总结。';
+  else if (type === 'mem') prompt = botName ? `请使用 list_memory_files / read_memory_file 浏览写手「${botName}」的记忆库，总结当前设定并指出可优化处。` : '请使用工具读取当前写手的记忆库并总结设定。';
   adminSend(prompt, botId);
 }
 
 // 工具展示元信息（图标 + 中文名）
 const ADMIN_TOOL_META = {
-  list_robots: [IC_MEMORY, '机器人列表'],
+  list_robots: [IC_MEMORY, '写手列表'],
   get_panel_state: [IC_LAYERS, '面板概况'],
   list_memory_files: [IC_MEMORY, '记忆库'],
   read_memory_file: [IC_FILE, '读取记忆'],
@@ -3585,7 +3977,7 @@ async function restartBot(id) {
 }
 
 async function delBot(id) {
-  if (!(await uiConfirm({ title: '删除机器人', message: `确定删除机器人「${id}」？\n删除后该机器人的记忆库文件与配置将被移除。`, okText: '删除', danger: true }))) return;
+  if (!(await uiConfirm({ title: '删除写手', message: `确定删除写手「${id}」？\n删除后该写手的记忆库文件与配置将被移除。`, okText: '删除', danger: true }))) return;
   const bots = (state.bots || []).filter(x => x.id !== id);
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已删除', 'ok') : toast(r.err, 'err');
@@ -3604,8 +3996,8 @@ async function sendMsg(id) {
   if (r.ok) { $('#f-content').value = ''; loadSessions(id); }
 }
 
-// ================= 角色表单（添加） =================
-// 只创建角色本体：ID / 名称 / 绑定模型 / 历史条数。
+// ================= 写手表单（添加） =================
+// 只创建写手本体：ID / 名称 / 绑定模型 / 历史条数。
 // QQ 相关（AppID / AppSecret / 运行环境）已全部移入「渠道」标签页 —— 连接 QQ 不是必须的，
 // 所以创建这一步不该向用户索要任何 QQ 信息。
 function renderBotForm() {
@@ -3613,20 +4005,20 @@ function renderBotForm() {
   const modelOpts = models.map(m => `<option value="${m.id}">${esc(m.name || m.id)}</option>`).join('') || '<option value="">先添加模型</option>';
   main.innerHTML = `
     <div class="page-head">
-      <h2>添加机器人</h2>
+      <h2>添加写手</h2>
       <span class="spacer"></span>
       <button class="ghost sm" onclick="backToBots()">${IC_BACK}<span class="lb">返回</span></button>
     </div>
     <div class="card">
       <div class="grid-2">
         <div class="field"><label>ID（唯一标识，如 BOT2）</label><input id="f-id" type="text" placeholder="BOT2"></div>
-        <div class="field"><label>名称</label><input id="f-name" type="text" placeholder="我的机器人"></div>
+        <div class="field"><label>名称</label><input id="f-name" type="text" placeholder="我的写手"></div>
       </div>
       <div class="grid-2" style="margin-top:12px">
         <div class="field"><label>绑定模型</label><select id="f-model">${modelOpts}</select></div>
         <div class="field"><label>历史记忆条数</label><input id="f-history" type="number" value="10"></div>
       </div>
-      <div class="frm-hint">创建后即可直接对话，不需要填任何 QQ 信息。要接入 QQ 时，到该角色卡下的「渠道」标签页开启并填写 AppID / AppSecret。</div>
+      <div class="frm-hint">创建后即可直接对话，不需要填任何 QQ 信息。要接入 QQ 时，到该写手卡下的「渠道」标签页开启并填写 AppID / AppSecret。</div>
       <div style="margin-top:18px;display:flex;gap:8px">
         <button class="primary" onclick="createBot()">创建</button>
         <button class="ghost" onclick="backToBots()">取消</button>
@@ -3648,8 +4040,8 @@ async function createBot() {
     personaFile: '',
     intents: ['GROUP_AND_C2C_EVENT', 'PUBLIC_GUILD_MESSAGES'],
   };
-  if (!entry.id) return toast('请填写机器人 ID', 'err');
-  if (!ID_OK.test(entry.id)) return toast('机器人 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）', 'err');
+  if (!entry.id) return toast('请填写写手 ID', 'err');
+  if (!ID_OK.test(entry.id)) return toast('写手 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）', 'err');
   if ((state.bots || []).some(b => b.id === entry.id)) return toast('该 ID 已存在', 'err');
   const bots = (state.bots || []).concat(entry);
   const r = await api('/api/config', 'PUT', { bots });
@@ -3816,7 +4208,7 @@ async function saveModel(id) {
 }
 
 async function delModel(id) {
-  if (!(await uiConfirm({ title: '删除模型', message: `确定删除模型「${id}」？\n删除后引用该模型的机器人需重新绑定。`, okText: '删除', danger: true }))) return;
+  if (!(await uiConfirm({ title: '删除模型', message: `确定删除模型「${id}」？\n删除后引用该模型的写手需重新绑定。`, okText: '删除', danger: true }))) return;
   const models = (state.models || []).filter(x => x.id !== id);
   const r = await api('/api/config', 'PUT', { models });
   r.ok ? toast('已删除', 'ok') : toast(r.err, 'err');
@@ -4133,10 +4525,10 @@ function renderAppearance() {
       <div class="theme-row fx-row" style="margin-top:12px;align-items:flex-start">
         <span class="theme-label" style="padding-top:5px">卡片背景</span>
         <div class="fx-chips">
-          ${CARD_EFFECTS.map(x => `<span class="fx-chip ${x.id === fx ? 'active' : ''}" data-fx="${x.id}" onclick="pickCardEffect('${x.id}')" title="机器人信息卡背景动效">${x.name}</span>`).join('')}
+          ${CARD_EFFECTS.map(x => `<span class="fx-chip ${x.id === fx ? 'active' : ''}" data-fx="${x.id}" onclick="pickCardEffect('${x.id}')" title="写手信息卡背景动效">${x.name}</span>`).join('')}
         </div>
       </div>
-      <p class="empty-hint" style="margin-top:10px">作用于每个机器人信息卡背景（编辑态卡片除外）。效果跟随主题色，深色模式下自动压暗。</p>
+      <p class="empty-hint" style="margin-top:10px">作用于每位写手信息卡背景（编辑态卡片除外）。效果跟随主题色，深色模式下自动压暗。</p>
     </div>`;
 }
 
@@ -4197,7 +4589,7 @@ function renderGeneral() {
             <input type="checkbox" id="g-web" ${state.webSearch === true ? 'checked' : ''}>
             <span class="slider"></span>
           </label>
-          <div style="margin-top:6px;font-size:11.5px;line-height:1.65;color:var(--on-surface-faint)">全局默认<strong>${state.webSearch === true ? '已开启' : '已关闭'}</strong>，各机器人可在「编辑」里单独覆盖。</div>
+          <div style="margin-top:6px;font-size:11.5px;line-height:1.65;color:var(--on-surface-faint)">全局默认<strong>${state.webSearch === true ? '已开启' : '已关闭'}</strong>，各写手可在「编辑」里单独覆盖。</div>
         </div>
         <div style="padding:14px 16px;border:1px solid var(--outline);border-radius:var(--r-m);background:var(--surface)">
           <div style="font-size:12.5px;font-weight:600;margin-bottom:10px">搜索方式</div>
@@ -4249,7 +4641,7 @@ function renderGeneration() {
           <label class="switch" title="${lrOn ? '点击关闭全局长文模式' : '点击开启全局长文模式'}">
             <input type="checkbox" id="g-long" ${lrOn ? 'checked' : ''}>
             <span class="slider"></span>
-          </label>` + hint(`全局默认<strong>${lrOn ? '已开启' : '已关闭'}</strong>，各机器人可在「编辑」里单独覆盖。开启后模型才会朝下面写的目标字数去写。`))}
+          </label>` + hint(`全局默认<strong>${lrOn ? '已开启' : '已关闭'}</strong>，各写手可在「编辑」里单独覆盖。开启后模型才会朝下面写的目标字数去写。`))}
 
         ${box(`${label('目标字数')}
           <div style="display:flex;align-items:center;gap:10px">${num('g-long-target', clampInt(state.longReplyTarget, 1200, 0, 100000), 0, 100000, 500, 130)}${unit('字')}</div>`
@@ -4299,7 +4691,7 @@ function renderGeneration() {
 
         ${box(`${label('蒸馏 / 总结模型')}
           <select id="g-distill" class="gen-sel" style="width:100%">
-            <option value="">跟随各机器人绑定模型（默认）</option>
+            <option value="">跟随各写手绑定模型（默认）</option>
             ${(state.models || []).map(m => `<option value="${esc(m.id)}" ${state.distillModel === m.id ? 'selected' : ''}>${esc(m.name || m.id)}（${esc(m.id)}）</option>`).join('')}
           </select>`
           + hint('核心卡蒸馏、文件分段摘要、事件压缩、逐轮记忆提炼、精彩时刻、AI 归档等后台总结任务使用的模型。'))}
@@ -4737,6 +5129,8 @@ function hexA(hex, a) {
 
 // ---------- 事件绑定 ----------
 $('#btn-add-bot').addEventListener('click', () => { view = { type: 'bot-form' }; renderMain(); });
+// 侧栏「角色池」分组的新建按钮：直接开新建角色弹窗（不必先跳进角色池页）
+$('#btn-add-char').addEventListener('click', () => openCharacterEditModal());
 
 // ---------- 内联 onclick 依赖的角色工作区函数 ----------
 // 顶层 function 声明在当前（非模块）脚本里本就在全局作用域，内联 onclick 可以直接调到；
@@ -4749,6 +5143,12 @@ Object.assign(window, {
   switchBotTab, openBotSettings, closeBotSettings,
   // 输出设置弹层（发送按钮旁）
   openOutputSheet, closeOutputSheet, saveOutputSheet,
+  // 角色池 / 角色标签页（内联 onclick 引用；顶层 function 声明才会挂 window）
+  openCharacterPool, characterEdit, saveCharacter, characterDelete,
+  characterHistory, characterRollback, characterAttach, characterDetach,
+  characterSearch, loadCharacters,
+  // 仅被模板字符串调用（eslint 认不出）→ 显式挂一次消除 no-unused-vars
+  snippet, characterAvatarInner,
   // 挂在 oncontextmenu 上：lint 的 no-unused-vars 只认 onclick 里的引用
   sideCtx,
 });
