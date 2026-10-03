@@ -176,6 +176,38 @@ test('brief 空角色返回空串（不产出垃圾注入）', () => {
   assert.equal(characters.brief(null), '');
 });
 
+test('★ 回归：traits 已包含在 persona 里时不重复输出', () => {
+  // 实测踩到：迁移时 persona 存原文全文、traits 存从其中抽出的性格段，
+  // 两个都输出会让同一段性格在 prompt 里出现两遍。
+  const text = `# 人格
+
+## 基本信息
+- 银，8岁机器人男孩。
+
+## 性格特点
+- 病态依恋主人
+`;
+  const c = characters.normalizeCharacter({
+    id: 'CHR1', name: '银',
+    persona: text,
+    traits: '- 病态依恋主人',
+  });
+  const s = characters.brief(c);
+  // 「病态依恋主人」只能出现一次
+  const count = (s.match(/病态依恋主人/g) || []).length;
+  assert.equal(count, 1, `重复输出 ${count} 次`);
+});
+
+test('traits 提供了 persona 里没有的信息时仍要输出', () => {
+  const c = characters.normalizeCharacter({
+    id: 'CHR1', name: '银',
+    persona: '一个机器人男孩。',
+    traits: '极度依恋主人，怕被抛弃',
+  });
+  const s = characters.brief(c);
+  assert.ok(s.includes('怕被抛弃'), 'traits 的独有信息必须保留');
+});
+
 // ---------- ★ 空模板判定（误判会丢用户数据） ----------
 
 test('★ 空模板：默认模板文本被判为空', () => {

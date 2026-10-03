@@ -65,6 +65,63 @@ function makeChatFn(botId) {
   };
 }
 
+// ---- 写手块：把「写手身份 + 角色池」注入 system prompt ----
+// ★ 认知前提：bot 就是写手（创作者），不是角色。角色在全局角色池里，写手引用它们。
+//
+// 为什么单独抽成一个函数而不是塞进 memory.buildSystemPrompt：
+//   记忆模块负责「写手自己的档案」（写手设定 / 剧情线 / 经历），
+//   角色池是**跨写手共享的项目级数据**（存在 config.json 里，不在 memory/ 目录）。
+//   两者的数据源和生命周期都不同，混在一起会让 memory 模块依赖 config。
+function buildWriterBlock(cfg, bot) {
+  const c = require('./lib/characters');
+  const all = Array.isArray(cfg.characters) ? cfg.characters : [];
+  const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
+  const active = activeIds.map((id) => c.find(all, id)).filter(Boolean);
+
+  const lines = [];
+  lines.push('');
+  lines.push('');
+  lines.push('【你的身份：写手】');
+  lines.push('你不是某个具体的角色，你是一位写手（创作者）。你笔下有人物，你负责推进他们的故事。');
+
+  // ---- 输出方式：用户决策「两者混合，写手自主」 ----
+  lines.push('');
+  lines.push('【输出方式（你自己判断）】');
+  lines.push('- 叙述：推进剧情时，用小说笔法写叙述与场景描写，人物在文中说话（用引号对话）。');
+  lines.push('- 对白：情节需要时，你可以直接化身某个角色，以第一人称与用户对话。');
+  lines.push('- 判断依据是语境：用户在推剧情就往叙述走；用户像在跟某个角色说话就化身该角色。');
+  lines.push('- 不要问用户"你希望我叙述还是扮演"——自己判断，直接写。');
+
+  // ---- 角色池 ----
+  if (active.length) {
+    lines.push('');
+    lines.push(`【你的角色（共 ${active.length} 位）】`);
+    for (const ch of active) {
+      lines.push('');
+      lines.push(c.brief(ch, { full: true }));
+    }
+  } else if (all.length) {
+    lines.push('');
+    lines.push(`【你的角色】当前没有选定要写的角色。角色池里有 ${all.length} 位可选：`
+      + all.slice(0, 20).map((x) => x.name).join('、')
+      + (all.length > 20 ? ' …' : '')
+      + '。可以在面板里选定角色后再聊。');
+  } else {
+    lines.push('');
+    lines.push('【你的角色】角色池还是空的。如果需要，你可以在剧情中创造人物，'
+      + '并建议用户把他们加进角色池。');
+  }
+
+  // ---- 改写角色卡的约定（用户决策：可以改，但可回滚） ----
+  lines.push('');
+  lines.push('【关于改写角色设定】');
+  lines.push('剧情发展需要时（如角色成长、关系变化），你可以提议修改角色设定。'
+    + '修改会进入待确认队列，用户点了确认才生效，且旧版本会留档可回滚，所以你不用担心改坏。');
+  lines.push('不要直接断言"我已经改了设定"——要说明这是提议，等用户确认。');
+
+  return lines.join('\n');
+}
+
 // 核心对话逻辑：记忆 + 历史 + 模型调用 + 关键剧情自动记录
 // opts.onDelta(累积全文)：提供时走流式（chatStreamCollect），每轮增量回调（跨轮累积拼接）
 // opts.onProgress(进度对象)：提供时下发长文写作进度（阶段 / 段数 / 字数），见 longreply.progressOf。
@@ -80,9 +137,10 @@ async function chatWithBot(botId, content, opts = {}) {
   if (!apiKey) throw new Error('模型未配置 API Key');
 
   // 多文件记忆库 → system prompt（按机器人"采用全局设定"开关决定是否拼全局）
-  const system = memory.buildSystemPrompt(botId, { useGlobal: bot.useGlobal }) +
-    '\n\n【记忆规则】\n对话中出现关键剧情变化（重要事件、人物关系变化、重大决定等）时，' +
-    '在回复末尾单独附加一行，以【记录】开头并简述该关键剧情，格式：【记录】事件简述。';
+  const system = memory.buildSystemPrompt(botId, { useGlobal: bot.useGlobal })
+    + buildWriterBlock(cfg, bot)
+    + '\n\n【记忆规则】\n对话中出现关键剧情变化（重要事件、人物关系变化、重大决定等）时，'
+    + '在回复末尾单独附加一行，以【记录】开头并简述该关键剧情，格式：【记录】事件简述。';
   // 对话历史只读「当前线程」——这是多线程隔离的关键一处。
   // 别误用 getRecentSessions：那个是**跨线程归并**，给蒸馏/摘要/心跳/精彩时刻用的；
   // 拿它当对话上下文，两条线程的内容就会互相污染。
