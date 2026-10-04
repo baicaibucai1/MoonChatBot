@@ -3,33 +3,29 @@
 'use strict';
 const fs = require('node:fs');
 const http = require('node:http');
-const net = require('node:net');
 const path = require('node:path');
-const dns = require('node:dns');
 const { spawn } = require('node:child_process');
 
-// ---- 出站连接的地址族偏好：能用 IPv6 就先用 IPv6（进程级，先于任何请求发起）----
+// ---- 出站连接的可达性：不再做任何「地址族偏好」，改由 lib/net-reach.js 逐个试 ----
 //
-// 为什么需要它（2026-10-04 实测，Agnes 两个端点连不上的根因）：
-//   api.agnes-ai.cn / apihub.agnes-ai.com 在本机的 **IPv4 路径被中间设备劫持** ——
-//   握手返回一张自签证书（SAN 只有 localhost / 127.0.0.1，签发者 CN=redirect-cnzz），
-//   其余 IPv4 则是 timeout / ECONNRESET；**IPv6 那条路是干净且可信的**。
-//   Node 内置的 fetch（undici）默认开 Happy-Eyeballs：所有候选地址一起试探，
-//   IPv4 那个假服务器**先连上**（TCP 层是成功的）→ 轮到 TLS 才炸 →
-//   报 `DEPTH_ZERO_SELF_SIGNED_CERT` / `CERT_HAS_EXPIRED`，也就是日志里的 `fetch failed`。
-//   关键在于：TCP 层已经"成功"了，它不会再回退到 IPv6。
+// ★★ 这里曾经写过一段「IPV6 优先」的修复（dns.setDefaultResultOrder('ipv6first')
+//    + 关掉并发试探），背景是 2026-10-04 实测「Agnes 的 IPv4 路径被中间设备劫持
+//    （换来一张自签证书），只有 IPv6 干净」。
 //
-// 这两行的作用：
-//   ① 有 AAAA 记录的主机 → 首选 IPv6（没有 AAAA 的主机不受影响，照常走 IPv4）；
-//   ② 关掉并发试探 → 只连解析结果的第一个地址，别让假服务器靠"握手前先连上"抢赢。
+//    2026-10-05 的实测表明**环境整个反过来了**：
+//      apihub.agnes-ai.com  IPv4 104.18.19.62 / .18.62 → HTTP 401 完全正常
+//      apihub.agnes-ai.com  IPv6 …2017::2 → 超时；…2018::2 → CERT_HAS_EXPIRED
+//    于是那段修复从「修复」变成了「故障源」：每次都优先去连坏掉的 IPv6，
+//    每一次模型调用都失败 —— 用户看到的现象就是「对话失败」。
 //
-// 已知边界：关掉并发试探后，若首选的那个 AAAA 恰好不通，本次请求就失败（重试会再解析一次，
-//   DNS 是轮换池，可能就换到通的）。真要兜住"轮换池里部分地址坏"的情况，
-//   得在 models.js 里自己实现「解析全部候选 → 逐个试到握手成功」，那是后面才做的事。
-try {
-  dns.setDefaultResultOrder('ipv6first');
-  if (typeof net.setDefaultAutoSelectFamily === 'function') net.setDefaultAutoSelectFamily(false);
-} catch { /* 老版本 Node 没有这些 API：直接按默认行为跑，不影响启动 */ }
+//    ★ 教训：把「此刻哪条路能走」写死进代码，这种修复是有保质期的，
+//      而失效时的症状是「功能整体不可用」，极难联想到网络层。
+//      net-reach 的做法不做任何环境假设：解析全部候选 → 逐个做到**完整 TLS 握手**
+//      （必须含证书校验，只看 TCP 会漏掉「TCP 通但证书过期」那种坏法）→ 谁通用谁，
+//      并在连接层失败时清缓存重新探测、重试一次。
+//
+// （net 模块仍被本文件其它地方使用，dns 的 import 保留以便将来排查时按需调用。）
+const reach = require('./lib/net-reach');
 
 const store = require('./lib/store');
 const memory = require('./lib/memory');
@@ -2608,6 +2604,15 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('==========================================');
   app.bots.sync(cfg);
   seedHeart(cfg);
+
+  // ★ 出站预热：对这些模型端点的 host 各做一次「逐个地址试到握手成功」，
+  //   把可用地址记进缓存。这样**第一次对话不必先失败一次**再走兜底重试。
+  //   刻意不 await、不阻塞启动：预热失败/超时都只是没预热上，
+  //   后面每次请求仍有 fetchReachable 兜底（连接层失败 → 当场探测 → 重试）。
+  const hosts = (cfg.models || [])
+    .map((m) => reach.hostOf(m.baseURL || ''))
+    .filter(Boolean);
+  reach.warmup(hosts).catch(() => {});
 });
 
 // 优雅退出

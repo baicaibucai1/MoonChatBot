@@ -2916,6 +2916,9 @@ async function streamBotChat(id, content, tid, onDelta, onProgress, onPending, o
     else if (ev.type === 'pending') { if (onPending && ev.edit) { try { onPending(ev.edit, ev.summary || ''); } catch {} } }
     // 输出后自检的「本轮同步了什么」：又一条独立信道（见 server.js runSelfCheck）
     else if (ev.type === 'sync') { if (onSync && Array.isArray(ev.items)) { try { onSync(ev.items); } catch {} } }
+    // ping 是服务端心跳（防中间层按空闲超时掐断长文写作），**只用于保活、不渲染** ——
+    // 落到下面那几个分支之外，自然被忽略；但它已让 saw = true，
+    // 所以连接真断了时的报错会准确地说「响应不完整（连接被中断）」而不是「无响应」。
     else if (ev.type === 'done') done = ev;
     else if (ev.type === 'err') srvErr = ev.err || '调用失败';
   }, () => { /* 传输层异常：交由下面的「零事件」判定统一处理 */ });
@@ -3553,9 +3556,23 @@ try {
 // 记住本环境对流式的支持情况：失败过 → 以后直接走普通路径
 function adminMarkStream(ok) {
   try {
-    if (ok) localStorage.removeItem('qqbot-stream-blocked');
-    else localStorage.setItem('qqbot-stream-blocked', '1');
+    if (ok) {
+      localStorage.removeItem('qqbot-stream-blocked');
+      _adminNoEvent = 0;      // 成功一次就清掉「连续零事件」，下次不用再攒两次
+    } else {
+      localStorage.setItem('qqbot-stream-blocked', '1');
+    }
   } catch {}
+}
+// ★★ 「连续零事件」计数（2026-10-05）：**一次**零事件不足以断定本环境不支持 SSE ——
+//   单次网络抖动、服务刚重启都可能连不上。旧实现一次就永久关掉流式，
+//   之后所有管理员对话都退化成「一分钟起步的普通模式」，用户看着就像「调用模型就断掉」。
+//   现在要连续两次才降级；任何一次成功都会把它清零。
+let _adminNoEvent = 0;
+function adminBumpNoEvent() {
+  _adminNoEvent++;
+  if (_adminNoEvent >= 2) adminForceNormal('当前环境不支持流式输出，已自动切换为普通模式');
+  return _adminNoEvent;
 }
 // 流式失败后静默回落普通模式（本环境不支持 SSE，下次就直接走普通路径）。
 // 不再有按钮要同步 —— 这不是用户可切换的偏好，只是环境能力探测的结果。
@@ -3940,7 +3957,24 @@ async function adminSend(prompt, botIdOverride) {
       msgs.appendChild(aiRow);
       msgs.scrollTop = msgs.scrollHeight;
       const ctrl = new AbortController();
-      const wd = setTimeout(() => { try { ctrl.abort(); } catch {} }, 5000); // 5s 内无进展即放弃流式
+      // ★★ 看门狗：**「无进展」而不是「总时长」**（2026-10-05 修「管理员调用模型就断掉」）
+      //
+      //   旧写法是 `setTimeout(abort, 5000)` —— 从请求发出起计时，5 秒后**无条件** abort。
+      //   注释写的是「5s 内无进展即放弃」，但代码里根本没有重置逻辑。
+      //   而管理员 Agent 是**多轮工具循环**（读记忆库 → 读会话 → 再产出），
+      //   模型首字十几秒、几十秒都属正常，且工具轮期间后端一个字节都不发
+      //   → 每一次正常的长思考都被误杀。
+      //
+      //   现在配合后端心跳（每 15s 一帧 ping）：**每收到任何一帧就重置计时器**，
+      //   只有「真的哑了很久」才放弃。首帧单独给更宽的额度（要覆盖模型首字 + 工具轮）。
+      const FIRST_MS = 90000;   // 等首帧：覆盖「模型想很久 + 多轮工具」
+      const IDLE_MS = 45000;    // 首帧之后逐帧的间隔上限（后端 15s 一拍，留 3 倍余量）
+      let hbTimer = null;
+      const armWatchdog = (ms) => {
+        clearTimeout(hbTimer);
+        hbTimer = setTimeout(() => { try { ctrl.abort(); } catch {} }, ms);
+      };
+      armWatchdog(FIRST_MS);
       let acc = '';
       let modelName = '';
       let streamSaw = false;   // 是否收到过任何流式事件（判断本环境是否支持 SSE）
@@ -3958,7 +3992,15 @@ async function adminSend(prompt, botIdOverride) {
           await readAdminSSE(resp.body, (ev) => {
             saw = true;
             streamSaw = true;
-            if (ev.type === 'text') {
+            // ★ 任何一帧（含 open / ping）都算「有进展」→ 续命。
+            //   这正是心跳存在的意义：让「连接活着」与「模型在想」可区分。
+            armWatchdog(IDLE_MS);
+            if (ev.type === 'open' || ev.type === 'ping') { /* 心跳帧：只用于续命，不渲染 */ }
+            else if (ev.type === 'text') {
+              // ⚠️ 语义坑：管理员这条链路的 `text` 是**增量**（server.js 的 `text += d.content`
+              //    之后 emit 单个 delta）→ 这里必须 `+=`。
+              //    而「写手对话」那条（/api/bots/:id/chat/stream）发的是**累积全文**，
+              //    前端必须整体替换。两条链路语义相反，抄错方向会得到重复叠加的乱码。
               acc += ev.d;
               if (isOpen()) {
                 sb.innerHTML = mdSafe(acc) + '<span class="caret"></span>';
@@ -3974,8 +4016,15 @@ async function adminSend(prompt, botIdOverride) {
               doneSeen = true;   // 收到 done → 服务端已完成本轮
               modelName = ev.modelName || '';
               if (Array.isArray(ev.pendings)) for (const p of ev.pendings) if (p) pendings.push(p);
+              // ★ done 之后只剩收尾（服务端紧接着 res.end）。把看门狗收紧到 5s：
+              //   万一服务端没能正常关闭连接，也别白等满一整个 IDLE_MS。
+              armWatchdog(5000);
             }
-          }, () => {});
+          }, (e) => {
+            // 读流出错（多为我们主动 abort）。记一笔便于排查，不改变控制流 ——
+            // 后续「有没有 ok」由上面那几个分支统一决定。
+            if (e && e.name !== 'AbortError') console.warn('[admin:stream] 读流出错:', e.message || e);
+          });
           if (acc && saw) {
             if (isOpen()) sb.innerHTML = (modelName ? `<span class="admin-model-tag">${esc(modelName)}</span>` : '') + mdSafe(acc);
             _adminHistory.push({ role: 'assistant', content: acc });
@@ -3999,13 +4048,40 @@ async function adminSend(prompt, botIdOverride) {
           }
         }
       } catch (e) { /* 流式连接异常，稍后统一处理 */ }
-      finally { clearTimeout(wd); try { ctrl.abort(); } catch {} }
+      finally { clearTimeout(hbTimer); try { ctrl.abort(); } catch {} }
       if (!ok) {
-        aiRow.remove();
-        // 全程零事件 → 本环境不支持 SSE 长连接（如内嵌预览）→ 记忆并切普通模式
-        if (!streamSaw) adminForceNormal('当前环境不支持流式输出，已自动切换为普通模式');
+        // ★★ 这里必须分两种情况，处置**完全相反** —— 它是「工具副作用不重复执行」的唯一防线。
+        //
+        //   · streamSaw = true → 收到过**任何**一帧（含 open 心跳）。
+        //     说明请求已经打到服务端、Agent 循环已经在跑，工具可能已经执行
+        //     （ws_write_file 写草稿、create_model 建模型都是**立即生效的写操作**）。
+        //     前端 abort 只是「不等了」，服务端那一轮照跑不误。
+        //     此时若回落普通模式重发 → 同一批工具跑第二遍 → 重复写盘。
+        //     处置：**保留**已收到的正文、如实告知「连接中断」，本轮到此为止。
+        //
+        //   · streamSaw = false → 连 open 都没收到，连接压根没建起来 → 安全回落。
+        if (streamSaw) {
+          if (acc) {
+            if (isOpen()) {
+              sb.innerHTML = mdSafe(acc)
+                + '<div class="lay-dim" style="font-size:11.5px;margin-top:6px">连接中断，以上是已收到的部分。'
+                + '服务端可能仍在本轮处理中，稍后可刷新查看。</div>';
+            }
+            _adminHistory.push({ role: 'assistant', content: acc });
+          } else if (isOpen()) {
+            sb.innerHTML = '<span class="lay-dim">连接中断（尚未收到内容）。服务端可能仍在处理 —— '
+              + '本轮不会自动重发，以免重复执行工具。</span>';
+          }
+          ok = true;                 // ★ 落定本轮：**绝不**再走下面的普通模式重发
+          adminLoadSessions();
+        } else {
+          // 零事件：连接没建起来，气泡里也没有任何内容 → 撤掉它并允许回落。
+          // 连续两次才判定「本环境不支持流式」（单次抖动不该永久降级）。
+          aiRow.remove();
+          adminBumpNoEvent();
+        }
       } else {
-        adminMarkStream(true);   // 本轮流式成功 → 记住本环境可流式
+        adminMarkStream(true);   // 本轮流式成功 → 记住本环境可流式（并清零「连续零事件」计数）
       }
     }
 
