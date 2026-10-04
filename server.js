@@ -137,6 +137,129 @@ function counterSpecsFor(botId, ch) {
   return out;
 }
 
+// ---------- ★ 输出后自检的接线层 ----------
+//
+// 纯逻辑在 lib/selfcheck.js（组装 messages / 解析结果 / 生成同步短句）。
+// 这里负责三件只有 server 才知道的事：
+//   ① **权限**：角色必须在 bot.activeCharacterIds 里；计数器名必须是该写手声明过的；
+//   ② **收敛**：范围来自角色卡 `##Counter：`（没有才用写手「标准要求」）；
+//   ③ **落地**：计数器 / 世界改变 → 待确认建议（onPending）；剧情要点 → 直接写事件流。
+//
+// ★ 全程 try/catch：自检失败只打日志，绝不影响正文（用户明确要求过）。
+async function runSelfCheck({ botId, bot, cfg, reply, chatFn, onPending, onSync }) {
+  if (!chatFn) return { ok: false, err: '没有可用模型' };
+  const C = require('./lib/characters');
+  const SC = require('./lib/selfcheck');
+
+  const all = C.list(cfg.characters);
+  const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
+  const active = activeIds.map((id) => C.find(all, id)).filter(Boolean);
+  const declaredSpecs = declaredCounterSpecsOf(botId);
+  const declaredNames = declaredSpecs.map((s) => s.name);
+  // 世界卡现状（写手视角）
+  const worldRaw = (() => { try { return memory.readMemoryFile(botId, 'world') || ''; } catch { return ''; } })();
+  const wp = memory.parseWorldCard(worldRaw);
+
+  const messages = SC.buildMessages({
+    reply,
+    botName: bot.name || botId,
+    characters: active.map((c) => {
+      const view = C.declaredView(c, declaredNames);
+      const specs = counterSpecsFor(botId, c);
+      return {
+        id: c.id,
+        name: c.name,
+        counters: view,
+        declared: declaredSpecs.map((s) => ({
+          name: s.name,
+          range: C.describeCounterRange(C.findCounterSpec(specs, s.name) || s),
+        })),
+      };
+    }),
+    world: { changes: wp.changes },
+  });
+
+  const raw = await chatFn(messages, { maxTokens: 900, temperature: 0.2 });
+  const result = SC.parseResult(raw);
+  if (!result.ok) return { ok: false, err: '自检输出无法解析' };
+
+  // ★ items 只收「真的生效了」的东西 —— 底部同步状态是给用户看的凭据，
+  //   报了却被权限/范围挡掉的条目绝不能出现在这里。
+  const items = [];
+  let eventCount = 0;
+  let counterCount = 0;
+  let worldCount = 0;
+
+  // ---- ① 剧情要点 → 直接写事件流（与既有的自动提炼同一条路，source 统一为 auto）----
+  for (const ev of result.events) {
+    // 与 memory.maintain 的 IMPORTANCE_FLOOR 同一条线：低于它不记
+    if (ev.importance < 2) continue;
+    if (memory.appendEvent(botId, { ...ev, source: 'auto' })) {
+      eventCount++;
+      items.push({ kind: 'event', text: `剧情记录 +1（${ev.event.slice(0, 24)}${ev.event.length > 24 ? '…' : ''}）` });
+    }
+  }
+
+  // ---- ② 计数器 → 待确认建议（增量 + 收敛后的值）----
+  for (const row of result.counters) {
+    const ch = active.find((x) => x.id === row.characterId);
+    if (!ch) continue;                       // 不在自己池里的角色，直接无视
+    const kept = C.filterDeclared(row.deltas, declaredNames);
+    const dropped = Object.keys(row.deltas).filter((k) => !(k in kept));
+    if (!Object.keys(kept).length) continue;
+    const specs = counterSpecsFor(botId, ch);
+    const proj = C.projectCounters(ch.counters || {}, kept, specs);
+    if (!Object.keys(proj.applied).length) continue;
+    const cur = ch.counters || {};
+    const dTxt = Object.entries(proj.applied)
+      .map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}（${Number(cur[k]) || 0} → ${(Number(cur[k]) || 0) + v}）`)
+      .join('、');
+    if (onPending) {
+      try {
+        onPending({
+          type: 'experience_commit',
+          payload: {
+            characterId: ch.id, name: ch.name,
+            // 自检没有单独的「经历原文」，就用它给的 why 当这轮的情节说明；
+            // 没给 why 就写一句可读的兜底，避免经历条目空白。
+            text: String(row.why || `（自检）${dTxt}`).slice(0, 500),
+            counters: proj.applied,
+            counterFrom: Object.fromEntries(Object.keys(proj.applied).map((k) => [k, Number(cur[k]) || 0])),
+            clamped: proj.clamped,
+            dropped,
+            reason: String(row.why || '输出后自检：剧情里发生了数值变化'),
+            by: (bot.name || botId) + '（自检）',
+          },
+        }, `待确认：为「${ch.name}」同步计数器`);
+      } catch {}
+    }
+    counterCount++;
+    items.push({ kind: 'counter', text: `「${ch.name}」计数器 ${dTxt}（待你确认）` });
+  }
+
+  // ---- ③ 世界改变 → 待确认建议 ----
+  for (const w of result.world) {
+    if (onPending) {
+      try {
+        onPending({
+          type: 'world_change',
+          payload: {
+            botId, botName: bot.name || botId, text: w.text,
+            reason: w.why || '输出后自检：剧情里世界层面发生了变化',
+            by: (bot.name || botId) + '（自检）',
+          },
+        }, `待确认：记一条世界改变「${w.text.slice(0, 20)}…」`);
+      } catch {}
+    }
+    worldCount++;
+    items.push({ kind: 'world', text: `世界改变「${w.text.slice(0, 20)}${w.text.length > 20 ? '…' : ''}」（待你确认）` });
+  }
+
+  if (!items.length) items.push({ kind: 'info', text: '本轮没有需要同步的内容' });
+  if (onSync) { try { onSync(items); } catch {} }
+  return { ok: true, eventCount, counterCount, worldCount, items, result };
+}
+
 // 「被收敛了」的回执文案：`好感度 想给 130，已收敛到上限 100`
 function clampedText(clamped) {
   if (!Array.isArray(clamped) || !clamped.length) return '';
@@ -960,9 +1083,35 @@ async function chatWithBot(botId, content, opts = {}) {
     target: eff.target,
   });
 
-  // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成
+  // ---- ★ 输出后自检（用户决策 2026-10-05，默认开）----
+  // 正文已经写完（流式也全下发完了）才开始，所以这一步只影响「收尾」的延迟，
+  // 不影响用户看到正文的时机。
+  // ★ 与 memory.maintain 的分工：自检开启时，**本轮的剧情要点提炼由自检负责**，
+  //   maintain 只跑压缩 / 蒸馏 / 摘要（下面传 round=null）。
+  //   不这么分，同一轮剧情会被记两遍（自检写一次、maintain 的 extractRoundEvents 再写一次）。
   const chatFn = makeChatFn(botId);
-  if (chatFn) memory.maintain(botId, chatFn, { user: content, assistant: reply }).catch(() => {});
+  let selfChecked = false;
+  const SC = require('./lib/selfcheck');
+  if (chatFn && SC.isEnabled(bot, cfg)) {
+    try {
+      const r = await runSelfCheck({
+        botId, bot, cfg, reply, chatFn,
+        onPending: opts.onPending, onSync: opts.onSync,
+      });
+      selfChecked = r.ok;
+      if (!r.ok) console.log(`[bot:${botId}] 输出后自检跳过：${r.err}`);
+      else console.log(`[bot:${botId}] 输出后自检：事件 +${r.eventCount}、计数器待确认 ${r.counterCount}、世界待确认 ${r.worldCount}`);
+    } catch (e) {
+      // 自检是锦上添花 —— 挂了也绝不能影响正文（用户明确要求过）
+      console.log(`[bot:${botId}] 输出后自检失败（不影响回复）：${e.message}`);
+    }
+  }
+
+  // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成
+  if (chatFn) {
+    const round = selfChecked ? null : { user: content, assistant: reply };
+    memory.maintain(botId, chatFn, round).catch(() => {});
+  }
   return reply;
 }
 

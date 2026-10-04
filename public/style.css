@@ -2217,6 +2217,25 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .pending-strip .ps-head .ic { width: 12px; height: 12px; }
 /* 挤在对话页里比在管理员面板里窄，让按钮换行不至于被挤出视野 */
 .pending-strip .admin-action { flex-wrap: wrap; }
+
+/* 文件同步状态：输入框上方那几行灰色小字（「XX 计数器已更新」这类）
+   ★ 刻意做得很轻：它是**状态**不是消息，颜色压到 faint、字号压到 11px，
+     不能跟正文抢视线。 */
+.sync-line:empty { display: none; }
+.sync-line {
+  padding: 6px 0 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.sync-line .sl-row {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 11px; line-height: 1.6;
+  color: var(--on-surface-faint);
+}
+.sync-line .sl-row .ic { width: 11px; height: 11px; flex-shrink: 0; position: relative; top: 1px; }
+.sync-line .sl-row span { min-width: 0; word-break: break-word; }
+/* 三类各自一点极淡的色偏：让用户一眼分出「数值动了 / 世界动了 / 剧情记了」，但不喧哗 */
+.sync-line .k-counter { color: color-mix(in srgb, var(--primary) 72%, var(--on-surface-faint)); }
+.sync-line .k-world { color: color-mix(in srgb, var(--accent) 72%, var(--on-surface-faint)); }
 .chat-progress.on {
   max-height: 56px;
   opacity: 1;

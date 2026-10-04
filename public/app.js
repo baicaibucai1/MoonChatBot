@@ -610,6 +610,8 @@ function renderChatTabHtml(b) {
         </div>
         <!-- 写手提议的「待确认写操作」常驻区（见 renderPendingStrip 的说明） -->
         <div class="pending-strip" id="pending-strip"></div>
+        <!-- 文件同步状态：灰色小字一行行写「这一轮动了什么」（见 syncLine） -->
+        <div class="sync-line" id="sync-line"></div>
         <div class="chat-input">
           <textarea id="f-chat" rows="1" placeholder="与 ${esc(b.name || b.id)} 说话… Enter 发送，Shift+Enter 换行" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${id}')}"></textarea>
           <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这位写手接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
@@ -1352,6 +1354,8 @@ function renderBotDetail(id) {
   if (tab === 'chat') {
     // 切回对话页时把还没处理的提议重新挂上（提议是常驻状态，不随一次流式结束而消失）
     renderPendingStrip(id);
+    // 同步状态同理：它是**可回看的状态**，切走再切回来该还在
+    renderSyncLine(id);
     if (_chatTid) {
       const tid = _chatTid;
       loadSessions(id, tid);
@@ -2884,7 +2888,7 @@ async function loadSessions(id, tid) {
 //                            → 绝不能重放，否则同一条 user 消息会被写两遍
 // onPending 是**第三条信道**（与 onDelta / onProgress 并列）：写手提议「沉淀经历 / 改角色卡」
 // 走 SSE 的 `pending` 事件，语义是「等用户点确认」。混进正文会让前端从文本里反解结构 —— 正是要避免的事。
-async function streamBotChat(id, content, tid, onDelta, onProgress, onPending) {
+async function streamBotChat(id, content, tid, onDelta, onProgress, onPending, onSync) {
   let resp;
   try {
     resp = await fetch(API_BASE + `/api/bots/${id}/chat/stream`, {
@@ -2903,6 +2907,8 @@ async function streamBotChat(id, content, tid, onDelta, onProgress, onPending) {
     if (ev.type === 'text') { if (onDelta) onDelta(String(ev.d || '')); }
     else if (ev.type === 'progress') { if (onProgress) { try { onProgress(ev.p || {}); } catch {} } }
     else if (ev.type === 'pending') { if (onPending && ev.edit) { try { onPending(ev.edit, ev.summary || ''); } catch {} } }
+    // 输出后自检的「本轮同步了什么」：又一条独立信道（见 server.js runSelfCheck）
+    else if (ev.type === 'sync') { if (onSync && Array.isArray(ev.items)) { try { onSync(ev.items); } catch {} } }
     else if (ev.type === 'done') done = ev;
     else if (ev.type === 'err') srvErr = ev.err || '调用失败';
   }, () => { /* 传输层异常：交由下面的「零事件」判定统一处理 */ });
@@ -2991,6 +2997,14 @@ function openOutputSheet(id) {
             <option value="full" ${b.lengthPerm === 'full' ? 'selected' : ''}>全权</option>
           </select>
         </div>
+        <div class="os-row">
+          <div class="os-label">写完自检<div class="os-desc">正文写完后核对一遍：计数器 / 世界 / 剧情要点</div></div>
+          <select id="os-selfcheck">
+            <option value="" ${tri(b.selfCheck) === '' ? 'selected' : ''}>跟随全局（当前：${state.selfCheck === false ? '关闭' : '开启'}）</option>
+            <option value="true" ${b.selfCheck === true ? 'selected' : ''}>开启</option>
+            <option value="false" ${b.selfCheck === false ? 'selected' : ''}>关闭</option>
+          </select>
+        </div>
       </div>
       <div class="modal-foot cf-foot">
         <button class="ghost" onclick="closeOutputSheet()">取消</button>
@@ -3021,6 +3035,7 @@ async function saveOutputSheet(id) {
   b.longReplyTarget = tEl && tEl.value.trim() !== '' ? clampInt(tEl.value, 0, 0, 100000) : undefined;
   b.longReplyAuto = triOf('#os-auto');
   b.lengthPerm = $('#os-perm') && $('#os-perm').value ? $('#os-perm').value : undefined;
+  b.selfCheck = triOf('#os-selfcheck');
   const r = await api('/api/config', 'PUT', { bots });
   if (r.ok) { closeOutputSheet(); await loadState(); toast('已更新输出设置', 'ok'); }
   else toast(r.err, 'err');
@@ -3110,6 +3125,36 @@ function makeStreamBubble(container, bot) {
 //   挪到独立容器里，轮询碰不到它；切走再切回来（renderBotDetail）也能重挂。
 let _pendingEdits = {};
 
+// ---- 文件同步状态（输入框上方那行灰字）----
+// 用户决策 2026-10-05：「对话界面，底部应该用灰色小字撰写文件同步状态，比如 XX计数器已经更新」
+//
+// ★ 为什么单独做一条而不是复用 toast：
+//   toast 是「发生了什么」的一次性提示，看完就没了；同步状态是**可回看的状态**——
+//   用户想知道「刚才那轮到底动了什么」，滚动到底就该看见。
+// ★ 只保留最近 SYNC_KEEP 条：这是状态行，不是日志面板。
+const SYNC_KEEP = 6;
+let _syncLog = {};   // { botId: [{kind,text,ts}] }
+
+function pushSync(botId, items) {
+  if (!botId || !Array.isArray(items) || !items.length) return;
+  const arr = _syncLog[botId] || (_syncLog[botId] = []);
+  for (const it of items) {
+    if (!it || !it.text) continue;
+    arr.push({ kind: it.kind || 'info', text: String(it.text), ts: Date.now() });
+  }
+  if (arr.length > SYNC_KEEP) arr.splice(0, arr.length - SYNC_KEEP);
+  renderSyncLine(botId);
+}
+
+function renderSyncLine(botId) {
+  const el = document.getElementById('sync-line');
+  if (!el) return;
+  const list = _syncLog[botId] || [];
+  el.innerHTML = list.length
+    ? list.map((x) => `<div class="sl-row k-${esc(x.kind)}">${IC_FILE}<span>${esc(x.text)}</span></div>`).join('')
+    : '';
+}
+
 function renderPendingStrip(botId) {
   const el = document.getElementById('pending-strip');
   if (!el) return;
@@ -3164,7 +3209,7 @@ async function directChat(id) {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    }, (p) => setProgress(p), (edit) => pendings.push(edit));
+    }, (p) => setProgress(p), (edit) => pendings.push(edit), (items) => pushSync(id, items));
     if (r && r.ok) {
       paint(r.reply, false);
       toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
@@ -3173,8 +3218,9 @@ async function directChat(id) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat，保住「流式不可用的环境仍能对话」
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
-      // 非流式路径没有 SSE 信道，待确认写操作在响应体的 pendings 里带回来
+      // 非流式路径没有 SSE 信道，待确认写操作在 pending / sync 里一起带回来
       for (const x of (r.pendings || [])) if (x && x.edit) pendings.push(x.edit);
+      if (Array.isArray(r.sync)) pushSync(id, r.sync);
       if (r.ok) toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
       else { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
@@ -3259,13 +3305,14 @@ async function modalChat(id, tid) {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    }, (p) => setProgress(p), (edit) => pendings.push(edit));
+    }, (p) => setProgress(p), (edit) => pendings.push(edit), (items) => pushSync(id, items));
     if (r && r.ok) paint(r.reply, false);
   } catch (err) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
       for (const x of (r.pendings || [])) if (x && x.edit) pendings.push(x.edit);
+      if (Array.isArray(r.sync)) pushSync(id, r.sync);
       if (!r.ok) { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
       toast('对话失败: ' + err.message, 'err');
@@ -4255,6 +4302,10 @@ async function confirmEdit(btn) {
   }
   if (r.ok) {
     toast('已写入', 'ok');
+    // ★ 确认落地后往底部同步状态追加一条「真的更新了」。
+    //   之前只有「待你确认」，用户点完确认就再也看不到结果 —— 状态行要闭环。
+    const doneLine = confirmSyncText(ed, p, r);
+    if (doneLine) pushSync(p.botId || (view.type === 'bot' ? view.id : ''), [doneLine]);
     // 从常驻列表里摘掉（写手提议那条会一直挂着等确认，不摘会重绘回来）
     dropPending(ed);
     const bar = btn.closest('.admin-action');
@@ -4277,6 +4328,35 @@ async function confirmEdit(btn) {
   } else {
     toast(r.err || '写入失败', 'err');
   }
+}
+
+// 确认应用之后，底部同步状态该写什么（返回 null = 这类操作不上状态行）
+// ★ 只写「用户看得见结果」的三类：计数器、世界改变、经历。记忆文件/配置之类不占这行 ——
+//   它们是设置操作，本来就有 toast 与列表刷新在反馈。
+function confirmSyncText(ed, p, r) {
+  const at = (p.by || '').includes('（自检）') ? '（自检）' : '';
+  if (ed.type === 'experience_commit') {
+    const d = p.counters && Object.keys(p.counters).length
+      ? Object.entries(p.counters).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${fmtNum(v)}`).join('、')
+      : '';
+    // 服务端在响应里回了实际落盘的值（applied），有就以它为准 —— 它才是真相
+    const ap = r && r.applied && Object.keys(r.applied).length
+      ? '，实际 ' + Object.entries(r.applied).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${fmtNum(v)}`).join('、')
+      : '';
+    return { kind: 'counter', text: `「${p.name}」计数器已更新${at}${d ? '：' + d : ''}${ap}` };
+  }
+  if (ed.type === 'counter_edit') {
+    return { kind: 'counter', text: p.op === 'remove'
+      ? `「${p.name}」计数器「${p.counter}」已删除`
+      : `「${p.name}」计数器「${p.counter}」已更新：${fmtNum(p.before)} → ${fmtNum(p.value)}` };
+  }
+  if (ed.type === 'world_change') {
+    return { kind: 'world', text: `世界卡已记录一条改变${at}：${snippet(p.text || '', 24)}` };
+  }
+  if (ed.type === 'experience_edit' && p.op !== 'remove') {
+    return { kind: 'event', text: `「${p.name}」已记一条经历：${snippet(p.text || '', 24)}` };
+  }
+  return null;
 }
 
 // 一键添加管理员生成的模型配置（不写 apiKey，由用户到模型管理页补充）
@@ -5233,6 +5313,17 @@ function renderGeneration() {
             ${num('g-len-max', clampInt(state.lengthMax, 6000, 100, 100000), 100, 100000, 500, 110)}${unit('字 · 最多')}
           </div>` + hint('模型申请的字数会被夹在这个区间内。选「全权」时此区间不生效（放开为 100–100000）。'))}
 
+        ${box(`${label('写完自检（输出后核对一遍）')}
+          <label class="switch" title="${state.selfCheck === false ? '点击开启写完自检' : '点击关闭写完自检'}">
+            <input type="checkbox" id="g-selfcheck" ${state.selfCheck === false ? '' : 'checked'}>
+            <span class="slider"></span>
+          </label>`
+          + hint('正文写完之后，模型再回看一遍整篇，核对三件事：'
+            + '<strong>计数器</strong>（有没有该加该减的）→ 出「待确认」，你点了才落盘；'
+            + '<strong>世界改变</strong>（世界层面有没有变化）→ 出「待确认」；'
+            + '<strong>剧情要点</strong>（值得长期记住的事）→ 直接写进剧情记录。<br>'
+            + '各写手可在「输出设置」里单独覆盖。关掉可省一次调用（每轮多花几秒）。'))}
+
         ${box(`${label('蒸馏 / 总结模型')}
           <select id="g-distill" class="gen-sel" style="width:100%">
             <option value="">跟随各写手绑定模型（默认）</option>
@@ -5286,6 +5377,8 @@ async function saveGeneration() {
     lengthPerm: _gPerm,
     lengthMin: clampInt($('#g-len-min') ? $('#g-len-min').value : undefined, 500, 100, 50000),
     lengthMax: clampInt($('#g-len-max') ? $('#g-len-max').value : undefined, 6000, 100, 100000),
+    // 输出后自检（全局默认开）
+    selfCheck: $('#g-selfcheck') ? !!$('#g-selfcheck').checked : undefined,
   });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   if (r.ok) loadState();
