@@ -3,8 +3,33 @@
 'use strict';
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const path = require('node:path');
+const dns = require('node:dns');
 const { spawn } = require('node:child_process');
+
+// ---- 出站连接的地址族偏好：能用 IPv6 就先用 IPv6（进程级，先于任何请求发起）----
+//
+// 为什么需要它（2026-10-04 实测，Agnes 两个端点连不上的根因）：
+//   api.agnes-ai.cn / apihub.agnes-ai.com 在本机的 **IPv4 路径被中间设备劫持** ——
+//   握手返回一张自签证书（SAN 只有 localhost / 127.0.0.1，签发者 CN=redirect-cnzz），
+//   其余 IPv4 则是 timeout / ECONNRESET；**IPv6 那条路是干净且可信的**。
+//   Node 内置的 fetch（undici）默认开 Happy-Eyeballs：所有候选地址一起试探，
+//   IPv4 那个假服务器**先连上**（TCP 层是成功的）→ 轮到 TLS 才炸 →
+//   报 `DEPTH_ZERO_SELF_SIGNED_CERT` / `CERT_HAS_EXPIRED`，也就是日志里的 `fetch failed`。
+//   关键在于：TCP 层已经"成功"了，它不会再回退到 IPv6。
+//
+// 这两行的作用：
+//   ① 有 AAAA 记录的主机 → 首选 IPv6（没有 AAAA 的主机不受影响，照常走 IPv4）；
+//   ② 关掉并发试探 → 只连解析结果的第一个地址，别让假服务器靠"握手前先连上"抢赢。
+//
+// 已知边界：关掉并发试探后，若首选的那个 AAAA 恰好不通，本次请求就失败（重试会再解析一次，
+//   DNS 是轮换池，可能就换到通的）。真要兜住"轮换池里部分地址坏"的情况，
+//   得在 models.js 里自己实现「解析全部候选 → 逐个试到握手成功」，那是后面才做的事。
+try {
+  dns.setDefaultResultOrder('ipv6first');
+  if (typeof net.setDefaultAutoSelectFamily === 'function') net.setDefaultAutoSelectFamily(false);
+} catch { /* 老版本 Node 没有这些 API：直接按默认行为跑，不影响启动 */ }
 
 const store = require('./lib/store');
 const memory = require('./lib/memory');
