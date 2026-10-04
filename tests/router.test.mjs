@@ -55,8 +55,9 @@ let router;
 before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
-  test('条目总数稳定在 72（... + 角色池 13 条：列表/新建/详情/改写/删除/历史/回滚/写手引用 + 沉淀/计数器×2/经历×2）', () => {
-    assert.equal(router.routes.length, 72);
+  // ★ 这个数字随路由增删而变，改动时也要改它 —— 断言的意义是「别有人悄悄加了路由却没想清楚顺序」
+  test('条目总数稳定在 75（... + 角色池 13 条 + 世界卡 3 条：改变列表/追加/删除）', () => {
+    assert.equal(router.routes.length, 75);
   });
 
   test('★ characters 域守「先具体后通配」：/history /rollback /commit /counters /experiences 必须排在 /:id 之前', () => {

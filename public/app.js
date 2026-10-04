@@ -974,7 +974,7 @@ function charStateAdminHtml(c) {
   const head = (t, n) => `<div class="chr-state-head">${t}<span class="spacer"></span><span class="chr-state-n">${n}</span></div>`;
   const counters = cs.length
     ? `<div class="ch-counters">${cs.map(([k, v]) => `<span class="ch-counter" title="${esc(k)}">${esc(k)}<b>${esc(fmtNum(v))}</b><button class="ch-x" data-act="rm-counter" data-cid="${esc(c.id)}" data-name="${esc(k)}" title="删除这个计数器">${IC_CLOSE}</button></span>`).join('')}</div>`
-    : `<div class="chr-state-empty">还没有计数器。计数器的规则写在写手的「写手设定」里，值由剧情里的经历带动。</div>`;
+    : `<div class="chr-state-empty">还没有计数器。计数器的规则写在写手的「标准要求」里，值由剧情里的经历带动。</div>`;
   const rows = exps.length
     ? `<div class="chr-exp-list">${exps.slice(0, 30).map(e => `<div class="chr-exp-row">
           <span class="chr-exp-ts">${esc(fmtTime(e.ts))}</span>
@@ -2202,11 +2202,26 @@ async function loadMemoryFiles(id) {
 // 记忆层级标签
 const TIER_LABEL = { 1: '强制', 2: '摘要', 3: '冷' };
 
+// ★ 六段式组成（用户决策 2026-10-05）：写手档案 = ①②③ + 背景资料，
+//   自动生成 = ④⑤，其余用户自己新建的 = ⑥ 附加提示词。
+//   面板按这三组分开列，否则 7 个文件混在一起看不出「写手是由什么组成的」。
+const PRESET_MEM_ORDER = ['persona', 'standards', 'world', 'plot', 'content', 'traits'];
+const PRESET_MEM_KEYS = new Set(PRESET_MEM_ORDER);
+
 function renderMemFiles(id, files) {
   const el = $('#mem-files');
   if (!el) return;
   if (!files.length) { el.innerHTML = `<div class="empty-hint">暂无记忆文件，点击右上角 ${IC_PLUS} 新增</div>`; return; }
-  el.innerHTML = files.map((f, i) => `
+  const byPreset = (a, b) => PRESET_MEM_ORDER.indexOf(a.key) - PRESET_MEM_ORDER.indexOf(b.key);
+  const preset = files.filter((f) => !f.sys && PRESET_MEM_KEYS.has(f.key)).sort(byPreset);
+  const custom = files.filter((f) => !f.sys && !PRESET_MEM_KEYS.has(f.key));
+  const sys = files.filter((f) => f.sys);
+  const group = (title, sub, arr) => (!arr.length ? '' : `
+    <div class="mem-group">
+      <div class="mem-sec-title">${esc(title)}<span class="mem-sec-sub">${esc(sub)}</span></div>
+      ${arr.map(memFileRow).join('')}
+    </div>`);
+  const memFileRow = (f, i) => `
     <div class="mem-file ${f.enabled ? '' : 'disabled'}" data-key="${esc(f.key)}" draggable="true"
          onclick="openMemFile('${id}','${f.key}')" title="点击概览内容 / 编辑备注；拖动左侧手柄调整重要性" style="animation-delay:${Math.min(i * 45, 300)}ms"
          ondragstart="memDragStart(event,'${id}','${esc(f.key)}')" ondragover="memDragOver(event)"
@@ -2223,7 +2238,10 @@ function renderMemFiles(id, files) {
       <span class="mf-desc">${esc(f.desc) || '无备注'}</span>
       <span class="mf-state">${f.enabled ? '启用' : '已禁用'}</span>
       <button class="ghost sm mf-del" onclick="event.stopPropagation();delMemoryFile('${id}','${f.key}')" title="删除文件">${IC_CLOSE}</button>
-    </div>`).join('');
+    </div>`;
+  el.innerHTML = group('写手档案', '① 写手设定 · ② 标准要求（输出头尾 / 计数器） · ③ 世界卡 · 世界观/背景 · 资料库 · 写作特征', preset)
+    + group('附加提示词（自建）', '⑥ 你自己新建的记忆文件，内容同样会注入对话', custom)
+    + group('自动生成', '④ 剧情概览 · ⑤ 剧情归档（原文） —— 由 AI 维护', sys);
 }
 
 // ---- 记忆文件拖动排序（重要性分级：越靠前越重要） ----
@@ -2376,7 +2394,7 @@ function renderMemDistill(id) {
     : (s.summaryFileExists ? `<span class="lay-dim">${IC_CHECK}<span class="lb">文件已创建（暂无经历可压缩）</span></span>` : '<span class="lay-dim">未创建（点「生成/更新」立即创建）</span>');
   const evPreview = s.eventCount
     ? s.events.slice(-3).reverse().map((e) => `· [${fmtShortTs(e.ts)}] ${esc(e.event)}`).join('<br>')
-    : `<span class="lay-dim">暂无事件（对话中自动提炼，或使用「AI 归档」记录剧情）</span>`;
+    : `<span class="lay-dim">暂无剧情事件（对话中自动提炼，或使用「AI 归档」记录剧情）</span>`;
   // 「从核心卡还原种子」：种子（persona.md）丢失/清空后一键恢复；需已有核心卡
   const coreSeedBtn = s.core
     ? `<button class="ghost sm" onclick="seedFromCore('${id}')" title="把核心卡内容写回 persona.md（种子丢失/清空后一键恢复）">${IC_COLLAPSE}<span class="lb">还原种子</span></button>`
@@ -2389,8 +2407,8 @@ function renderMemDistill(id) {
   el.innerHTML = `
     <div class="distill-block span2 ${dfCls('core')}"><div class="distill-label" onclick="distillFold(event,'${id}','core')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>人格核心卡 ${badge(s.core ? s.coreFresh : null)}${s.core && s.core.manual ? '<span class="distill-ok">手动编辑</span>' : ''}<span class="spacer"></span>${coreSeedBtn}<button class="ghost sm" onclick="openCoreEditModal('${id}')">${IC_PENCIL}<span class="lb">编辑</span></button></div><div class="distill-body">${coreBody}</div></div>
     ${sumBlocks}
-    <div class="distill-block ${dfCls('events')}"><div class="distill-label" onclick="distillFold(event,'${id}','events')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>经历事件流<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">${IC_SETTINGS}<span class="lb">管理</span></button></div><div class="distill-body">${evPreview}</div></div>
-    <div class="distill-block ${dfCls('evsum')}"><div class="distill-label" onclick="distillFold(event,'${id}','evsum')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>经历摘要（旧事件压缩）<span class="spacer"></span><button class="ghost sm" onclick="regenEventsSummary('${id}')">生成/更新</button>${(s.summary || s.summaryFileExists) ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
+    <div class="distill-block ${dfCls('events')}"><div class="distill-label" onclick="distillFold(event,'${id}','events')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>⑤ 剧情记录（全记录）<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">${IC_SETTINGS}<span class="lb">管理</span></button></div><div class="distill-body">${evPreview}</div></div>
+    <div class="distill-block ${dfCls('evsum')}"><div class="distill-label" onclick="distillFold(event,'${id}','evsum')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>④ 剧情概览（AI 蒸馏）<span class="spacer"></span><button class="ghost sm" onclick="regenEventsSummary('${id}')">生成/更新</button>${(s.summary || s.summaryFileExists) ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
 }
 
 // AI 蒸馏内容块展开状态：key = `${botId}::${块标识}`；重绘/切页后保持用户选择
@@ -3563,6 +3581,7 @@ const ADMIN_TOOL_META = {
   propose_bot_config_edit: [IC_PENCIL, '待确认·写手配置'],
   propose_character_edit: [IC_USERS, '待确认·角色'],
   propose_character_create: [IC_PLUS, '待确认·新建角色'],
+  propose_world_change: [IC_GLOBE, '待确认·世界改变'],
   read_character_state: [IC_LAYERS, '角色状态'],
   propose_counter_edit: [IC_SETTINGS, '待确认·计数器'],
   propose_experience_edit: [IC_HISTORY, '待确认·经历'],
@@ -3884,6 +3903,13 @@ function extractEdit(reply) {
       },
     };
   }
+  const wc = scanActionJson(reply, 'worldChange');
+  if (wc) {
+    return {
+      type: 'world_change',
+      payload: { botId: wc.botId || '', botName: wc.botName || '', text: wc.text || '', reason: wc.reason || '' },
+    };
+  }
   const b = scanActionJson(reply, 'editBot');
   if (b) return { type: 'bot', payload: b };
   return null;
@@ -3909,6 +3935,10 @@ function renderEditBar(ed) {
     label = `${who}在角色池新建角色「${p.name}」`
       + (p.writerName ? '，并加入自己的角色池' : '')
       + `${p.reason ? `　原因：${p.reason}` : ''}`;
+  }
+  else if (ed.type === 'world_change') {
+    const who = p.botName ? `写手「${p.botName}」建议` : '管理员建议';
+    label = `${who}在世界卡上记一条世界改变：${snippet(p.text || '', 40)}${p.reason ? `　原因：${p.reason}` : ''}`;
   }
   else if (ed.type === 'experience_commit') {
     // 写手提交的经历沉淀（走 opts.onPending），不是管理员 —— 措辞要区分开
@@ -3982,6 +4012,12 @@ async function previewEdit(btn) {
     }
     content = lines.join('\n\n') || '（没有内容）';
   }
+  else if (ed.type === 'world_change') {
+    const lines = [`【世界改变】\n${p.text || ''}`];
+    if (p.reason) lines.push(`【为什么记】\n${p.reason}`);
+    lines.push('（只追加到世界卡的「世界的改变」小节，不动世界设定底稿）');
+    content = lines.join('\n\n');
+  }
   else if (ed.type === 'experience_commit' || ed.type === 'experience_edit') {
     const lines = [];
     if (p.op === 'remove') lines.push(`【要删除的经历】\n${p.text || ''}`);
@@ -4009,6 +4045,7 @@ async function previewEdit(btn) {
       : ed.type === 'core' ? `预览：${p.botId} 人格核心卡`
         : ed.type === 'character_edit' ? `预览：角色「${p.name || p.characterId}」的改动`
         : ed.type === 'character_create' ? `预览：新建角色「${p.name}」`
+        : ed.type === 'world_change' ? '预览：世界卡新增一条改变'
         : ed.type === 'experience_commit' ? `预览：为「${p.name}」沉淀经历`
         : ed.type === 'experience_edit' ? `预览：${p.op === 'remove' ? '删除' : '新增'}「${p.name}」的经历`
         : ed.type === 'counter_edit' ? `预览：角色「${p.name}」的计数器「${p.counter}」`
@@ -4047,6 +4084,9 @@ async function confirmEdit(btn) {
     desc = `将在角色池新建角色「${p.name}」`
       + (p.writerName ? `，并加入写手「${p.writerName}」的角色池` : '');
   }
+  else if (ed.type === 'world_change') {
+    desc = `将在世界卡上追加一条世界改变：${snippet(p.text || '', 40)}`;
+  }
   else if (ed.type === 'experience_commit' || ed.type === 'experience_edit') {
     desc = p.op === 'remove'
       ? `将删除角色「${p.name}」的一条经历`
@@ -4083,6 +4123,12 @@ async function confirmEdit(btn) {
     if (r.ok && p.writerId && r.character && r.character.id) {
       await attachCharToWriter(p.writerId, r.character.id);
     }
+  } else if (ed.type === 'world_change') {
+    if (!p.text) return toast('缺少改变内容', 'err');
+    const wid = p.botId || (view.type === 'bot' ? view.id : '');
+    if (!wid) return toast('缺少写手 id', 'err');
+    p.botId = wid;   // 记回来：下面的「刷新记忆文件列表」按 p.botId 判断
+    r = await api(`/api/memory/${encodeURIComponent(wid)}/world-changes`, 'POST', { text: p.text, by: p.by || '' });
   } else if (ed.type === 'experience_commit') {
     if (!p.characterId) return toast('缺少 characterId', 'err');
     // ★ 走 POST /api/characters/:id/commit —— 服务端内部调 characters.commitExperience：
@@ -4140,7 +4186,7 @@ async function confirmEdit(btn) {
       btn.innerHTML = IC_CHECK + '<span class="lb">已写入</span>';
     }
     await loadState();
-    if ((ed.type === 'memory' || ed.type === 'memory_tier' || ed.type === 'core') && view.type === 'bot' && view.id === p.botId) loadMemoryFiles(p.botId);
+    if ((ed.type === 'memory' || ed.type === 'memory_tier' || ed.type === 'core' || ed.type === 'world_change') && view.type === 'bot' && view.id === p.botId) loadMemoryFiles(p.botId);
     // 角色相关的改动会影响角色卡上的计数器/经历 → 刷新角色池缓存并重绘
     if (/^(character_|experience_|counter_)/.test(ed.type)) {
       await loadCharacters();

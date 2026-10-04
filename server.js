@@ -97,13 +97,20 @@ function makeChatFn(botId) {
 //   记忆模块负责「写手自己的档案」（写手设定 / 剧情线 / 经历），
 //   角色池是**跨写手共享的项目级数据**（存在 config.json 里，不在 memory/ 目录）。
 //   两者的数据源和生命周期都不同，混在一起会让 memory 模块依赖 config。
-// 该写手声明了哪些计数器 —— 从它的「写手设定」(persona.md) 里的「## 计数器」小节解析。
+// 该写手声明了哪些计数器。
 // ★ 这是「同名共享、异名不引用」的判据来源：解析不出来就什么都动不了（安全的一侧）。
+//
+// ★ 找哪份文件（用户决策 2026-10-05）：计数器设计属于「② 标准要求」，
+//   所以**先读 standards.md**；老写手把声明写在「写手设定」(persona.md) 里的，
+//   继续认 —— 两处都读、新文件优先，老配置不会突然失效。
 function declaredCountersOf(botId) {
   const c = require('./lib/characters');
-  try {
-    return c.parseDeclaredCounters(memory.readMemoryFile(botId, 'persona') || '');
-  } catch { return []; }
+  const from = (key) => {
+    try { return c.parseDeclaredCounters(memory.readMemoryFile(botId, key) || ''); } catch { return []; }
+  };
+  const std = from('standards');
+  if (std.length) return std;
+  return from('persona');
 }
 
 function buildWriterBlock(cfg, bot) {
@@ -168,6 +175,24 @@ function buildWriterBlock(cfg, bot) {
     + '所以不要断言「我已经建好了 / 我已经改好了」，只说这是提议、等用户确认。');
   lines.push('- 记不清角色 id 就先用 list_characters 查（它会标出哪些是你当前选定的）。');
 
+  // ---- ③ 世界卡（用户决策 2026-10-05）----
+  // ★ 世界设定本来就在 world.md 里（作为记忆文件注入），这里补的是**写权限说明**与
+  //   「世界的改变」当前流水 —— 写手得看见世界已经被改成什么样，才不会写出矛盾剧情。
+  lines.push('');
+  lines.push('【你的世界卡】');
+  const worldRaw = (() => { try { return memory.readMemoryFile(bot.id, 'world') || ''; } catch { return ''; } })();
+  const wp = require('./lib/memory').parseWorldCard(worldRaw);
+  if (wp.changes.length) {
+    lines.push(`- 世界已经被改变过 ${wp.changes.length} 次（按时间）：`);
+    for (const ch of wp.changes.slice(-10)) lines.push(`  · ${ch.text}`);
+    if (wp.changes.length > 10) lines.push(`  （还有更早的 ${wp.changes.length - 10} 条，未全部列出）`);
+  } else {
+    lines.push('- 世界卡上还没有记录过改变。');
+  }
+  lines.push('- 剧情里**世界层面**发生变化（地点兴废、势力更替、规则被打破、大众认知改变）时，'
+    + '用 propose_world_change 提议记一条。同样只出提议、用户确认才追加进世界卡。');
+  lines.push('- 人物**自身**的遭遇（成长、关系、决定）别记这里 —— 那是角色卡上的经历。');
+
   // ---- 经历与计数器（用户决策 2026-10-04，详见《经历与计数器机制.md》）----
   // ★ 只有选了角色才讲这段：没角色时它没有可沉淀的对象，讲了只会让它乱调工具。
   if (active.length) {
@@ -177,8 +202,8 @@ function buildWriterBlock(cfg, bot) {
       lines.push(`- 你声明过的计数器：${declared.join('、')}。**只有这些名字对你有意义** —— `
         + '别的写手声明的计数器你看不到、也不该去改（同名才是共享同一个值）。');
     } else {
-      lines.push('- 你还没有声明任何计数器。想用得先提议在你的「写手设定」里补一段「## 计数器」，'
-        + '每条写成「- 名字：范围 / 初始值 / 何时增减」（用 propose_memory_edit，选 persona 这个文件）。');
+      lines.push('- 你还没有声明任何计数器。想用得先提议在你的「标准要求」里补一段「## 计数器」，'
+        + '每条写成「- 名字：范围 / 初始值 / 何时增减」（用 propose_memory_edit，选 standards 这个文件）。');
     }
     lines.push('- 剧情里出现值得留存的变化（角色成长、关系变化、关键决定）时，用 '
       + 'propose_experience_commit 提议把这段经历**沉淀到角色卡**上，可以同时带上计数器的**增量**'
@@ -210,7 +235,7 @@ function listCharactersFor(bot, cfg) {
   if (rows.length) {
     out += `\n【计数器的当前值（只列你声明过的：${declared.join('、')}）】\n` + rows.join('\n');
   } else if (declared.length === 0) {
-    out += '\n【计数器】你还没有声明计数器（在「写手设定」里加一段「## 计数器」即可）。';
+    out += '\n【计数器】你还没有声明计数器（在「标准要求」里加一段「## 计数器」即可）。';
   }
   out += '\n【写权限】只有标了「← 你当前选定」的角色你能改设定 / 沉淀经历；'
     + '池里其他角色归别的写手。需要新人物请用 propose_character_create 提议新建（确认后自动归你）。';
@@ -360,6 +385,28 @@ async function chatWithBot(botId, content, opts = {}) {
       },
     },
   });
+  // ★ ③ 世界卡：把「主角对世界的改变」沉淀到世界卡上（用户决策 2026-10-05）。
+  //   与 propose_experience_commit 的区别：那个记的是**角色**身上发生了什么，
+  //   这个记的是**世界**被改成了什么样（桥烧了、城换了主人、规则被打破）。
+  //   同样是追加式流水、同样只出待确认建议不落盘。
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'propose_world_change',
+      description: '【写操作·需确认】把剧情里**对世界造成的改变**记到你的世界卡上。'
+        + '不会立刻生效——生成一条待确认建议，用户点「确认应用」后才追加进世界卡。'
+        + '只记世界层面的变化（地点/势力/规则/大众认知），人物自身的遭遇请用 '
+        + 'propose_experience_commit 记到角色卡上。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '这条改变的一句话记述（如「渡口木桥被烧毁，南北商道就此断绝」）' },
+          reason: { type: 'string', description: '为什么要记（一句话，展示给用户帮助判断）' },
+        },
+        required: ['text'],
+      },
+    },
+  });
   // 只读：让写手能自己查到角色 id / 全池名单（否则它只能靠 prompt 里注入的部分猜）
   tools.push({
     type: 'function',
@@ -392,6 +439,16 @@ async function chatWithBot(botId, content, opts = {}) {
   }
   // 压短靠提示词而不是目标字数：目标只管「没写够就继续」，已经写长了的目标压不短
   if (eff.hint) messages.push({ role: 'user', content: eff.hint });
+
+  // ---- ② 标准要求：输出头尾要求（用户决策 2026-10-05）----
+  //   standards.md 是记忆文件（会随 tier 注入给模型看），这里额外做**引擎层保证**：
+  //   长文分段时只在整篇开头/结尾各套一次，中间段明确告诉它「还没到结尾别写」。
+  //   光靠提示词不够 —— 模型看见「开头：以【第一幕】起始」会每段都套一遍。
+  const stdText = (() => { try { return memory.readMemoryFile(botId, 'standards') || ''; } catch { return ''; } })();
+  const ht = longreply.parseHeadTail(stdText);
+  if (ht.head || ht.tail) {
+    console.log(`[bot:${botId}] 输出头尾要求：开头=${ht.head || '—'} / 结尾=${ht.tail || '—'}`);
+  }
 
   // 进度上报（可选的 callback）：调用方没给就整个是空转，不影响任何行为。
   // 包一层 try 是因为它纯属「锦上添花」，任何异常都不该连累正文生成。
@@ -431,6 +488,11 @@ async function chatWithBot(botId, content, opts = {}) {
   }
   // 规划成功才给首段挂上结构（规划失败/不需要时 messages 保持原样，行为与之前完全一致）
   if (plan) messages.push({ role: 'user', content: longreply.segPromptFirst(plan, eff.target) });
+  // ★ 首段：只有真的会分段时才给「开头」提示 —— 单段回复本来就是整篇，
+  //   模型自己看得见全文，再补一句「这是开头」反而啰嗦。
+  if (ht.head && (plan || eff.enabled)) {
+    messages.push({ role: 'user', content: longreply.headTailHint({ isFirst: true, isLast: false, head: ht.head, tail: ht.tail }).trim() });
+  }
   // 规划阶段结束 → 进入写作阶段。此刻若已有大纲，总段数就已知，前端可以开始画确定的百分比。
   emitProgress({ phase: 'write', seg: 0, segTotal: segTotal(), chars: 0, target: eff.target });
 
@@ -593,6 +655,28 @@ async function chatWithBot(botId, content, opts = {}) {
               + `如果是同一位、你想改他，请用 propose_character_edit（前提是他已在你的角色池里）。` : '')
             + '请以「提议」的口吻告知用户，不要说「已经建好了」。';
         }
+      } else if (tc.function.name === 'propose_world_change') {
+        // ★ 世界改变：同样只出待确认建议，不落盘。
+        //   落盘走 POST /api/memory/:id/world-changes（追加进 world.md 的「## 世界的改变」小节）。
+        const txt = String(args.text || '').trim().slice(0, 500);
+        if (!txt) {
+          content = '这条世界改变没有内容，无法提交。请给出「世界被改成了什么样」的一句话记述。';
+        } else {
+          const reason = String(args.reason || '').trim();
+          if (opts.onPending) {
+            try {
+              opts.onPending({
+                type: 'world_change',
+                payload: {
+                  botId, botName: bot.name || bot.id, text: txt, reason,
+                  by: bot.name || bot.id,
+                },
+              }, `待确认：记一条世界改变「${txt.slice(0, 20)}…」`);
+            } catch {}
+          }
+          content = '已生成「世界改变」的建议，等待用户在面板确认。'
+            + '请以「提议」的口吻告知用户，不要说「已经记下了」。';
+        }
       } else if (tc.function.name === 'propose_experience_commit') {
         // ★ 经历沉淀：同样只出待确认建议，不落盘。
         //   落盘走 POST /api/characters/:id/commit（内部调 characters.commitExperience）。
@@ -732,7 +816,15 @@ async function chatWithBot(botId, content, opts = {}) {
         : eff.target > 0
           ? longreply.targetPrompt(reply.length, eff.target)
           : longreply.CONTINUE_PROMPT;
-    const msgs = longreply.continueMessages(messages, reply, prompt);
+    // ★ ② 输出头尾（引擎层保证）：这一段是不是「整篇结尾」？
+    //   有大纲 → 写到大纲最后一段就是结尾（确定）。
+    //   无大纲 → 用 SEG_CHARS 估一段的量：这一段写完大概率就够目标了，就当它是结尾。
+    //   为什么必须判定：不判的话模型会在**每一段**末尾都套一次结尾套话。
+    const segIsLast = plan
+      ? (planIdx + 1) >= plan.length - 1
+      : eff.target > 0 && reply.length + longreply.SEG_CHARS >= eff.target;
+    const msgs = longreply.continueMessages(messages, reply,
+      prompt + longreply.headTailHint({ isFirst: false, isLast: segIsLast, head: ht.head, tail: ht.tail }));
     // 续写不带工具：它的任务只有「接着写」，再给工具它会跑偏（转头去搜索/读档案）
     let segRes = null;
     try {
@@ -1109,7 +1201,7 @@ function buildAdminSystem(cfg, botId) {
   lines.push('- 用户说「改角色」通常指改**角色池里的角色设定**（用 propose_character_edit）；说「改写手」才指写手配置（用 propose_bot_config_edit）。拿不准就先说清你理解为哪个，再动手。');
   lines.push('');
   lines.push('【角色经历与计数器】（务必分清「值」和「规则」）');
-  lines.push('- 计数器的**值**在**角色卡**上（全体写手共用一张表）；计数器的**规则**（范围/初始值/何时增减）在**写手的「写手设定」**里。改数值用 propose_counter_edit；改规则要去改写手设定。');
+  lines.push('- 计数器的**值**在**角色卡**上（全体写手共用一张表）；计数器的**规则**（范围/初始值/何时增减）在**写手的「标准要求」**（standards）里。改数值用 propose_counter_edit；改规则要去改 standards 这个文件。');
   lines.push('- ★ **同名共享、异名不引用**：两位写手都声明了「好感度」→ 它们读写同一个值；写手只看得见自己声明过的名字。所以给写手加计数器前，先看它已声明了哪些，别重复造同名。');
   lines.push('- **经历是追加式**的：不要「修改」历史条目，要改就删除后重加（propose_experience_edit 先 op=remove 再 op=add）。');
   lines.push('- 想知道角色现在什么状态，用 read_character_state 读它的计数器与经历，别凭印象猜。');
@@ -1126,6 +1218,8 @@ function buildAdminSystem(cfg, botId) {
   lines.push('');
   lines.push('【Agent 工具】你有如下工具可用：');
   lines.push('- 读取：list_robots（写手状态）、get_panel_state（模型/全局设置）、list_characters（角色池有哪些角色）、read_character_state（某角色的计数器与经历）、list_memory_files / read_memory_file（写手记忆库）、read_sessions（最近会话）、search_memory（记忆库关键词搜索）、read_global_files / read_global_file（全局设定）；');
+  // ★ 六段式组成（2026-10-05）：管理员要知道改的是哪一段，才不会把世界设定写进写手设定里
+  lines.push('- ★★ 写手档案是六段式：① 写手设定 persona　② 标准要求 standards（输出头尾要求 + 计数器设计）　③ 世界卡 world（世界设定 + 主角对世界的改变）　④ 剧情概览 events_summary（AI 蒸馏，别手写）　⑤ 剧情记录（事件流 events.jsonl + 归档，别手写）　⑥ 附加提示词（用户自建的 .md）。改①②③⑥ 用 propose_memory_edit（file=对应 key）；④⑤ 是系统自动生成，别去手改。');
   lines.push('- 回顾自身：list_admin_sessions / read_admin_session（读取面板管理员的既往会话，跨对话保持记忆）；');
   lines.push('- 新增模型：create_model（用户确认服务信息后即可添加，立即生效、无需再确认）；');
   lines.push('- 工作区（草稿台）：ws_write_file / ws_list_files / ws_read_file / ws_delete_file（写入与读写草稿，免确认，安全操作）；起草前先 ws_list_files 看看有没有现成的，避免重复造轮子；');

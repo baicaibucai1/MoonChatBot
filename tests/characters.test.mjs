@@ -711,3 +711,25 @@ test('stateBrief：带出最近经历，且只取最后 N 条', () => {
   assert.ok(s.includes('中事'));
   assert.ok(!s.includes('旧事'));
 });
+
+// ---------- 计数器声明的**来源**（用户决策 2026-10-05）----------
+// 计数器的「设计」搬到「② 标准要求」里了，但老写手把它写在「写手设定」(persona.md) 里。
+// 两处都得认 —— 这里测的是**解析侧**（parseDeclaredCounters），
+// 「新文件优先、旧文件回退」的调度在 server.js 的 declaredCountersOf，由真机脚本覆盖。
+
+test('计数器声明：标准要求里的写法照样解析（不只是 persona 专用）', () => {
+  const decl = characters.parseDeclaredCounters([
+    '# 标准要求', '',
+    '## 输出头尾',
+    '- 开头：以「【第一幕】」起始', '',
+    '## 计数器',
+    '- 好感度：范围 0–100 / 初始 0',
+    '- 信任：范围 0–10',
+  ].join('\n'));
+  assert.deepEqual(decl, ['好感度', '信任'], '标准要求里的计数器小节要能解析出来');
+});
+
+test('计数器声明：只认「计数」小节，输出头尾那几条不混入', () => {
+  const decl = characters.parseDeclaredCounters('## 输出头尾\n- 开头：xxx\n## 计数器\n- 好感度：0-100\n');
+  assert.deepEqual(decl, ['好感度'], '「开头」不该被当成计数器名');
+});

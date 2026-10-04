@@ -23,6 +23,8 @@ const {
   continueMessages,
   isDuplicate,
   progressOf,
+  parseHeadTail,
+  headTailHint,
   INTENT_DEFAULTS,
   INTENT_CHARS_FLOOR,
   detectLengthIntent,
@@ -528,4 +530,49 @@ test('planPrompt：只做规划，明确禁止写正文', () => {
 test('PLAN_THRESHOLD：低于它不值得规划（省一次模型调用）', () => {
   assert.ok(PLAN_THRESHOLD >= 1000, '阈值太低会让短任务也为规划多花一次调用');
   assert.ok(PLAN_THRESHOLD <= 5000, '阈值太高则中等长度的长文拿不到蓝图');
+});
+
+// ---------------- ② 标准要求：输出头尾（用户决策 2026-10-05）----------------
+
+test('parseHeadTail：从标准要求里认出开头/结尾两条', () => {
+  const r = parseHeadTail([
+    '# 标准要求', '',
+    '## 输出头尾',
+    '- 开头：以「【第一幕】」起始',
+    '- 结尾：最后一行写（未完待续）', '',
+    '## 计数器',
+    '- 好感度：0-100',
+  ].join('\n'));
+  assert.equal(r.head, '以「【第一幕】」起始');
+  assert.equal(r.tail, '最后一行写（未完待续）');
+});
+
+test('parseHeadTail：模板占位说明不算要求（「（不需要就留空）」）', () => {
+  const r = parseHeadTail('## 输出头尾\n- 开头：（不需要就留空）\n- 结尾：（这段会套在整篇结尾，不需要就留空）\n');
+  assert.equal(r.head, '');
+  assert.equal(r.tail, '');
+});
+
+test('parseHeadTail：没有该小节 → 空要求（不打扰不配的写手）', () => {
+  const r = parseHeadTail('# 标准要求\n\n## 计数器\n- 好感度\n');
+  assert.deepEqual(r, { head: '', tail: '' });
+});
+
+test('headTailHint：首段只给开头，末段只给结尾', () => {
+  const ht = { head: '以「【第一幕】」起始', tail: '最后写（未完待续）' };
+  const first = headTailHint({ isFirst: true, isLast: false, ...ht });
+  const mid = headTailHint({ isFirst: false, isLast: false, ...ht });
+  const last = headTailHint({ isFirst: false, isLast: true, ...ht });
+  assert.ok(first.includes('开头要求') && first.includes('【第一幕】'), first);
+  assert.ok(!first.includes('结尾'), '首段不该出现结尾要求');
+  assert.ok(last.includes('结尾要求') && last.includes('未完待续'), last);
+  assert.ok(!last.includes('开头要求'), '末段不该再套开头');
+  // ★ 中间段必须明确「别写结尾」—— 否则模型看见要求就想执行，每段都套一遍
+  assert.ok(mid.includes('不要') && mid.includes('结尾'), mid);
+  assert.ok(!mid.includes('开头要求'), '中间段不该套开头');
+});
+
+test('headTailHint：没配头尾 → 一个字都不加（老写手行为不变）', () => {
+  assert.equal(headTailHint({ isFirst: true, isLast: true, head: '', tail: '' }), '');
+  assert.equal(headTailHint({}), '');
 });
