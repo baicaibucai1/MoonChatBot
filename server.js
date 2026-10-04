@@ -72,11 +72,21 @@ function makeChatFn(botId) {
 //   记忆模块负责「写手自己的档案」（写手设定 / 剧情线 / 经历），
 //   角色池是**跨写手共享的项目级数据**（存在 config.json 里，不在 memory/ 目录）。
 //   两者的数据源和生命周期都不同，混在一起会让 memory 模块依赖 config。
+// 该写手声明了哪些计数器 —— 从它的「写手设定」(persona.md) 里的「## 计数器」小节解析。
+// ★ 这是「同名共享、异名不引用」的判据来源：解析不出来就什么都动不了（安全的一侧）。
+function declaredCountersOf(botId) {
+  const c = require('./lib/characters');
+  try {
+    return c.parseDeclaredCounters(memory.readMemoryFile(botId, 'persona') || '');
+  } catch { return []; }
+}
+
 function buildWriterBlock(cfg, bot) {
   const c = require('./lib/characters');
   const all = Array.isArray(cfg.characters) ? cfg.characters : [];
   const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
   const active = activeIds.map((id) => c.find(all, id)).filter(Boolean);
+  const declared = active.length ? declaredCountersOf(bot.id) : [];
 
   const lines = [];
   lines.push('');
@@ -102,6 +112,9 @@ function buildWriterBlock(cfg, bot) {
       lines.push('');
       lines.push(`（id: ${ch.id}）`);
       lines.push(c.brief(ch, { full: true }));
+      // 角色当前状态：只显示**本写手声明过**的计数器 + 最近经历
+      const st = c.stateBrief(ch, declared, { recent: 8 });
+      if (st) lines.push(st);
     }
   } else if (all.length) {
     lines.push('');
@@ -125,6 +138,25 @@ function buildWriterBlock(cfg, bot) {
     + '记不清角色 id 时先用 list_characters 查。');
   lines.push('不要直接断言"我已经改了设定"——要说明这是提议，等用户确认。');
 
+  // ---- 经历与计数器（用户决策 2026-10-04，详见《经历与计数器机制.md》）----
+  // ★ 只有选了角色才讲这段：没角色时它没有可沉淀的对象，讲了只会让它乱调工具。
+  if (active.length) {
+    lines.push('');
+    lines.push('【关于角色经历与计数器】');
+    if (declared.length) {
+      lines.push(`- 你声明过的计数器：${declared.join('、')}。**只有这些名字对你有意义** —— `
+        + '别的写手声明的计数器你看不到、也不该去改（同名才是共享同一个值）。');
+    } else {
+      lines.push('- 你还没有声明任何计数器。想用得先提议在你的「写手设定」里补一段「## 计数器」，'
+        + '每条写成「- 名字：范围 / 初始值 / 何时增减」（用 propose_memory_edit，选 persona 这个文件）。');
+    }
+    lines.push('- 剧情里出现值得留存的变化（角色成长、关系变化、关键决定）时，用 '
+      + 'propose_experience_commit 提议把这段经历**沉淀到角色卡**上，可以同时带上计数器的**增量**'
+      + '（如 {"好感度": 5}，不要写绝对值）。');
+    lines.push('- 同样只出提议、不落盘：用户确认后才写进角色卡。不要断言"我已经记下了"。');
+    lines.push('- 计数器只能写你声明过的名字；不要凭空造名字，也不要给没在场的角色沉淀经历。');
+  }
+
   return lines.join('\n');
 }
 
@@ -136,7 +168,21 @@ function listCharactersFor(bot, cfg) {
   const active = new Set(Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : []);
   const lines = all.map((x) => `- ${x.name}（id: ${x.id}）${active.has(x.id) ? ' ← 你当前选定' : ''}`
     + (x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : ''));
-  return `【角色池】共 ${all.length} 位\n` + lines.join('\n');
+  let out = `【角色池】共 ${all.length} 位\n` + lines.join('\n');
+  // ★ 只列出**本写手声明过**的计数器名（同名共享、异名不引用）
+  const declared = declaredCountersOf(bot.id);
+  const rows = [];
+  for (const x of all) {
+    const view = c.declaredView(x, declared);
+    const ks = Object.keys(view);
+    if (ks.length) rows.push(`- ${x.name}：` + ks.map((n) => `${n} ${view[n]}`).join('、'));
+  }
+  if (rows.length) {
+    out += `\n【计数器的当前值（只列你声明过的：${declared.join('、')}）】\n` + rows.join('\n');
+  } else if (declared.length === 0) {
+    out += '\n【计数器】你还没有声明计数器（在「写手设定」里加一段「## 计数器」即可）。';
+  }
+  return out;
 }
 
 // 核心对话逻辑：记忆 + 历史 + 模型调用 + 关键剧情自动记录
@@ -227,6 +273,32 @@ async function chatWithBot(botId, content, opts = {}) {
           reason: { type: 'string', description: '为什么改（一句话，会展示给用户，帮助他判断是否同意）' },
         },
         required: ['characterId'],
+      },
+    },
+  });
+  // ★ 经历沉淀：把「剧情里发生的变化」写到角色卡上（计数器增量 + 经历条目）。
+  //   与 propose_character_edit 的区别：那个改的是**设定**（人格/外表），
+  //   这个记的是**流水**（经历了什么、计数器变成多少）。两者都不落盘、都走确认。
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'propose_experience_commit',
+      description: '【写操作·需确认】把剧情里的一段经历沉淀到角色卡上（记「发生了什么」+ 计数器的增量变化）。'
+        + '不会立刻生效——生成一条待确认建议，用户点「确认应用」后才写入。'
+        + 'counters 只填**你自己在写手设定里声明过**的计数器名，值是**增量**（好感度 +5 就填 5）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          characterId: { type: 'string', description: '角色 ID（从【你的角色】里的 id 获取）' },
+          text: { type: 'string', description: '这条经历的一句话记述（如「在渡口与老张结盟，答应替他找船」）' },
+          counters: {
+            type: 'object',
+            description: '计数器的**增量**变化，如 {"好感度": 5}。只能填你声明过的名字；没有变化就省略。',
+            additionalProperties: { type: 'number' },
+          },
+          reason: { type: 'string', description: '为什么要沉淀（一句话，展示给用户帮助判断）' },
+        },
+        required: ['characterId', 'text'],
       },
     },
   });
@@ -417,6 +489,49 @@ async function chatWithBot(botId, content, opts = {}) {
             }
             content = `已生成对角色「${ch.name}」的修改建议（${fields}），等待用户在面板确认。`
               + '请以「提议」的口吻告知用户，不要说「已经改好了」。';
+          }
+        }
+      } else if (tc.function.name === 'propose_experience_commit') {
+        // ★ 经历沉淀：同样只出待确认建议，不落盘。
+        //   落盘走 POST /api/characters/:id/commit（内部调 characters.commitExperience）。
+        //   ★ 计数器名必须先过 filterDeclared —— 写手只能改自己声明过的名字，
+        //     否则它会把别的写手的私有计数器一起改了（「异名不引用」）。
+        const C = require('./lib/characters');
+        const all = C.list(cfg.characters);
+        const ch = C.find(all, String(args.characterId || ''));
+        if (!ch) {
+          content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`;
+        } else {
+          const declared = declaredCountersOf(botId);
+          const raw = (args.counters && typeof args.counters === 'object' && !Array.isArray(args.counters))
+            ? args.counters : {};
+          const deltas = C.filterDeclared(raw, declared);
+          const dropped = Object.keys(raw).filter((k) => !(k in deltas));
+          const text = String(args.text || '').trim().slice(0, 500);
+          if (!text && !Object.keys(deltas).length) {
+            content = '这条沉淀既没有经历内容、也没有有效的计数器变化，无法提交。'
+              + (dropped.length ? `（你给的 ${dropped.join('、')} 不是本写手声明过的计数器名，已忽略）` : '');
+          } else {
+            const reason = String(args.reason || '').trim();
+            if (opts.onPending) {
+              try {
+                opts.onPending({
+                  type: 'experience_commit',
+                  // by 记「谁提议的」—— 经历条目上要能看出是这位写手沉淀的。
+                  // 用户决策里「经历产生地在写手」，所以这里落的是写手名而不是 'admin'。
+                  payload: {
+                    characterId: ch.id, name: ch.name, text, counters: deltas, dropped, reason,
+                    by: bot.name || bot.id,
+                  },
+                }, `待确认：为「${ch.name}」沉淀经历`);
+              } catch {}
+            }
+            const dTxt = Object.keys(deltas).length
+              ? '，计数器 ' + Object.entries(deltas).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、')
+              : '';
+            content = `已生成对「${ch.name}」的经历沉淀建议${dTxt}，等待用户在面板确认。`
+              + '请以「提议」的口吻告知用户。'
+              + (dropped.length ? ` 注意：${dropped.join('、')} 不是你声明过的计数器名，已被忽略。` : '');
           }
         }
       } else {
@@ -887,6 +1002,13 @@ function buildAdminSystem(cfg, botId) {
   lines.push('- 写手从池子里「挑选」自己要写的角色（这叫写手的 activeCharacterIds）；同一个角色可以被多位写手选用。');
   lines.push('- 用户说「改角色」通常指改**角色池里的角色设定**（用 propose_character_edit）；说「改写手」才指写手配置（用 propose_bot_config_edit）。拿不准就先说清你理解为哪个，再动手。');
   lines.push('');
+  lines.push('【角色经历与计数器】（务必分清「值」和「规则」）');
+  lines.push('- 计数器的**值**在**角色卡**上（全体写手共用一张表）；计数器的**规则**（范围/初始值/何时增减）在**写手的「写手设定」**里。改数值用 propose_counter_edit；改规则要去改写手设定。');
+  lines.push('- ★ **同名共享、异名不引用**：两位写手都声明了「好感度」→ 它们读写同一个值；写手只看得见自己声明过的名字。所以给写手加计数器前，先看它已声明了哪些，别重复造同名。');
+  lines.push('- **经历是追加式**的：不要「修改」历史条目，要改就删除后重加（propose_experience_edit 先 op=remove 再 op=add）。');
+  lines.push('- 想知道角色现在什么状态，用 read_character_state 读它的计数器与经历，别凭印象猜。');
+  lines.push('- **「角色单独聊」不产生数据**：角色私下跟用户聊的内容按设计不留痕。用户问「那些聊天记录去哪了」，答案是设计如此。');
+  lines.push('');
   lines.push('【职责】');
   lines.push('1. 配置管理：为面板新增/优化模型、检查写手绑定与联网设置、给出全局配置建议。');
   lines.push('2. 提示词与设定工程：诊断与改写写手的记忆库（人格/剧情/内容/特征/关键剧情）、角色池里角色的设定、全局提示词；优化前先读取原文，给出可直接套用的新正文。');
@@ -897,12 +1019,12 @@ function buildAdminSystem(cfg, botId) {
   lines.push('【工作区】是你唯一的「可写区」：它是面板里的草稿台（workspace/ 目录）。当你要产出一份较长内容（人设补充、世界观设定、事件摘要、提示词），**先写进工作区**，再建议注入给某位写手或全局。好处是：用户能审阅后再决定、同一份草稿可复用到多个写手、可反复修改。不要直接把长文塞进 propose_memory_edit 的 content 里 —— 那样内容只存在于这一轮对话，确认完就蒸发，无法复用。');
   lines.push('');
   lines.push('【Agent 工具】你有如下工具可用：');
-  lines.push('- 读取：list_robots（写手状态）、get_panel_state（模型/全局设置）、list_characters（角色池有哪些角色）、list_memory_files / read_memory_file（写手记忆库）、read_sessions（最近会话）、search_memory（记忆库关键词搜索）、read_global_files / read_global_file（全局设定）；');
+  lines.push('- 读取：list_robots（写手状态）、get_panel_state（模型/全局设置）、list_characters（角色池有哪些角色）、read_character_state（某角色的计数器与经历）、list_memory_files / read_memory_file（写手记忆库）、read_sessions（最近会话）、search_memory（记忆库关键词搜索）、read_global_files / read_global_file（全局设定）；');
   lines.push('- 回顾自身：list_admin_sessions / read_admin_session（读取面板管理员的既往会话，跨对话保持记忆）；');
   lines.push('- 新增模型：create_model（用户确认服务信息后即可添加，立即生效、无需再确认）；');
   lines.push('- 工作区（草稿台）：ws_write_file / ws_list_files / ws_read_file / ws_delete_file（写入与读写草稿，免确认，安全操作）；起草前先 ws_list_files 看看有没有现成的，避免重复造轮子；');
   lines.push('- 注入建议：propose_ws_inject —— 【需确认】把工作区草稿注入到写手记忆库（targetType=bot + targetId）或全局设定（targetType=global）；这是会真正改动 AI 记忆的一步，务必先说清「注入什么、给谁、为什么」。');
-  lines.push('- 编辑建议：propose_memory_edit / propose_memory_tier / propose_core_edit / propose_global_edit / propose_bot_config_edit / propose_character_edit / propose_character_create —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；propose_memory_tier 用于建议记忆文件的层级（1=无条件强制注入 2=摘要索引 3=冷记忆）；propose_core_edit 用于建议写手的人格核心卡（每轮注入的蒸馏人格）的新内容；propose_character_edit 用于建议角色池里某位角色（用 list_characters 查 id）的设定修改，旧版本会留档可回滚；propose_character_create 用于往角色池里新建一位角色。');
+  lines.push('- 编辑建议：propose_memory_edit / propose_memory_tier / propose_core_edit / propose_global_edit / propose_bot_config_edit / propose_character_edit / propose_character_create —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；propose_memory_tier 用于建议记忆文件的层级（1=无条件强制注入 2=摘要索引 3=冷记忆）；propose_core_edit 用于建议写手的人格核心卡（每轮注入的蒸馏人格）的新内容；propose_character_edit 用于建议角色池里某位角色（用 list_characters 查 id）的设定修改，旧版本会留档可回滚；propose_character_create 用于往角色池里新建一位角色；propose_counter_edit 用于设置/删除角色卡上的计数器（**绝对值**）；propose_experience_edit 用于给角色卡追加或删除一条经历。');
   lines.push('- 联网：web_search / web_fetch（仅在面板开启联网时可用）。');
   lines.push('规则：需要写手/角色/模型/记忆/会话信息时，先调用对应读取工具获取真实内容，不要凭记忆猜测；判断问题、给建议都基于工具返回的原文。');
   lines.push('若当前模型端点不支持工具调用，系统会自动降级为纯文本模式；此时遵循以下【纯文本约定】输出结构（不要写成工具调用）：');
@@ -912,6 +1034,8 @@ function buildAdminSystem(cfg, botId) {
   lines.push('   - 更新写手配置：{"editBot":{"id":"BOT1","modelId":"Agnes","historyLimit":10}}');
   lines.push('   - 修改角色设定：{"editCharacter":{"characterId":"CHR...","persona":"改写后的角色设定全文","reason":"为什么改"}}');
   lines.push('   - 新建角色：{"createCharacter":{"name":"角色名","persona":"角色设定全文","traits":"性格特点","age":"年龄","appearance":"外表形象","background":"背景故事","tags":["标签1","标签2"],"reason":"为什么建"}}（只有 name 必填，需确认）');
+  lines.push('   - 改角色计数器：{"editCounter":{"characterId":"CHR...","counter":"好感度","value":35,"op":"set","reason":"为什么改"}}（counter 是计数器名，value 是**绝对值**；op 可为 set / remove；需确认）');
+  lines.push('   - 加角色经历：{"editExperience":{"characterId":"CHR...","op":"add","text":"在渡口与老张结盟","reason":"为什么加"}}（op 可为 add / remove，remove 要给 expId；需确认）');
   lines.push('   - 写工作区草稿：{"wsWrite":{"key":"persona_draft","desc":"用途说明","content":"完整正文"}}（免确认，会真正写入工作区）');
   lines.push('   - 建议注入：{"wsInject":{"key":"persona_draft","targetType":"bot","targetId":"BOT1","destKey":"persona"}}（需确认，targetType 为 bot 或 global）');
   lines.push('   规则：写手 id 形如 BOT1，角色 id 形如 CHR 开头；绝不填写 apiKey（密钥由用户自己在模型管理页填写）；JSON 必须严格合法（英文双引号、字段名拼写正确）。');
@@ -1371,6 +1495,61 @@ function adminToolSchemas(webEnabled) {
         parameters: { type: 'object', properties: {}, required: [] },
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'read_character_state',
+        description: '读取某位角色的「当前状态」：全部计数器（含数值）与最近的经历条目。'
+          + '计数器是全体写手共用的一张表（同名共享、异名不引用），经历是按时间追加的流水。',
+        parameters: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: '角色 ID（用 list_characters 查）' },
+            limit: { type: 'number', description: '最多返回多少条经历（默认 20）' },
+          },
+          required: ['characterId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_counter_edit',
+        description: '【写操作·需确认】建议设置或删除角色卡上的一个计数器（设置是**绝对值**，不是增量）。'
+          + '不落盘，用户确认后才写入。注意：计数器的「值」在角色卡，'
+          + '而计数器的「规则」（范围/初始值/何时增减）在写手的「写手设定」里 —— 改规则请改写手设定，别改这里。',
+        parameters: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: '角色 ID' },
+            name: { type: 'string', description: '计数器名（如 好感度）' },
+            value: { type: 'number', description: '要设置成的数值（绝对值）。删除时不要给' },
+            op: { type: 'string', enum: ['set', 'remove'], description: 'set=设置数值（默认），remove=删除该计数器' },
+            reason: { type: 'string', description: '为什么改（一句话，展示给用户）' },
+          },
+          required: ['characterId', 'name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_experience_edit',
+        description: '【写操作·需确认】建议给角色卡追加一条经历，或删除已有的一条。不落盘，用户确认后才写入。'
+          + '经历是**追加式**的：要「改」某条历史记录，正确的是删掉旧的再加新的，不要试图改写。',
+        parameters: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: '角色 ID' },
+            op: { type: 'string', enum: ['add', 'remove'], description: 'add=追加（默认），remove=删除' },
+            text: { type: 'string', description: 'op=add 时必填：这条经历的一句话记述' },
+            expId: { type: 'string', description: 'op=remove 时必填：要删除的经历条目 id（从 read_character_state 获取）' },
+            reason: { type: 'string', description: '为什么改（一句话，展示给用户）' },
+          },
+          required: ['characterId'],
+        },
+      },
+    },
   ];
   if (webEnabled) schemas.push(...search.TOOLS);
   return schemas;
@@ -1671,7 +1850,10 @@ async function runAdminTool(cfg, name, args = {}) {
       const users = usedBy.get(x.id);
       const by = users && users.length ? `；被 ${users.join('、')} 选用` : '；暂未被任何写手选用';
       const hist = (x.history || []).length;
-      return `- ${x.name}（id: ${x.id}）${tags}${x.age ? ' ' + x.age : ''}${by}${hist ? `，${hist} 个历史版本` : ''}`;
+      const nc = Object.keys(x.counters || {}).length;
+      const ne = (x.experiences || []).length;
+      const stats = [nc ? `计数器 ${nc} 个` : '', ne ? `经历 ${ne} 条` : ''].filter(Boolean).join('、');
+      return `- ${x.name}（id: ${x.id}）${tags}${x.age ? ' ' + x.age : ''}${by}${hist ? `，${hist} 个历史版本` : ''}${stats ? `，${stats}` : ''}`;
     });
     const text = lines.length ? `【角色池】共 ${all.length} 位（全体写手共用）\n` + lines.join('\n') : '【角色池】（空）';
     return { text, summary: `角色池 ${all.length} 位`, pending: null };
@@ -1692,6 +1874,98 @@ async function runAdminTool(cfg, name, args = {}) {
       reason: String(args.reason || ''),
     } };
     return { text: `已生成在角色池里新建角色「${nm}」的建议，等待用户在面板点击「确认创建」。`, summary: `待确认：新建角色「${nm}」`, pending: payload };
+  }
+
+  // ---- 角色状态：读计数器与经历（只读，管理员据此判断该改什么）----
+  if (name === 'read_character_state') {
+    const c = require('./lib/characters');
+    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    if (!ch) throw new Error('角色不存在: ' + args.characterId);
+    const counters = ch.counters || {};
+    const exps = ch.experiences || [];
+    const limit = Math.max(1, Math.min(100, Number(args.limit) || 20));
+    const recent = exps.slice(-limit);
+    const lines = [];
+    lines.push(`【${ch.name}（${ch.id}）当前状态】`);
+    const ck = Object.keys(counters);
+    lines.push('计数器：' + (ck.length ? ck.map((k) => `${k} ${counters[k]}`).join('、') : '（无）'));
+    lines.push(`经历：共 ${exps.length} 条${exps.length > recent.length ? `，下面是最近 ${recent.length} 条` : ''}`);
+    for (const e of recent) {
+      const d = Object.keys(e.counters || {}).length
+        ? '（' + Object.entries(e.counters).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、') + '）'
+        : '';
+      lines.push(`- [${e.id}] ${e.text}${d}${e.by ? ` —— ${e.by}` : ''}`);
+    }
+    return { text: lines.join('\n'), summary: `读角色「${ch.name}」状态`, pending: null };
+  }
+
+  // 管理员侧：改计数器（待确认，**绝对值**）
+  if (name === 'propose_counter_edit') {
+    const c = require('./lib/characters');
+    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    if (!ch) throw new Error('角色不存在: ' + args.characterId);
+    const nm = String(args.name || '').trim();
+    if (!nm) throw new Error('计数器名不能为空');
+    const op = args.op === 'remove' ? 'remove' : 'set';
+    if (op === 'set') {
+      const val = Number(args.value);
+      if (!Number.isFinite(val)) throw new Error('设置计数器时必须给数值 value');
+      const payload = {
+        type: 'counter_edit',
+        payload: {
+          characterId: ch.id, name: ch.name, counter: nm, op, value: val,
+          before: Number((ch.counters || {})[nm]) || 0, reason: String(args.reason || ''),
+        },
+      };
+      return {
+        text: `已生成把「${ch.name}」的计数器「${nm}」设为 ${val} 的建议，等待用户确认。`,
+        summary: `待确认：改计数器「${nm}」`, pending: payload,
+      };
+    }
+    if (!(ch.counters && nm in ch.counters)) throw new Error(`「${ch.name}」身上没有名为「${nm}」的计数器`);
+    const payload = {
+      type: 'counter_edit',
+      payload: {
+        characterId: ch.id, name: ch.name, counter: nm, op,
+        before: ch.counters[nm], reason: String(args.reason || ''),
+      },
+    };
+    return {
+      text: `已生成删除「${ch.name}」计数器「${nm}」的建议，等待用户确认。`,
+      summary: `待确认：删计数器「${nm}」`, pending: payload,
+    };
+  }
+
+  // 管理员侧：加 / 删经历（待确认）
+  if (name === 'propose_experience_edit') {
+    const c = require('./lib/characters');
+    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    if (!ch) throw new Error('角色不存在: ' + args.characterId);
+    const op = args.op === 'remove' ? 'remove' : 'add';
+    if (op === 'add') {
+      const text = String(args.text || '').trim();
+      if (!text) throw new Error('追加经历时必须给 text');
+      const payload = {
+        type: 'experience_edit',
+        payload: { characterId: ch.id, name: ch.name, op, text: text.slice(0, 500), reason: String(args.reason || '') },
+      };
+      return {
+        text: `已生成给「${ch.name}」追加一条经历的建议，等待用户确认。`,
+        summary: '待确认：加经历', pending: payload,
+      };
+    }
+    const expId = String(args.expId || '').trim();
+    if (!expId) throw new Error('删除经历时必须给 expId');
+    const hit = (ch.experiences || []).find((x) => x.id === expId);
+    if (!hit) throw new Error('没找到这条经历: ' + expId);
+    const payload = {
+      type: 'experience_edit',
+      payload: { characterId: ch.id, name: ch.name, op, expId, text: hit.text, reason: String(args.reason || '') },
+    };
+    return {
+      text: `已生成删除「${ch.name}」一条经历的建议，等待用户确认。`,
+      summary: '待确认：删经历', pending: payload,
+    };
   }
 
   // ---- 提炼精彩时刻（自动落盘，可反复重新生成） ----
@@ -1840,7 +2114,7 @@ async function adminEnsureEdits(cfg, model, baseMessages, apiKey, replyText, emi
   const tools = adminToolSchemas(webEnabled);
   // 工具过程/待确认事件透传给原 emit；中间的赘述文本不再转发
   const silent = (ev) => { if (ev.type !== 'text') emit(ev); };
-  const tip = { role: 'user', content: '（自动提示）你刚才只是用文字描述了修改/注入建议。请改用工具正式提交：改写手记忆用 propose_memory_edit、改全局用 propose_global_edit、改写手配置用 propose_bot_config_edit、改角色设定用 propose_character_edit（先用 list_characters 查角色 id）、往角色池新建角色用 propose_character_create、把工作区草稿注入用 propose_ws_inject（content 必须是可直接替换的完整新正文；若草稿还没写进工作区，先 ws_write_file）。注意：写手（BOT…）和角色（CHR…）是两回事，别把两者混用。若确实无需修改，请简短回复“无需修改”。' };
+  const tip = { role: 'user', content: '（自动提示）你刚才只是用文字描述了修改/注入建议。请改用工具正式提交：改写手记忆用 propose_memory_edit、改全局用 propose_global_edit、改写手配置用 propose_bot_config_edit、改角色设定用 propose_character_edit（先用 list_characters 查角色 id）、往角色池新建角色用 propose_character_create、改角色计数器用 propose_counter_edit、给角色加/删经历用 propose_experience_edit、把工作区草稿注入用 propose_ws_inject（content 必须是可直接替换的完整新正文；若草稿还没写进工作区，先 ws_write_file）。注意：写手（BOT…）和角色（CHR…）是两回事，别把两者混用。若确实无需修改，请简短回复“无需修改”。' };
   const m2 = baseMessages.concat([{ role: 'assistant', content: replyText || null }, tip]);
   await streamAdminAgent(cfg, model, m2, apiKey, tools, silent);
   return true;

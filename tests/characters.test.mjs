@@ -441,3 +441,273 @@ test('★ 版本档记录改写者（by=ai），用户能看出是谁动的', ()
   assert.equal(last.by, 'ai');
   assert.deepEqual(last.changed, ['traits']);
 });
+
+// ================= 经历与计数器（用户决策 2026-10-04）=================
+// 设计见《经历与计数器机制.md》：经历的产生地在写手，落点在角色卡，
+// 中间必须过「用户确认」；计数器「同名共享、异名不引用」。
+
+// ---------- 归一化 ----------
+
+test('normalizeCounters：只留数字，丢非数字 / 空名', () => {
+  const c = characters.normalizeCounters({ 好感度: 5, 仇恨: '不是数', '': 1, 信赖: '3' });
+  assert.deepEqual(c, { 好感度: 5, 信赖: 3 });
+});
+
+test('normalizeCounters：非对象输入一律给空表（不能崩）', () => {
+  assert.deepEqual(characters.normalizeCounters(null), {});
+  assert.deepEqual(characters.normalizeCounters([]), {});
+  assert.deepEqual(characters.normalizeCounters('字符串'), {});
+});
+
+test('normalizeCounters：超长名截断、超量条目丢弃', () => {
+  const long = characters.normalizeCounters({ ['名'.repeat(40)]: 1 });
+  assert.equal(Object.keys(long)[0].length, characters.MAX_COUNTER_NAME);
+  const many = {};
+  for (let i = 0; i < characters.MAX_COUNTERS + 10; i++) many['c' + i] = i;
+  assert.equal(Object.keys(characters.normalizeCounters(many)).length, characters.MAX_COUNTERS);
+});
+
+test('normalizeExperiences：空文本丢弃、缺 id 自动补、文本超长截断', () => {
+  const list = characters.normalizeExperiences([
+    { text: '   ' },
+    { text: '在渡口与老张结盟' },
+    { text: 'x'.repeat(999), id: 'EXPaaa' },
+    null, '字符串',
+  ]);
+  assert.equal(list.length, 2);
+  assert.ok(list[0].id.startsWith('EXP'));
+  assert.equal(list[1].text.length, 500);
+});
+
+test('normalizeExperiences：重复 id 会被重新分配（id 必须唯一，删除靠它定位）', () => {
+  const list = characters.normalizeExperiences([
+    { id: 'EXPsame', text: 'A' },
+    { id: 'EXPsame', text: 'B' },
+  ]);
+  assert.notEqual(list[0].id, list[1].id);
+});
+
+test('normalizeExperiences：超过上限丢最老的（源头在写手侧，不算丢数据）', () => {
+  const raw = [];
+  for (let i = 0; i < characters.MAX_EXPERIENCES + 5; i++) raw.push({ text: 'E' + i });
+  const list = characters.normalizeExperiences(raw);
+  assert.equal(list.length, characters.MAX_EXPERIENCES);
+  assert.equal(list[0].text, 'E5');
+  assert.equal(list[list.length - 1].text, 'E' + (characters.MAX_EXPERIENCES + 4));
+});
+
+test('normalizeCharacter：counters / experiences 被带进角色对象', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', counters: { 好感度: 5 }, experiences: [{ text: 'x' }] });
+  assert.deepEqual(c.counters, { 好感度: 5 });
+  assert.equal(c.experiences.length, 1);
+});
+
+// ---------- ★★ 同名共享 / 异名不引用 ----------
+
+test('★ 同名共享：两位写手声明同名计数器 → 读写同一格', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  const names = ['好感度'];   // 两位写手的声明相同
+  characters.commitExperience(pool, c.id, { text: 'A 的剧情', counters: characters.filterDeclared({ 好感度: 3 }, names) });
+  characters.commitExperience(pool, c.id, { text: 'B 的剧情', counters: characters.filterDeclared({ 好感度: 4 }, names) });
+  const cur = characters.find(pool, c.id);
+  assert.equal(cur.counters['好感度'], 7, '增量累加，不是覆盖');
+  assert.deepEqual(characters.declaredView(cur, names), { 好感度: 7 });
+});
+
+test('★★ 异名不引用：声明「仇恨」的写手动不了「好感度」', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  characters.commitExperience(pool, c.id, { text: 'x', counters: characters.filterDeclared({ 好感度: 5 }, ['好感度']) });
+  // B 声明的是「仇恨」，即使参数里混进了「好感度」也会被过滤掉
+  const patch = characters.filterDeclared({ 好感度: 999, 仇恨: 2 }, ['仇恨']);
+  assert.deepEqual(patch, { 仇恨: 2 });
+  characters.commitExperience(pool, c.id, { text: 'y', counters: patch });
+  const cur = characters.find(pool, c.id);
+  assert.equal(cur.counters['好感度'], 5, '别家声明的计数器纹丝不动');
+  assert.equal(cur.counters['仇恨'], 2);
+});
+
+test('declaredView：声明了但没设过 → 按 0 显示（不是 undefined）', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1' });
+  assert.deepEqual(characters.declaredView(c, ['好感度']), { 好感度: 0 });
+});
+
+test('declaredView：传进来的名字去空格、空名忽略', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', counters: { 好感度: 2 } });
+  assert.deepEqual(characters.declaredView(c, [' 好感度 ', '']), { 好感度: 2 });
+});
+
+test('filterDeclared：非数字的增量被丢掉', () => {
+  assert.deepEqual(characters.filterDeclared({ 好感度: 'abc' }, ['好感度']), {});
+});
+
+// ---------- 写手声明从哪来 ----------
+
+test('parseDeclaredCounters：解析「含『计数』标题」的小节', () => {
+  const md = [
+    '# 写手设定', '',
+    '## 语气', '- 冷淡', '',
+    '## 计数器',
+    '- 好感度：范围 0–100，初次见面 0，被善待时 +1~3',
+    '- 信任度：范围 0–100',
+    '',
+    '## 其他', '- 好感度：这行不该被算进来',
+  ].join('\n');
+  assert.deepEqual(characters.parseDeclaredCounters(md), ['好感度', '信任度']);
+});
+
+test('parseDeclaredCounters：没有计数器小节 → 空数组（写手就动不了任何计数器）', () => {
+  assert.deepEqual(characters.parseDeclaredCounters('# 写手设定\n## 语气\n- 冷淡'), []);
+  assert.deepEqual(characters.parseDeclaredCounters(''), []);
+  assert.deepEqual(characters.parseDeclaredCounters(null), []);
+});
+
+test('parseDeclaredCounters：标题词 / 说明行不算计数器名', () => {
+  const md = '## 计数器\n- 规则：以下为角色状态\n- 说明：随时可改';
+  assert.deepEqual(characters.parseDeclaredCounters(md), []);
+});
+
+test('parseDeclaredCounters：剥掉名字上的引号', () => {
+  assert.deepEqual(characters.parseDeclaredCounters('## 计数器\n- 「好感度」：0–100'), ['好感度']);
+});
+
+// ---------- 沉淀经历 ----------
+
+test('commitExperience：增量累加计数器 + 追加一条经历（带 by）', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  characters.commitExperience(pool, c.id, { text: '第一次', counters: { 好感度: 5 }, by: 'BOT1' });
+  const r = characters.commitExperience(pool, c.id, { text: '第二次', counters: { 好感度: 3 }, by: 'BOT1' });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.applied, { 好感度: 3 }, 'applied 报的是增量');
+  const cur = characters.find(pool, c.id);
+  assert.equal(cur.counters['好感度'], 8);
+  assert.equal(cur.experiences.length, 2);
+  assert.equal(cur.experiences[1].by, 'BOT1');
+  assert.deepEqual(cur.experiences[1].counters, { 好感度: 3 });
+});
+
+test('commitExperience：只给计数器不给正文 → 改值但**不**留经历条目', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  const r = characters.commitExperience(pool, c.id, { counters: { 好感度: -2 } });
+  assert.equal(r.ok, true);
+  assert.equal(r.entry, null);
+  assert.equal(characters.find(pool, c.id).counters['好感度'], -2, '计数器允许负数');
+  assert.equal(characters.find(pool, c.id).experiences.length, 0);
+});
+
+test('commitExperience：正文与计数器都空 → 回绝（不写空条目）', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  const r = characters.commitExperience(pool, c.id, { text: '   ', counters: {} });
+  assert.equal(r.ok, false);
+  assert.equal(characters.find(pool, c.id).experiences.length, 0);
+});
+
+test('commitExperience：角色不存在 → 报错而不是新建', () => {
+  const pool = [];
+  assert.equal(characters.commitExperience(pool, 'CHRnone', { text: 'x' }).ok, false);
+});
+
+test('★ counters / experiences 不进版本档（流水塞进去会冲垮 MAX_HISTORY）', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  characters.commitExperience(pool, c.id, { text: '第一次', counters: { 好感度: 5 } });
+  characters.update(pool, c.id, { persona: '改过设定' }, 'user');
+  const cur = characters.find(pool, c.id);
+  const snap = cur.history[cur.history.length - 1];
+  assert.equal(snap.counters, undefined);
+  assert.equal(snap.experiences, undefined);
+  // 但角色卡上确实带着这两样
+  assert.equal(cur.counters['好感度'], 5);
+  assert.equal(cur.experiences.length, 1);
+});
+
+// ---------- 管理员侧的计数器 / 经历读写 ----------
+
+test('setCounter：写绝对值，并回报改前改后', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  characters.commitExperience(pool, c.id, { counters: { 好感度: 5 } });
+  const r = characters.setCounter(pool, c.id, '好感度', 35);
+  assert.equal(r.ok, true);
+  assert.equal(r.before, 5);
+  assert.equal(r.after, 35);
+  assert.equal(characters.find(pool, c.id).counters['好感度'], 35);
+});
+
+test('setCounter：值不是数字 / 名字为空 → 回绝', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  assert.equal(characters.setCounter(pool, c.id, '好感度', 'abc').ok, false);
+  assert.equal(characters.setCounter(pool, c.id, '', 1).ok, false);
+  assert.deepEqual(characters.find(pool, c.id).counters, {});
+});
+
+test('removeCounter：删得掉；删不存在的报错', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  characters.setCounter(pool, c.id, '好感度', 1);
+  assert.equal(characters.removeCounter(pool, c.id, '好感度').ok, true);
+  assert.deepEqual(characters.find(pool, c.id).counters, {});
+  assert.equal(characters.removeCounter(pool, c.id, '好感度').ok, false);
+});
+
+test('appendExperience：只加经历不动计数器', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  characters.setCounter(pool, c.id, '好感度', 7);
+  const r = characters.appendExperience(pool, c.id, { text: '在渡口与老张结盟', by: 'admin' });
+  assert.equal(r.ok, true);
+  assert.equal(r.entry.by, 'admin');
+  assert.equal(characters.find(pool, c.id).counters['好感度'], 7);
+  assert.equal(characters.find(pool, c.id).experiences.length, 1);
+});
+
+test('appendExperience：空文本回绝', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  assert.equal(characters.appendExperience(pool, c.id, { text: ' ' }).ok, false);
+});
+
+test('removeExperience：按 id 删（同毫秒的两条也不会误伤）', () => {
+  const pool = [];
+  const c = characters.create(pool, { name: '银' }, 'user');
+  const a = characters.appendExperience(pool, c.id, { text: 'A' }).entry;
+  const b = characters.appendExperience(pool, c.id, { text: 'B' }).entry;
+  assert.notEqual(a.id, b.id);
+  assert.equal(characters.removeExperience(pool, c.id, a.id).ok, true);
+  const left = characters.find(pool, c.id).experiences;
+  assert.equal(left.length, 1);
+  assert.equal(left[0].text, 'B');
+  assert.equal(characters.removeExperience(pool, c.id, a.id).ok, false);
+});
+
+// ---------- 给写手的 prompt 文本 ----------
+
+test('stateBrief：只显示写手声明过的计数器', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', name: '银', counters: { 好感度: 5, 别家的: 99 } });
+  const s = characters.stateBrief(c, ['好感度']);
+  assert.ok(s.includes('好感度 5'));
+  assert.ok(!s.includes('别家的'));
+});
+
+test('stateBrief：声明为空但卡上有值 → 明确说「不归你管」，别让它去猜', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', name: '银', counters: { 好感度: 5 } });
+  const s = characters.stateBrief(c, []);
+  assert.ok(!s.includes('好感度'));
+  assert.ok(s.includes('未在「写手设定」里声明'));
+});
+
+test('stateBrief：带出最近经历，且只取最后 N 条', () => {
+  const c = characters.normalizeCharacter({
+    id: 'CHR1', name: '银',
+    experiences: [{ text: '旧事' }, { text: '中事' }, { text: '新事' }],
+  });
+  const s = characters.stateBrief(c, ['好感度'], { recent: 2 });
+  assert.ok(s.includes('新事'));
+  assert.ok(s.includes('中事'));
+  assert.ok(!s.includes('旧事'));
+});

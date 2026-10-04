@@ -2186,6 +2186,20 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   padding: 0 14px;
   transition: max-height .22s ease, opacity .22s ease, padding .22s ease;
 }
+
+/* 写手提议的「待确认写操作」常驻区（在输入框上方，不受会话列表 4s 轮询重绘影响） */
+.pending-strip:empty { display: none; }
+.pending-strip {
+  padding: 8px 0 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.pending-strip .ps-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--on-surface-faint);
+}
+.pending-strip .ps-head .ic { width: 12px; height: 12px; }
+/* 挤在对话页里比在管理员面板里窄，让按钮换行不至于被挤出视野 */
+.pending-strip .admin-action { flex-wrap: wrap; }
 .chat-progress.on {
   max-height: 56px;
   opacity: 1;
@@ -2323,6 +2337,58 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .ch-usedby { margin-top: 5px; font-size: 11px; color: var(--on-surface-faint); }
+
+/* 角色卡上的「计数器 + 最近经历」小摘要（角色池页 / 写手的角色页共用） */
+.ch-state { margin-top: 7px; display: flex; flex-direction: column; gap: 4px; }
+.ch-state-row { display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; }
+.ch-state-k {
+  flex: 0 0 auto; padding: 1px 6px; line-height: 1.6; border-radius: 999px; font-size: 10.5px;
+  color: var(--on-surface-faint); background: var(--surface-3, var(--surface-2));
+  border: 1px solid var(--outline);
+}
+.ch-counters { display: flex; flex-wrap: wrap; gap: 5px; }
+.ch-counter {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px; border-radius: 999px; font-size: 11px;
+  color: var(--on-surface-variant); background: var(--surface);
+  border: 1px solid var(--outline);
+}
+.ch-counter b { font-size: 11.5px; color: var(--primary); font-variant-numeric: tabular-nums; }
+.ch-x {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; padding: 0; margin-left: 1px; cursor: pointer;
+  color: var(--on-surface-faint); background: none; border: 0; border-radius: 50%;
+}
+.ch-x:hover { color: var(--error, #c62828); background: var(--surface-2); }
+.ch-x .ic { width: 9px; height: 9px; }
+.ch-exps { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ch-exp { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 11.5px; color: var(--on-surface-variant); }
+.ch-exp-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-exp-by { flex: 0 0 auto; font-size: 10px; color: var(--on-surface-faint); }
+.ch-exp-more { font-size: 10.5px; color: var(--on-surface-faint); }
+
+/* 角色编辑弹窗里的「角色状态」区（计数器 + 经历，可逐条删除） */
+.chr-state {
+  margin-top: 14px; padding: 11px 12px;
+  background: var(--surface-2); border: 1px solid var(--outline); border-radius: var(--r-sm);
+}
+.chr-state-head {
+  display: flex; align-items: center; margin: 0 0 7px;
+  font-size: 12px; font-weight: 600; color: var(--on-surface-variant);
+}
+.chr-state-head + .chr-state-head { margin-top: 14px; }
+.chr-state-n { font-size: 10.5px; font-weight: 400; color: var(--on-surface-faint); }
+.chr-state-empty { font-size: 11.5px; line-height: 1.7; color: var(--on-surface-faint); }
+.chr-state-note { margin: 12px 0 0; font-size: 11px; line-height: 1.7; color: var(--on-surface-faint); }
+.chr-state-note b { color: var(--on-surface-variant); }
+.chr-exp-list { display: flex; flex-direction: column; gap: 4px; }
+.chr-exp-row {
+  display: flex; align-items: baseline; gap: 8px; padding: 5px 8px;
+  font-size: 12px; border-radius: var(--r-xs);
+  background: var(--surface); border: 1px solid var(--outline);
+}
+.chr-exp-ts { flex: 0 0 auto; font-size: 10.5px; color: var(--on-surface-faint); }
+.chr-exp-t { flex: 1; min-width: 0; line-height: 1.6; color: var(--on-surface); }
 
 .ch-acts { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 

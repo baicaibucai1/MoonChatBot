@@ -608,6 +608,8 @@ function renderChatTabHtml(b) {
           <div class="cp-head"><span class="cp-text"></span></div>
           <div class="cp-bar"><div class="cp-fill"></div></div>
         </div>
+        <!-- 写手提议的「待确认写操作」常驻区（见 renderPendingStrip 的说明） -->
+        <div class="pending-strip" id="pending-strip"></div>
         <div class="chat-input">
           <textarea id="f-chat" rows="1" placeholder="与 ${esc(b.name || b.id)} 说话… Enter 发送，Shift+Enter 换行" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${id}')}"></textarea>
           <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这位写手接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
@@ -784,8 +786,9 @@ function renderCharactersTabHtml(b) {
         <div class="ch-avatar">${characterAvatarInner(c)}</div>
         <div class="ch-main">
           <div class="ch-name">${esc(c.name)}</div>
-          <div class="ch-meta">${esc(c.id)}${c.age ? ' · ' + esc(c.age) : ''}${c.tags?.length ? ' · ' + c.tags.map(t => esc(t)).join(' / ') : ''}</div>
+          <div class="ch-meta">${esc(c.id)}${c.age ? ' · ' + esc(c.age) : ''}${c.tags?.length ? ' · ' + c.tags.map(t => esc(t)).join(' / ') : ''}${(c.experienceCount || 0) ? ' · ' + c.experienceCount + ' 条经历' : ''}</div>
           ${c.persona ? `<div class="ch-snippet">${esc(snippet(c.persona, 90))}</div>` : ''}
+          ${charStateHtml(c, 2)}
         </div>
         <div class="ch-acts">
           <button class="ghost sm" onclick="characterHistory('${c.id}')" title="查看历史版本，可回滚">${IC_HISTORY}<span class="lb">版本</span></button>
@@ -814,6 +817,29 @@ function renderCharactersTabHtml(b) {
 function characterAvatarInner(c) {
   const ch = String((c && c.name) || '?').trim().charAt(0) || '?';
   return esc(ch);
+}
+
+// 角色卡上的「计数器 + 最近经历」小摘要（角色池页 / 写手的角色页共用）
+// ★ 只读展示：计数器的「规则」在写手的写手设定里，值的改动走管理员建议或写手提议，
+//   面板不提供直接改数值的入口（避免两处都能改、最后说不清是谁动的）。
+function charStateHtml(c, recent) {
+  const cs = c && c.counters && typeof c.counters === 'object' ? Object.entries(c.counters) : [];
+  const all = (c && Array.isArray(c.experiences)) ? c.experiences : [];
+  const n = recent || 2;
+  const exps = all.slice(-n).reverse();
+  if (!cs.length && !exps.length) return '';
+  const counters = cs.length
+    ? `<div class="ch-state-row"><span class="ch-state-k">计数器</span><span class="ch-counters">${
+      cs.map(([k, v]) => `<span class="ch-counter" title="${esc(k)}">${esc(k)}<b>${esc(fmtNum(v))}</b></span>`).join('')
+    }</span></div>`
+    : '';
+  const history = exps.length
+    ? `<div class="ch-state-row"><span class="ch-state-k">经历</span><div class="ch-exps">${
+      exps.map(e => `<div class="ch-exp"><span class="ch-exp-t">${esc(snippet(e.text || '', 70))}</span>${
+        e.by ? `<span class="ch-exp-by">${esc(e.by)}</span>` : ''}</div>`).join('')
+    }${all.length > n ? `<div class="ch-exp-more">共 ${all.length} 条</div>` : ''}</div></div>`
+    : '';
+  return `<div class="ch-state">${counters}${history}</div>`;
 }
 
 // 截断到 n 字（角色简介在列表里只露个头，全文在编辑弹窗里看）
@@ -887,10 +913,21 @@ const CHR_FIELDS = [
   ['background', '背景故事', '出身、经历、来到故事里之前发生过什么'],
 ];
 
+// ★ 完整角色（含全部经历）的本地缓存，键是角色 id。
+//   列表接口只带最近 3 条经历，状态区要展示全量、删除时还要拿到原文，所以单独拉详情存这儿。
+const _chrDetail = {};
+async function fetchCharDetail(id) {
+  const r = await api(`/api/characters/${encodeURIComponent(id)}`).catch(() => null);
+  if (r && r.ok && r.character) { _chrDetail[id] = r.character; return r.character; }
+  return null;
+}
+
 // 新建 / 编辑角色（同一个弹窗，id 为空即新建）
-function openCharacterEditModal(charId, opts) {
+async function openCharacterEditModal(charId, opts) {
   const c = charId ? (state.characters || []).find(x => x.id === charId) : null;
   const isNew = !c;
+  // 编辑已有角色时先取一次全量（状态区要用），失败就退回列表里那份
+  const full = isNew ? null : ((await fetchCharDetail(c.id)) || c);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'chr-edit-modal';
@@ -911,6 +948,7 @@ function openCharacterEditModal(charId, opts) {
         `).join('')}
         <label class="frm">标签（逗号分隔）</label>
         <input id="chr-tags" type="text" placeholder="例：主角, 机器人, 未来" value="${esc(((c && c.tags) || []).join(', '))}">
+        ${isNew ? '' : charStateAdminHtml(full)}
         <div class="chr-modal-acts">
           <button class="primary" onclick="saveCharacter(${isNew ? 'null' : `'${c.id}'`})">${isNew ? '创建角色' : '保存修改'}</button>
           ${isNew ? '' : `<button class="ghost sm" onclick="characterHistory('${c.id}')">${IC_HISTORY}<span class="lb">版本档</span></button>`}
@@ -919,8 +957,89 @@ function openCharacterEditModal(charId, opts) {
     </div>`;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   document.body.appendChild(overlay);
+  bindCharState(overlay);
   const first = document.getElementById('chr-name');
   if (first) first.focus();
+}
+
+// 编辑弹窗里的「角色状态」区：计数器 + 经历，可逐条删除。
+// ★ 只提供删除：新增/改值走管理员建议（propose_counter_edit / propose_experience_edit），
+//   或在剧情里由写手提议沉淀 → 用户确认。面板不直接改数值，谁动的才有据可查。
+function charStateAdminHtml(c) {
+  if (!c) return '';
+  const cs = c.counters && typeof c.counters === 'object' ? Object.entries(c.counters) : [];
+  const exps = (Array.isArray(c.experiences) ? c.experiences : []).slice().reverse();
+  const head = (t, n) => `<div class="chr-state-head">${t}<span class="spacer"></span><span class="chr-state-n">${n}</span></div>`;
+  const counters = cs.length
+    ? `<div class="ch-counters">${cs.map(([k, v]) => `<span class="ch-counter" title="${esc(k)}">${esc(k)}<b>${esc(fmtNum(v))}</b><button class="ch-x" data-act="rm-counter" data-cid="${esc(c.id)}" data-name="${esc(k)}" title="删除这个计数器">${IC_CLOSE}</button></span>`).join('')}</div>`
+    : `<div class="chr-state-empty">还没有计数器。计数器的规则写在写手的「写手设定」里，值由剧情里的经历带动。</div>`;
+  const rows = exps.length
+    ? `<div class="chr-exp-list">${exps.slice(0, 30).map(e => `<div class="chr-exp-row">
+          <span class="chr-exp-ts">${esc(fmtTime(e.ts))}</span>
+          <span class="chr-exp-t">${esc(e.text || '')}</span>
+          ${e.by ? `<span class="ch-exp-by">${esc(e.by)}</span>` : ''}
+          <button class="ch-x" data-act="rm-exp" data-cid="${esc(c.id)}" data-eid="${esc(e.id)}" title="删除这条经历">${IC_CLOSE}</button>
+        </div>`).join('')}${exps.length > 30 ? `<div class="chr-state-empty">（只列出最近 30 条，共 ${exps.length} 条）</div>` : ''}</div>`
+    : `<div class="chr-state-empty">还没有沉淀过经历。写手在剧情里提议 → 你点「确认应用」→ 才会写进来。</div>`;
+  return `<div class="chr-state">
+      ${head('计数器', cs.length + ' 项')}${counters}
+      ${head('经历', exps.length + ' 条')}${rows}
+      <p class="chr-state-note">计数器和经历是流水，<b>不进版本档</b>——删掉无法用「回滚」找回。</p>
+    </div>`;
+}
+
+// 绑定状态区里的删除按钮。
+// ★ 刻意不用内联 onclick：计数器名与经历文本是自由文本，可能含引号，内联会撑破 JS 字符串。
+function bindCharState(scope) {
+  if (!scope) return;
+  scope.querySelectorAll('.chr-state [data-act]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'rm-counter') charCounterDel(btn.dataset.cid, btn.dataset.name);
+      else if (act === 'rm-exp') charExpDel(btn.dataset.cid, btn.dataset.eid);
+    });
+  });
+}
+
+// 删掉一个计数器（不可回滚，二次确认）
+async function charCounterDel(charId, name) {
+  if (!(await uiConfirm({
+    title: '删除计数器',
+    message: `确定删除计数器「${name}」？\n\n计数器和经历是流水，不进版本档，删掉之后无法用「回滚」找回。`,
+    okText: '删除', danger: true,
+  }))) return;
+  const r = await api(`/api/characters/${encodeURIComponent(charId)}/counters/${encodeURIComponent(name)}`, 'DELETE');
+  if (!r.ok) return toast(r.err || '删除失败', 'err');
+  toast(`已删除计数器「${name}」`, 'ok');
+  await refreshCharState(charId);
+  await loadCharacters();
+}
+
+// 删掉一条经历（不可回滚，二次确认）
+async function charExpDel(charId, expId) {
+  const hit = ((_chrDetail[charId] || {}).experiences || []).find(x => x.id === expId);
+  if (!(await uiConfirm({
+    title: '删除经历',
+    message: `确定删除这条经历？\n\n「${snippet(hit ? hit.text : '', 60)}」\n\n经历是流水，不进版本档，删掉无法用「回滚」找回。`,
+    okText: '删除', danger: true,
+  }))) return;
+  const r = await api(`/api/characters/${encodeURIComponent(charId)}/experiences/${encodeURIComponent(expId)}`, 'DELETE');
+  if (!r.ok) return toast(r.err || '删除失败', 'err');
+  toast('已删除该条经历', 'ok');
+  await refreshCharState(charId);
+  await loadCharacters();
+}
+
+// 重绘弹窗里的状态区（删完一项只换这一块，不动用户正在编辑的表单）
+async function refreshCharState(charId) {
+  const cur = await fetchCharDetail(charId);
+  const el = document.querySelector('#chr-edit-modal .chr-state');
+  if (!el) return;
+  if (!cur) return el.remove();
+  const tmp = document.createElement('div');
+  tmp.innerHTML = charStateAdminHtml(cur);
+  const nu = tmp.querySelector('.chr-state');
+  if (nu) { el.replaceWith(nu); bindCharState(document.getElementById('chr-edit-modal')); }
 }
 
 // 从标签页 / 全局池页进来的编辑入口
@@ -1071,9 +1190,11 @@ function characterPoolHtml() {
         <div class="ch-meta">${[
           c.age ? esc(c.age) : '',
           c.tags?.length ? c.tags.map(t => esc(t)).join(' / ') : '',
+          (c.experienceCount || 0) ? `${c.experienceCount} 条经历` : '',
           (c.historyCount || 0) ? `${c.historyCount} 个历史版本` : '',
         ].filter(Boolean).join(' · ') || '（无更多信息）'}</div>
         ${c.persona ? `<div class="ch-snippet">${esc(snippet(c.persona, 120))}</div>` : ''}
+        ${charStateHtml(c, 2)}
         <div class="ch-usedby">${usedBy.length
           ? `被 ${usedBy.map(u => esc(u.name)).join('、')} 使用`
           : '还没有写手选用'}</div>
@@ -1199,6 +1320,8 @@ function renderBotDetail(id) {
 
   // 各标签页自己的数据加载（切 tab 即分组加载，不做无用请求）
   if (tab === 'chat') {
+    // 切回对话页时把还没处理的提议重新挂上（提议是常驻状态，不随一次流式结束而消失）
+    renderPendingStrip(id);
     if (_chatTid) {
       const tid = _chatTid;
       loadSessions(id, tid);
@@ -2592,7 +2715,9 @@ async function loadSessions(id, tid) {
 //                            可安全回落一次性 POST /api/bots/:id/chat
 //   noFallback 为真        ：请求已经打到服务端（user 消息已落库，回复可能也已生成）
 //                            → 绝不能重放，否则同一条 user 消息会被写两遍
-async function streamBotChat(id, content, tid, onDelta, onProgress) {
+// onPending 是**第三条信道**（与 onDelta / onProgress 并列）：写手提议「沉淀经历 / 改角色卡」
+// 走 SSE 的 `pending` 事件，语义是「等用户点确认」。混进正文会让前端从文本里反解结构 —— 正是要避免的事。
+async function streamBotChat(id, content, tid, onDelta, onProgress, onPending) {
   let resp;
   try {
     resp = await fetch(API_BASE + `/api/bots/${id}/chat/stream`, {
@@ -2610,6 +2735,7 @@ async function streamBotChat(id, content, tid, onDelta, onProgress) {
     saw = true;
     if (ev.type === 'text') { if (onDelta) onDelta(String(ev.d || '')); }
     else if (ev.type === 'progress') { if (onProgress) { try { onProgress(ev.p || {}); } catch {} } }
+    else if (ev.type === 'pending') { if (onPending && ev.edit) { try { onPending(ev.edit, ev.summary || ''); } catch {} } }
     else if (ev.type === 'done') done = ev;
     else if (ev.type === 'err') srvErr = ev.err || '调用失败';
   }, () => { /* 传输层异常：交由下面的「零事件」判定统一处理 */ });
@@ -2810,6 +2936,32 @@ function makeStreamBubble(container, bot) {
   return { paint, el };
 }
 
+// 写手提议的「待确认写操作」，按写手分组常驻：{ botId: [edit, ...] }
+// ★ 为什么常驻、而不是直接挂在会话列表尾部：
+//   那条列表每 4 秒被 loadSessions 整块重绘一次（_sessionTimer 轮询），
+//   挂进去的确认条会在用户点到之前就被抹掉——写手提议永远等不到回答。
+//   挪到独立容器里，轮询碰不到它；切走再切回来（renderBotDetail）也能重挂。
+let _pendingEdits = {};
+
+function renderPendingStrip(botId) {
+  const el = document.getElementById('pending-strip');
+  if (!el) return;
+  const list = _pendingEdits[botId] || [];
+  el.innerHTML = list.length
+    ? `<div class="ps-head">${IC_CLOCK}<span class="lb">写手提议把这些沉淀到角色卡上，等你确认</span></div>`
+      + list.map((ed) => renderEditBar(ed)).join('')
+    : '';
+}
+
+// 处理完（确认 / 忽略）就从常驻列表里摘掉，否则下次重绘它会阴魂不散地回来
+function dropPending(edit) {
+  const sig = JSON.stringify(edit);
+  for (const id of Object.keys(_pendingEdits)) {
+    const kept = (_pendingEdits[id] || []).filter((x) => JSON.stringify(x) !== sig);
+    if (kept.length !== (_pendingEdits[id] || []).length) _pendingEdits[id] = kept;
+  }
+}
+
 // ---- 面板直接对话（在对话页的当前线程里说话）----
 async function directChat(id) {
   const ta = $('#f-chat');
@@ -2838,12 +2990,14 @@ async function directChat(id) {
   // 服务端就已落库（流式路由是先写 user 消息再调模型），这时填回去
   // 只会诱导用户把同一句重发一遍。
   const restoreInput = () => { if (ta && !ta.value) ta.value = content; };
+  // 写手提议的「待确认写操作」（如沉淀经历）—— 直接推进常驻列表（引用同一份数组）
+  const pendings = (_pendingEdits[id] = _pendingEdits[id] || []);
 
   try {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    }, (p) => setProgress(p));
+    }, (p) => setProgress(p), (edit) => pendings.push(edit));
     if (r && r.ok) {
       paint(r.reply, false);
       toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
@@ -2852,6 +3006,8 @@ async function directChat(id) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat，保住「流式不可用的环境仍能对话」
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
+      // 非流式路径没有 SSE 信道，待确认写操作在响应体的 pendings 里带回来
+      for (const x of (r.pendings || [])) if (x && x.edit) pendings.push(x.edit);
       if (r.ok) toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
       else { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
@@ -2866,6 +3022,7 @@ async function directChat(id) {
     await loadSessions(id, tid);
     // 消息数与活跃时间变了 → 局部刷新线程条与侧栏（不重建视图，保住输入焦点）
     if (tid) await refreshThreadsUI(id, tid);
+    renderPendingStrip(id);
     if (btn) { btn.disabled = false; btn.textContent = '发送'; }
   }
 }
@@ -2928,17 +3085,20 @@ async function modalChat(id, tid) {
 
   // 同 directChat：只有请求压根没到服务端时才把原文填回
   const restoreInput = () => { if (ta && !ta.value) ta.value = content; };
+  // 与 directChat 同构：提议落进常驻列表（见 renderPendingStrip 的说明）
+  const pendings = (_pendingEdits[id] = _pendingEdits[id] || []);
 
   try {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    }, (p) => setProgress(p));
+    }, (p) => setProgress(p), (edit) => pendings.push(edit));
     if (r && r.ok) paint(r.reply, false);
   } catch (err) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
+      for (const x of (r.pendings || [])) if (x && x.edit) pendings.push(x.edit);
       if (!r.ok) { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
       toast('对话失败: ' + err.message, 'err');
@@ -2960,6 +3120,7 @@ async function modalChat(id, tid) {
       const mb = document.querySelector('#session-modal .modal-body');
       if (mb) mb.scrollTop = mb.scrollHeight;
       if (tid) refreshThreadsUI(id, tid);
+      renderPendingStrip(id);
     }
     if (btnEl) { btnEl.disabled = false; btnEl.textContent = '发送'; }
   }
@@ -3321,6 +3482,9 @@ const ADMIN_TOOL_META = {
   propose_bot_config_edit: [IC_PENCIL, '待确认·写手配置'],
   propose_character_edit: [IC_USERS, '待确认·角色'],
   propose_character_create: [IC_PLUS, '待确认·新建角色'],
+  read_character_state: [IC_LAYERS, '角色状态'],
+  propose_counter_edit: [IC_SETTINGS, '待确认·计数器'],
+  propose_experience_edit: [IC_HISTORY, '待确认·经历'],
   ws_write_file: [IC_FILE, '写工作区'],
   ws_list_files: [IC_FILE, '工作区'],
   ws_read_file: [IC_FILE, '读工作区'],
@@ -3610,6 +3774,35 @@ function extractEdit(reply) {
   if (c) return { type: 'character_edit', payload: { ...c, patch: c.patch || c.fields || {} } };
   const nc = scanActionJson(reply, 'createCharacter');
   if (nc) return { type: 'character_create', payload: nc };
+  // 计数器 / 经历：纯文本约定里只有 characterId，面板要显示角色名 → 从本地角色池补上。
+  // ★ 计数器名统一读 `counter`（与结构化 pending 的 payload 保持一致）——
+  //   老写法 `name` 里塞的是计数器名，会把角色名和计数器名搅在一起，这里顺手兼容一下。
+  const ec = scanActionJson(reply, 'editCounter');
+  if (ec) {
+    const ch = (state.characters || []).find(x => x.id === String(ec.characterId || '')) || {};
+    const nm = String(ec.counter || ec.name || '').trim();
+    return {
+      type: 'counter_edit',
+      payload: {
+        characterId: ec.characterId, name: ch.name || String(ec.characterId || ''),
+        counter: nm, op: ec.op === 'remove' ? 'remove' : 'set',
+        value: Number(ec.value), before: Number((ch.counters || {})[nm]) || 0,
+        reason: ec.reason || '',
+      },
+    };
+  }
+  const ee = scanActionJson(reply, 'editExperience');
+  if (ee) {
+    const ch = (state.characters || []).find(x => x.id === String(ee.characterId || '')) || {};
+    return {
+      type: 'experience_edit',
+      payload: {
+        characterId: ee.characterId, name: ch.name || String(ee.characterId || ''),
+        op: ee.op === 'remove' ? 'remove' : 'add',
+        expId: ee.expId || '', text: ee.text || '', reason: ee.reason || '',
+      },
+    };
+  }
   const b = scanActionJson(reply, 'editBot');
   if (b) return { type: 'bot', payload: b };
   return null;
@@ -3632,6 +3825,25 @@ function renderEditBar(ed) {
   else if (ed.type === 'character_create') {
     label = `管理员建议在角色池新建角色「${p.name}」${p.reason ? `　原因：${p.reason}` : ''}`;
   }
+  else if (ed.type === 'experience_commit') {
+    // 写手提交的经历沉淀（走 opts.onPending），不是管理员 —— 措辞要区分开
+    const d = p.counters && Object.keys(p.counters).length
+      ? '，计数器 ' + Object.entries(p.counters).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、')
+      : '';
+    label = `写手建议为「${p.name}」沉淀一段经历${d}${p.reason ? `　原因：${p.reason}` : ''}`;
+  }
+  else if (ed.type === 'counter_edit') {
+    label = p.op === 'remove'
+      ? `管理员建议删除角色「${p.name}」的计数器「${p.counter}」（当前 ${fmtNum(p.before)}）`
+      : `管理员建议把角色「${p.name}」的计数器「${p.counter}」从 ${fmtNum(p.before)} 改为 ${fmtNum(p.value)}`;
+    if (p.reason) label += `　原因：${p.reason}`;
+  }
+  else if (ed.type === 'experience_edit') {
+    label = p.op === 'remove'
+      ? `管理员建议删除角色「${p.name}」的一条经历：${snippet(p.text || '', 40)}`
+      : `管理员建议给角色「${p.name}」记一条经历：${snippet(p.text || '', 40)}`;
+    if (p.reason) label += `　原因：${p.reason}`;
+  }
   else label = `管理员建议更新写手配置：${p.id || ''}`;
   return `<div class="admin-msg ai"><div class="admin-bubble admin-action admin-write">
     <span class="admin-action-label">${IC_SETTINGS}<span class="lb">是否同意此更改？</span><br><span class="admin-action-sub">${esc(label)}</span></span>
@@ -3646,10 +3858,14 @@ function renderEditBar(ed) {
 function dismissEdit(btn) {
   const bar = btn.closest('.admin-action');
   if (!bar) return;
+  let ed = null;
+  try { ed = JSON.parse(btn.dataset.json); } catch { ed = null; }
   bar.classList.add('ignored');
   bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
   const lab = bar.querySelector('.admin-action-label');
   if (lab) lab.innerHTML = IC_CLOSE + '<span class="lb">已忽略此建议（未做任何更改）</span>';
+  // 从常驻列表里摘掉（写手提议那条会一直挂着等确认，不摘会重绘回来）
+  if (ed) dropPending(ed);
   toast('已忽略该建议', '');
 }
 
@@ -3681,6 +3897,24 @@ async function previewEdit(btn) {
     }
     content = lines.join('\n\n') || '（没有内容）';
   }
+  else if (ed.type === 'experience_commit' || ed.type === 'experience_edit') {
+    const lines = [];
+    if (p.op === 'remove') lines.push(`【要删除的经历】\n${p.text || ''}`);
+    else if (p.text) lines.push(`【经历】\n${p.text}`);
+    if (p.counters && Object.keys(p.counters).length) {
+      lines.push('【计数器变化】\n' + Object.entries(p.counters)
+        .map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('\n'));
+    }
+    if (p.dropped && p.dropped.length) {
+      lines.push(`【已忽略】\n${p.dropped.join('、')}（不是该写手声明过的计数器名，不会生效）`);
+    }
+    content = lines.join('\n\n') || '（没有内容）';
+  }
+  else if (ed.type === 'counter_edit') {
+    content = p.op === 'remove'
+      ? `【删除计数器】\n${p.counter}　当前值：${fmtNum(p.before)}`
+      : `【${p.counter}】\n  改前：${fmtNum(p.before)}\n  改后：${fmtNum(p.value)}`;
+  }
   else if (ed.type === 'ws_inject') {
     const r = await api(`/api/workspace/${encodeURIComponent(p.key)}`).catch(() => ({ ok: false }));
     content = r.ok ? (r.content || '（空）') : ('读取失败：' + (r.err || ''));
@@ -3690,6 +3924,9 @@ async function previewEdit(btn) {
       : ed.type === 'core' ? `预览：${p.botId} 人格核心卡`
         : ed.type === 'character_edit' ? `预览：角色「${p.name || p.characterId}」的改动`
         : ed.type === 'character_create' ? `预览：新建角色「${p.name}」`
+        : ed.type === 'experience_commit' ? `预览：为「${p.name}」沉淀经历`
+        : ed.type === 'experience_edit' ? `预览：${p.op === 'remove' ? '删除' : '新增'}「${p.name}」的经历`
+        : ed.type === 'counter_edit' ? `预览：角色「${p.name}」的计数器「${p.counter}」`
         : ed.type === 'ws_inject' ? `预览：工作区「${p.key}」写入${p.targetType === 'global' ? '全局' : '「' + p.targetId + '」'}「${p.destKey || p.key}」`
           : `预览：写手「${p.id}」配置`;
   const overlay = document.createElement('div');
@@ -3724,6 +3961,19 @@ async function confirmEdit(btn) {
   else if (ed.type === 'character_create') {
     desc = `将在角色池新建角色「${p.name}」`;
   }
+  else if (ed.type === 'experience_commit' || ed.type === 'experience_edit') {
+    desc = p.op === 'remove'
+      ? `将删除角色「${p.name}」的一条经历`
+      : `将给角色「${p.name}」记一条经历（只加流水，不改它的设定）`;
+    if (p.counters && Object.keys(p.counters).length) {
+      desc += `，并调整计数器 ${Object.entries(p.counters).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、')}`;
+    }
+  }
+  else if (ed.type === 'counter_edit') {
+    desc = p.op === 'remove'
+      ? `将删除角色「${p.name}」的计数器「${p.counter}」`
+      : `将把角色「${p.name}」的计数器「${p.counter}」从 ${fmtNum(p.before)} 改为 ${fmtNum(p.value)}`;
+  }
   else desc = `将更新写手「${p.id}」的配置`;
   if (!(await uiConfirm({ title: '确认应用更改', message: `${desc}，\n确认应用？`, okText: '确认应用' }))) return;
   let r;
@@ -3743,6 +3993,29 @@ async function confirmEdit(btn) {
       appearance: p.appearance, background: p.background, tags: p.tags,
       source: 'admin',
     });
+  } else if (ed.type === 'experience_commit') {
+    if (!p.characterId) return toast('缺少 characterId', 'err');
+    // ★ 走 POST /api/characters/:id/commit —— 服务端内部调 characters.commitExperience：
+    //   计数器按**增量**累加、经历追加一条。这两样都**不进版本档**（设计如此：
+    //   版本档的语义是「设定改过几版」，塞流水会把它冲垮）。
+    r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/commit`, 'POST', {
+      text: p.text, counters: p.counters || {}, by: p.by || '',
+    });
+  } else if (ed.type === 'experience_edit') {
+    if (!p.characterId) return toast('缺少 characterId', 'err');
+    if (p.op === 'remove') {
+      if (!p.expId) return toast('缺少 expId', 'err');
+      r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/experiences/${encodeURIComponent(p.expId)}`, 'DELETE');
+    } else {
+      r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/experiences`, 'POST', { text: p.text, by: 'admin' });
+    }
+  } else if (ed.type === 'counter_edit') {
+    if (!p.characterId || !p.counter) return toast('缺少 characterId 或计数器名', 'err');
+    if (p.op === 'remove') {
+      r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/counters/${encodeURIComponent(p.counter)}`, 'DELETE');
+    } else {
+      r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/counters`, 'POST', { name: p.counter, value: p.value });
+    }
   } else if (ed.type === 'ws_inject') {
     if (!p.key) return toast('缺少工作区文件名', 'err');
     r = await api('/api/workspace/inject', 'POST', {
@@ -3764,6 +4037,8 @@ async function confirmEdit(btn) {
   }
   if (r.ok) {
     toast('已写入', 'ok');
+    // 从常驻列表里摘掉（写手提议那条会一直挂着等确认，不摘会重绘回来）
+    dropPending(ed);
     const bar = btn.closest('.admin-action');
     if (bar) {
       bar.classList.add('applied');
@@ -3776,6 +4051,11 @@ async function confirmEdit(btn) {
     }
     await loadState();
     if ((ed.type === 'memory' || ed.type === 'memory_tier' || ed.type === 'core') && view.type === 'bot' && view.id === p.botId) loadMemoryFiles(p.botId);
+    // 角色相关的改动会影响角色卡上的计数器/经历 → 刷新角色池缓存并重绘
+    if (/^(character_|experience_|counter_)/.test(ed.type)) {
+      await loadCharacters();
+      if (view.type === 'chars' || (view.type === 'bot' && view.tab === 'characters')) renderMain();
+    }
   } else {
     toast(r.err || '写入失败', 'err');
   }
