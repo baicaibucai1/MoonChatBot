@@ -814,9 +814,16 @@ function renderCharactersTabHtml(b) {
 }
 
 // 角色头像：现在还没有形象库，先用「名字首字」的占位块 —— 比空白更容易分辨
+// ★ 角色形象：角色设定本身是纯文本，图片只以**链接**挂在卡上（avatar 是 URL）。
+//   链接失效时退回名字首字，不留一个破图占位。
 function characterAvatarInner(c) {
-  const ch = String((c && c.name) || '?').trim().charAt(0) || '?';
-  return esc(ch);
+  const a = String((c && c.avatar) || '').trim();
+  if (/^(https?:\/\/|\/)/i.test(a)) {
+    const ch = esc(String((c && c.name) || '?').trim().charAt(0) || '?');
+    return `<img src="${esc(assetUrl(a))}" alt="" onerror="this.replaceWith(document.createTextNode('${ch}'))">`;
+  }
+  if (a) return esc(a);
+  return esc(String((c && c.name) || '?').trim().charAt(0) || '?');
 }
 
 // 角色卡上的「计数器 + 最近经历」小摘要（角色池页 / 写手的角色页共用）
@@ -928,6 +935,8 @@ async function fetchCharDetail(id) {
 async function openCharacterEditModal(charId, opts) {
   const c = charId ? (state.characters || []).find(x => x.id === charId) : null;
   const isNew = !c;
+  // ★ 新建时把全局「角色卡模板」套进「角色设定」—— 用户改一次模板，以后每张卡都是同一套骨架
+  const presetPersona = isNew ? charTemplateOf() : '';
   // 编辑已有角色时先取一次全量（状态区要用），失败就退回列表里那份
   const full = isNew ? null : ((await fetchCharDetail(c.id)) || c);
   const overlay = document.createElement('div');
@@ -946,8 +955,10 @@ async function openCharacterEditModal(charId, opts) {
           <label class="frm">${label}</label>
           ${k === 'name'
             ? `<input id="chr-${k}" type="text" placeholder="${esc(ph)}" value="${esc((c && c[k]) || '')}">`
-            : `<textarea id="chr-${k}" rows="${k === 'persona' ? 5 : 2}" placeholder="${esc(ph)}">${esc((c && c[k]) || '')}</textarea>`}
+            : `<textarea id="chr-${k}" rows="${k === 'persona' ? (isNew ? 12 : 5) : 2}" placeholder="${esc(ph)}">${esc(k === 'persona' && isNew ? presetPersona : ((c && c[k]) || ''))}</textarea>`}
         `).join('')}
+        <label class="frm">形象链接（图片 URL）</label>
+        <input id="chr-avatar" type="text" placeholder="https://…　角色设定是纯文本，图片不进正文，只以链接挂在卡上" value="${esc((c && c.avatar) || '')}">
         <label class="frm">标签（逗号分隔）</label>
         <input id="chr-tags" type="text" placeholder="例：主角, 机器人, 未来" value="${esc(((c && c.tags) || []).join(', '))}">
         ${isNew ? '' : charStateAdminHtml(full)}
@@ -974,7 +985,7 @@ function charStateAdminHtml(c) {
   const head = (t, n) => `<div class="chr-state-head">${t}<span class="spacer"></span><span class="chr-state-n">${n}</span></div>`;
   const counters = cs.length
     ? `<div class="ch-counters">${cs.map(([k, v]) => `<span class="ch-counter" title="${esc(k)}">${esc(k)}<b>${esc(fmtNum(v))}</b><button class="ch-x" data-act="rm-counter" data-cid="${esc(c.id)}" data-name="${esc(k)}" title="删除这个计数器">${IC_CLOSE}</button></span>`).join('')}</div>`
-    : `<div class="chr-state-empty">还没有计数器。计数器的规则写在写手的「标准要求」里，值由剧情里的经历带动。</div>`;
+    : `<div class="chr-state-empty">还没有计数器。计数器的名字与范围写在角色卡正文里（<code>##Counter：名字[0,100]</code>），或写在写手的「标准要求」里；值由剧情里的经历带动。</div>`;
   const rows = exps.length
     ? `<div class="chr-exp-list">${exps.slice(0, 30).map(e => `<div class="chr-exp-row">
           <span class="chr-exp-ts">${esc(fmtTime(e.ts))}</span>
@@ -1055,7 +1066,12 @@ async function saveCharacter(id) {
   }
   const tagsEl = $('#chr-tags');
   if (tagsEl) body.tags = tagsEl.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  // 形象链接：图片不进正文，只以 URL 挂在角色卡上
+  const avEl = $('#chr-avatar');
+  if (avEl) body.avatar = avEl.value.trim();
   if (!body.name) return toast('角色名不能为空', 'err');
+  // 新建时把模板里的 {{名字}} 占位换成实际角色名（用户可能没填模板，没有占位就不动）
+  if (!id && body.persona) body.persona = body.persona.replace(/\{\{\s*(?:名字|name)\s*\}\}/gi, body.name);
 
   let r;
   if (id) {
@@ -1957,6 +1973,7 @@ const SETTING_TABS = [
   { id: 'generation', n: '生成', ic: IC_SLIDERS },
   { id: 'general', n: '联网', ic: IC_GLOBE },
   { id: 'global', n: '全局设定', ic: IC_LAYERS },
+  { id: 'character', n: '角色卡', ic: IC_USERS },
   { id: 'stats', n: '用量统计', ic: IC_CHART },
 ];
 function settingsTabId() {
@@ -2009,6 +2026,7 @@ function renderSettings() {
     <div class="st-sec" data-sec="generation"${show('generation')}>${renderGeneration()}</div>
     <div class="st-sec" data-sec="general"${show('general')}>${renderGeneral()}</div>
     <div class="st-sec" data-sec="global"${show('global')}>${globalCard}${renderAdminSetting()}</div>
+    <div class="st-sec" data-sec="character"${show('character')}>${renderCharacterTemplate()}</div>
     <div class="st-sec" data-sec="stats"${show('stats')}>${statsCard}</div>`;
   _gFiles = [];
   _gKey = '';
@@ -2040,6 +2058,49 @@ function renderAdminSetting() {
         <div class="fixed-rule">${esc(ADMIN_FIXED_RULE)}</div>
       </div>
     </div>`;
+}
+
+// ---- 设置页「角色卡」：角色卡模板（全局）----
+// ★ 角色设定本身是**纯文本**，图片不进正文 —— 只以链接挂在卡上（形象链接字段）。
+//   模板里那行 `##Counter：名字[范围]` 引擎会读，所以默认模板里就带一条。
+function charTemplateOf() {
+  const t = typeof state.characterTemplate === 'string' ? state.characterTemplate : '';
+  return t.trim() ? t : (state.characterTemplateDefault || '');
+}
+function renderCharacterTemplate() {
+  return `
+    <div class="card gen-card">
+      <div class="card-title">角色卡模板（新建角色时套用）
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="resetCharTemplate()">${IC_REFRESH}<span class="lb">恢复默认</span></button>
+        <button class="primary sm" onclick="saveCharTemplate()">保存</button>
+      </div>
+      <p class="empty-hint" style="margin:0 0 10px">
+        新建角色时，这份正文会预填进角色的「角色设定」。它决定一张角色卡的<b>基本样式</b>：
+        分几个小节、每节写什么。<code>{{名字}}</code> 是占位，会换成实际角色名。
+      </p>
+      <textarea id="chr-tpl" rows="18" spellcheck="false" placeholder="（留空则用默认模板）">${esc(charTemplateOf())}</textarea>
+      <p class="empty-hint" style="margin-top:10px">
+        ★ 计数器直接写在正文里：<code>##Counter：名字[最小,最大]</code>，<code>[]</code> 留空或不写 = 不限。
+        角色卡上写的范围<b>优先于</b>写手「标准要求」里写的同名范围。
+      </p>
+    </div>`;
+}
+
+async function saveCharTemplate() {
+  const tpl = ($('#chr-tpl') && $('#chr-tpl').value) || '';
+  const r = await api('/api/config', 'PUT', { characterTemplate: tpl });
+  if (!r.ok) return toast(r.err || '保存失败', 'err');
+  state.characterTemplate = tpl;
+  toast('角色卡模板已保存', 'ok');
+}
+
+async function resetCharTemplate() {
+  const el = $('#chr-tpl');
+  if (!el) return;
+  if (!(await uiConfirm({ title: '恢复默认模板', message: '把模板换回系统默认（当前编辑的内容会丢失，保存后生效）。确认？', okText: '恢复' }))) return;
+  el.value = state.characterTemplateDefault || '';
+  toast('已填入默认模板，点「保存」生效', 'ok');
 }
 
 function backFromSettings() {
@@ -5630,6 +5691,8 @@ Object.assign(window, {
   openCharacterPool, characterEdit, saveCharacter, characterDelete,
   characterHistory, characterRollback, characterAttach, characterDetach,
   characterSearch, loadCharacters, newCharForWriter,
+  // 设置页「角色卡」模板（内联 onclick 引用）
+  saveCharTemplate, resetCharTemplate,
   // 仅被模板字符串调用（eslint 认不出）→ 显式挂一次消除 no-unused-vars
   snippet, characterAvatarInner,
   // 挂在 oncontextmenu 上：lint 的 no-unused-vars 只认 onclick 里的引用

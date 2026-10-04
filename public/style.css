@@ -2330,13 +2330,15 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 }
 .ch-item:hover { border-color: var(--primary); }
 
-/* 还没有形象库，先用名字首字的占位块 —— 比空白更容易分辨 */
+/* 形象：有链接就显示图片（角色设定本身是纯文本，图片只是挂在卡上的链接），
+   没有就用名字首字的占位块 —— 比空白更容易分辨 */
 .ch-avatar {
   flex: 0 0 38px; width: 38px; height: 38px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 16px; font-weight: 600;
+  font-size: 16px; font-weight: 600; overflow: hidden;
   color: var(--on-primary-container); background: var(--primary-container);
 }
+.ch-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
 
 .ch-main { flex: 1; min-width: 0; }
 .ch-name {

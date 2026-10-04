@@ -838,3 +838,37 @@ test('计数器声明：只认「计数」小节，输出头尾那几条不混�
   const decl = characters.parseDeclaredCounters('## 输出头尾\n- 开头：xxx\n## 计数器\n- 好感度：0-100\n');
   assert.deepEqual(decl, ['好感度'], '「开头」不该被当成计数器名');
 });
+
+// ---------- ★ 角色卡模板（设置 → 角色卡）----------
+
+test('applyCharTemplate：替换 {{名字}} / {{name}} 占位（大小写与空格都认）', () => {
+  const out = characters.applyCharTemplate('# {{名字}}\n\n她是 {{ name }}。', '银');
+  assert.ok(out.includes('# 银'));
+  assert.ok(out.includes('她是 银。'));
+  assert.ok(!out.includes('{{'));
+});
+
+test('applyCharTemplate：模板为空 → 空串（不强行塞默认模板）', () => {
+  assert.equal(characters.applyCharTemplate('', '银'), '');
+  assert.equal(characters.applyCharTemplate('   \n  ', '银'), '');
+  assert.equal(characters.applyCharTemplate(null, '银'), '');
+});
+
+test('applyCharTemplate：没有占位时原样返回（不擅自插名字）', () => {
+  assert.equal(characters.applyCharTemplate('# 卡片\n## 背景', '银'), '# 卡片\n## 背景');
+});
+
+test('DEFAULT_CHAR_TEMPLATE：自带一条计数器声明，且不含图片正文', () => {
+  const t = characters.DEFAULT_CHAR_TEMPLATE;
+  const specs = characters.parseCounterSpecs(characters.applyCharTemplate(t, '银'));
+  assert.equal(specs.length, 1, '默认模板里应恰好有一条 ##Counter 声明');
+  assert.equal(specs[0].name, '好感度');
+  assert.equal(specs[0].max, 100);
+  assert.ok(!/!\[/.test(t), '角色设定是纯文本，模板里不该有 markdown 图片语法');
+});
+
+test('角色头像：avatar 是链接字段，不参与 buildEditPatch 之外的正文', () => {
+  // avatar 在 EDITABLE_FIELDS 里（能存链接），但写手侧默认禁改（它属于形象库）
+  assert.ok(characters.EDITABLE_FIELDS.includes('avatar'));
+  assert.equal(characters.buildEditPatch({ avatar: 'u.png', name: 'x' }).avatar, undefined);
+});
