@@ -120,6 +120,17 @@ function declaredCounterSpecsOf(botId) {
   return from('persona');
 }
 
+// 这位写手当前活跃的世界名。
+// ★ 口径必须三处一致（写手提示词 / 输出后自检 / 界面胶囊）：显式选的 → 校验它在世界卡里存在 →
+//   否则退回首个小节 → 一个小节都没有就返回 ''（不装作有世界）。
+function activeWorldOf(bot) {
+  const raw = (() => { try { return memory.readMemoryFile(bot.id, 'world') || ''; } catch { return ''; } })();
+  const worlds = memory.listWorlds(raw);
+  const want = String(bot.activeWorld || '').trim();
+  if (want && worlds.some((w) => w.name === want)) return want;
+  return worlds[0] ? worlds[0].name : '';
+}
+
 // ★ 某个角色 + 某位写手 → 这台戏实际生效的计数器规格。
 //   角色卡上的 `##Counter：名字[范围]` 是**权威来源**（它写在角色身上，跟着角色走）；
 //   写手在「标准要求」里声明的同名规格作为**补充**（角色卡没写范围时才用）。
@@ -159,6 +170,8 @@ async function runSelfCheck({ botId, bot, cfg, reply, chatFn, onPending, onSync 
   // 世界卡现状（写手视角）
   const worldRaw = (() => { try { return memory.readMemoryFile(botId, 'world') || ''; } catch { return ''; } })();
   const wp = memory.parseWorldCard(worldRaw);
+  // 当前活跃世界（与胶囊、写手提示词共用 activeWorldOf，口径只写一处）
+  const activeWorld = activeWorldOf(bot);
 
   const messages = SC.buildMessages({
     reply,
@@ -176,7 +189,7 @@ async function runSelfCheck({ botId, bot, cfg, reply, chatFn, onPending, onSync 
         })),
       };
     }),
-    world: { changes: wp.changes },
+    world: { changes: wp.changes, worlds: wp.worlds.map((w) => w.name), active: activeWorld },
   });
 
   const raw = await chatFn(messages, { maxTokens: 900, temperature: 0.2 });
@@ -245,6 +258,8 @@ async function runSelfCheck({ botId, bot, cfg, reply, chatFn, onPending, onSync 
           type: 'world_change',
           payload: {
             botId, botName: bot.name || botId, text: w.text,
+            // ★ 多世界时标出是哪个世界的改变（没活跃世界就不标）
+            world: activeWorld,
             reason: w.why || '输出后自检：剧情里世界层面发生了变化',
             by: (bot.name || botId) + '（自检）',
           },
@@ -342,15 +357,28 @@ function buildWriterBlock(cfg, bot) {
   lines.push('【你的世界卡】');
   const worldRaw = (() => { try { return memory.readMemoryFile(bot.id, 'world') || ''; } catch { return ''; } })();
   const wp = require('./lib/memory').parseWorldCard(worldRaw);
+  // ★ 多世界（用户决策 2026-10-05）：世界卡里可能有多个 `## 世界：名字` 小节。
+  //   写手必须知道**当前写的是哪一个**，否则会把两个世界的地名混着用。
+  if (wp.worlds.length) {
+    const eff = activeWorldOf(bot);
+    lines.push(`- 世界卡里有 ${wp.worlds.length} 个世界：${wp.worlds.map((w) => w.name).join('、')}`);
+    lines.push(`- ★ 当前活跃世界是**「${eff}」**，这一轮请只按这个世界来写（地名、势力、规则都取它）。`);
+    const body = (wp.worlds.find((w) => w.name === eff) || {}).body || '';
+    if (body.trim()) {
+      lines.push(`【「${eff}」的世界设定】`);
+      lines.push(body.trim().slice(0, 1600));
+    }
+  }
   if (wp.changes.length) {
-    lines.push(`- 世界已经被改变过 ${wp.changes.length} 次（按时间）：`);
-    for (const ch of wp.changes.slice(-10)) lines.push(`  · ${ch.text}`);
+    lines.push(`- 世界已经被改变过 ${wp.changes.length} 次（按时间，前面的【世界名】标出是哪儿的改变）：`);
+    for (const ch of wp.changes.slice(-10)) lines.push(`  · ${ch.world ? `【${ch.world}】` : ''}${ch.text}`);
     if (wp.changes.length > 10) lines.push(`  （还有更早的 ${wp.changes.length - 10} 条，未全部列出）`);
   } else {
     lines.push('- 世界卡上还没有记录过改变。');
   }
   lines.push('- 剧情里**世界层面**发生变化（地点兴废、势力更替、规则被打破、大众认知改变）时，'
-    + '用 propose_world_change 提议记一条。同样只出提议、用户确认才追加进世界卡。');
+    + '用 propose_world_change 提议记一条。同样只出提议、用户确认才追加进世界卡。'
+    + (wp.worlds.length ? `（多世界时会在条目上标出【世界名】，按当前活跃世界记就行。）` : ''));
   lines.push('- 人物**自身**的遭遇（成长、关系、决定）别记这里 —— 那是角色卡上的经历。');
 
   // ---- 经历与计数器（用户决策 2026-10-04，详见《经历与计数器机制.md》）----
@@ -838,6 +866,8 @@ async function chatWithBot(botId, content, opts = {}) {
                 type: 'world_change',
                 payload: {
                   botId, botName: bot.name || bot.id, text: txt, reason,
+                  // 多世界时标出写手当前在写哪个世界（都没配就不标）
+                  world: activeWorldOf(bot),
                   by: bot.name || bot.id,
                 },
               }, `待确认：记一条世界改变「${txt.slice(0, 20)}…」`);

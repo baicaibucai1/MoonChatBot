@@ -593,6 +593,7 @@ function renderChatTabHtml(b) {
         <button class="tb-add" onclick="newThread('${id}')" title="新建对话">${IC_PLUS}</button>
       </div>
 
+      <div class="chat-split">
       <div class="card session-card chat-main">
         <div class="card-title">
           <span class="chat-title-text">${esc(cur.title || '新对话')}</span>
@@ -617,6 +618,9 @@ function renderChatTabHtml(b) {
           <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这位写手接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
           <button class="primary sm" onclick="directChat('${id}')">发送</button>
         </div>
+      </div>
+      <!-- 右侧胶囊列：当前活跃的世界 / 活跃的角色（点一下能换） -->
+      <div class="chat-caps" id="chat-caps"></div>
       </div>
     </div>`;
 }
@@ -1356,6 +1360,9 @@ function renderBotDetail(id) {
     renderPendingStrip(id);
     // 同步状态同理：它是**可回看的状态**，切走再切回来该还在
     renderSyncLine(id);
+    // 右侧胶囊：角色从 state 直接读，世界要取一次世界卡
+    renderChatCaps(id);
+    loadWorlds(id);
     if (_chatTid) {
       const tid = _chatTid;
       loadSessions(id, tid);
@@ -3125,6 +3132,94 @@ function makeStreamBubble(container, bot) {
 //   挪到独立容器里，轮询碰不到它；切走再切回来（renderBotDetail）也能重挂。
 let _pendingEdits = {};
 
+// ---- 对话页右侧胶囊：活跃世界 / 活跃角色（用户决策 2026-10-05）----
+// 为什么放在右侧而不是顶部：顶部已经被「线程条 + 对话标题」占满，
+// 再塞一排胶囊会把正文往下挤。右侧竖排在宽屏上几乎不占正文宽度，且**扫一眼就知道
+// 「这一轮是在哪个世界、写哪几个人」** —— 这是写长故事时最常需要确认的两件事。
+//
+// 数据来源分两处（刻意如此）：
+//   · 世界：世界卡（memory/world.md）里的 `## 世界：名字` 小节 + bot.activeWorld → 走接口取。
+//   · 角色：全局角色池 + bot.activeCharacterIds → state 里就有，不用额外请求。
+let _worlds = {};   // { botId: { worlds:[{name,body}], active, effective, changeCount } }
+
+async function loadWorlds(id) {
+  const r = await api(`/api/memory/${encodeURIComponent(id)}/worlds`).catch(() => null);
+  if (r && r.ok) _worlds[id] = r;
+  renderChatCaps(id);
+}
+
+function renderChatCaps(id) {
+  const el = document.getElementById('chat-caps');
+  if (!el) return;
+  const b = (state.bots || []).find(x => x.id === id);
+  if (!b) { el.innerHTML = ''; return; }
+
+  const w = _worlds[id] || { worlds: [], effective: '' };
+  const worldPill = w.effective
+    ? `<button class="cap-pill cap-world" onclick="switchWorld('${id}')" title="点击切换当前活跃世界（世界卡里的 ## 世界：小节）">
+         ${IC_GLOBE}<span class="cap-t">${esc(w.effective)}</span>
+         ${w.worlds.length > 1 ? `<span class="cap-n">${w.worlds.length}</span>` : ''}
+       </button>`
+    : '';
+
+  const chars = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : [])
+    .map(cid => (state.characters || []).find(c => c.id === cid))
+    .filter(Boolean);
+  const MAXC = 6;
+  const charPills = chars.slice(0, MAXC).map(c => `
+    <button class="cap-pill cap-char" onclick="characterEdit('${esc(c.id)}')" title="编辑角色卡：${esc(c.name)}">
+      <span class="cap-av">${characterAvatarInner(c)}</span><span class="cap-t">${esc(c.name)}</span>
+    </button>`).join('');
+
+  const head = (ic, t) => `<div class="cap-head">${ic}<span>${t}</span></div>`;
+  el.innerHTML = `
+    ${w.effective ? head(IC_GLOBE, '活跃世界') + worldPill : ''}
+    ${chars.length ? head(IC_USERS, `活跃角色 ${chars.length}`) + charPills
+      + (chars.length > MAXC ? `<div class="cap-more">还有 ${chars.length - MAXC} 位（在角色页看全部）</div>` : '')
+      : (w.effective ? '' : '<div class="cap-empty">这位写手还没选角色，也没有多世界</div>')}`;
+}
+
+// 切换活跃世界：弹出世界卡里的世界列表（只有一个小节也允许，用于确认当前状态）
+async function switchWorld(id) {
+  const w = _worlds[id];
+  if (!w || !w.worlds.length) return toast('世界卡里还没有「## 世界：名字」小节', 'err');
+  const old = document.getElementById('world-pick');
+  if (old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'world-pick';
+  overlay.innerHTML = `
+    <div class="modal-card world-pick-card">
+      <div class="modal-head">
+        <span>${IC_GLOBE}<span class="lb">当前活跃世界</span></span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('world-pick').remove()">${IC_CLOSE}<span class="lb">关闭</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="empty-hint" style="margin:0 0 10px">
+          写手只会按当前活跃世界来写（地名、势力、规则都取它）。世界卡里的小节写法：<code>## 世界：名字</code>
+        </p>
+        ${w.worlds.map(x => `
+          <button class="world-opt ${x.name === w.effective ? 'on' : ''}" data-name="${esc(x.name)}" onclick="pickWorld('${id}', this.dataset.name)">
+            <span class="wo-name">${esc(x.name)}</span>
+            ${x.body ? `<span class="wo-body">${esc(x.body.replace(/\s+/g, ' ').slice(0, 90))}</span>` : ''}
+            ${x.name === w.effective ? `<span class="wo-on">${IC_CHECK}当前</span>` : ''}
+          </button>`).join('')}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+async function pickWorld(id, name) {
+  const r = await api(`/api/memory/${encodeURIComponent(id)}/worlds/active`, 'POST', { name });
+  if (!r.ok) return toast(r.err || '切换失败', 'err');
+  const el = document.getElementById('world-pick');
+  if (el) el.remove();
+  await loadWorlds(id);
+  toast(`已切换到世界「${name}」`, 'ok');
+}
+
 // ---- 文件同步状态（输入框上方那行灰字）----
 // 用户决策 2026-10-05：「对话界面，底部应该用灰色小字撰写文件同步状态，比如 XX计数器已经更新」
 //
@@ -4257,7 +4352,9 @@ async function confirmEdit(btn) {
     const wid = p.botId || (view.type === 'bot' ? view.id : '');
     if (!wid) return toast('缺少写手 id', 'err');
     p.botId = wid;   // 记回来：下面的「刷新记忆文件列表」按 p.botId 判断
-    r = await api(`/api/memory/${encodeURIComponent(wid)}/world-changes`, 'POST', { text: p.text, by: p.by || '' });
+    // ★ world 必须一起送：多世界共用一条流水，不标就分不清这条改变是哪个世界的
+    r = await api(`/api/memory/${encodeURIComponent(wid)}/world-changes`, 'POST',
+      { text: p.text, by: p.by || '', world: p.world || '' });
   } else if (ed.type === 'experience_commit') {
     if (!p.characterId) return toast('缺少 characterId', 'err');
     // ★ 走 POST /api/characters/:id/commit —— 服务端内部调 characters.commitExperience：
@@ -5786,6 +5883,8 @@ Object.assign(window, {
   characterSearch, loadCharacters, newCharForWriter,
   // 设置页「角色卡」模板（内联 onclick 引用）
   saveCharTemplate, resetCharTemplate,
+  // 对话页右侧胶囊（内联 onclick 引用）
+  switchWorld, pickWorld,
   // 仅被模板字符串调用（eslint 认不出）→ 显式挂一次消除 no-unused-vars
   snippet, characterAvatarInner,
   // 挂在 oncontextmenu 上：lint 的 no-unused-vars 只认 onclick 里的引用

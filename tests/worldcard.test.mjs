@@ -183,3 +183,68 @@ test('removeWorldChange：id 找不到 → 报失败而不是静默', () => {
     assert.equal(memory.removeWorldChange(BOT, '').ok, false);
   });
 });
+
+// ---------- ★ 多世界（## 世界：名字）----------
+
+test('listWorlds：一个小节一个世界，正文归属正确', () => {
+  withMem((memory) => {
+    const md = [
+      '# 世界卡', '',
+      '## 世界：中原', '门派林立，灵气稀薄。', '',
+      '## 世界：异界', '钢铁与蒸汽的城市。', '',
+      '## 世界的改变',
+      '- [2026-10-05] 【中原】渡口被烧了　— 探针写手 <!--WCa1-->',
+      '',
+    ].join('\n');
+    const ws = memory.listWorlds(md);
+    assert.deepEqual(ws.map((w) => w.name), ['中原', '异界']);
+    assert.ok(ws[0].body.includes('门派林立'));
+    assert.ok(ws[1].body.includes('钢铁与蒸汽'));
+    assert.ok(!ws[0].body.includes('渡口被烧'), '「世界的改变」之后是流水，不算世界定义');
+  });
+});
+
+test('listWorlds：没有 ## 世界： 小节 → 空数组（前端就不显示世界胶囊）', () => {
+  withMem((memory) => {
+    assert.deepEqual(memory.listWorlds('# 世界卡\n\n## 世界设定\n-\n'), []);
+    assert.deepEqual(memory.listWorlds(''), []);
+    assert.deepEqual(memory.listWorlds(null), []);
+  });
+});
+
+test('parseWorldCard：worlds 与 changes 并存，互不干扰', () => {
+  withMem((memory) => {
+    const md = '## 世界：中原\nA\n\n## 世界的改变\n- [2026-10-05] 旧写法没标世界 <!--WCx1-->\n';
+    const p = memory.parseWorldCard(md);
+    assert.equal(p.worlds.length, 1);
+    assert.equal(p.changes.length, 1);
+    assert.equal(p.changes[0].text, '旧写法没标世界', '★ 旧条目（没有【世界】标记）照样解析得出来');
+    assert.equal(p.changes[0].world, '');
+  });
+});
+
+test('appendWorldChange：带 world 时条目前缀【世界名】，且解析得回来', () => {
+  withMem((memory) => {
+    memory.saveMemoryFile(BOT, 'world', '## 世界：中原\nA\n\n## 世界的改变\n');
+    const r = memory.appendWorldChange(BOT, { text: '渡口被烧', by: 'BOT1', world: '中原' });
+    assert.ok(r.ok);
+    const raw = memory.readMemoryFile(BOT, 'world');
+    assert.ok(raw.includes('【中原】渡口被烧'), raw);
+    const { changes } = memory.parseWorldCard(raw);
+    assert.equal(changes[0].world, '中原');
+    assert.equal(changes[0].text, '渡口被烧', '★ 世界标记不能留在 text 里');
+    assert.equal(changes[0].by, 'BOT1');
+  });
+});
+
+test('appendWorldChange：追加时**不动**底稿里的世界小节', () => {
+  withMem((memory) => {
+    const base = '## 世界：中原\n门派林立。\n\n## 世界：异界\n钢铁城市。\n\n## 世界的改变\n';
+    memory.saveMemoryFile(BOT, 'world', base);
+    memory.appendWorldChange(BOT, { text: '渡口被烧', world: '中原' });
+    const raw = memory.readMemoryFile(BOT, 'world');
+    assert.ok(raw.includes('## 世界：中原\n门派林立。'), '世界小节要原样保留');
+    assert.ok(raw.includes('## 世界：异界\n钢铁城市。'), '另一个世界也要原样保留');
+    assert.deepEqual(memory.listWorlds(raw).map((w) => w.name), ['中原', '异界']);
+  });
+});

@@ -2218,6 +2218,81 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 /* 挤在对话页里比在管理员面板里窄，让按钮换行不至于被挤出视野 */
 .pending-strip .admin-action { flex-wrap: wrap; }
 
+/* ---- 对话页右侧胶囊列（活跃世界 / 活跃角色）---- */
+/* 与 chat-main 并排：正文占满剩余宽度，胶囊列固定窄栏。
+   窄屏（<1180px）直接收起 —— 它不是必须品，不能挤压正文。 */
+.chat-split { display: flex; gap: 10px; align-items: stretch; }
+.chat-split > .chat-main { flex: 1; min-width: 0; }
+.chat-caps {
+  flex: 0 0 132px; width: 132px;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 0 0;
+  overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
+}
+.chat-caps:empty { display: none; }
+.cap-head {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 10.5px; letter-spacing: .3px;
+  color: var(--on-surface-faint);
+  margin-top: 4px;
+}
+.cap-head .ic { width: 11px; height: 11px; }
+.cap-pill {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; text-align: left;
+  padding: 6px 8px; border-radius: 999px;
+  border: 1px solid var(--outline);
+  background: var(--surface);
+  color: var(--on-surface);
+  font-size: 11.5px; line-height: 1.4;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.cap-pill:hover { border-color: var(--primary); }
+.cap-pill .ic { width: 12px; height: 12px; flex-shrink: 0; }
+.cap-pill .cap-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 多世界时在右侧标出「世界卡里有几个」—— 提示这里可以点开换 */
+.cap-pill .cap-n {
+  margin-left: auto; flex-shrink: 0;
+  font-size: 10px; padding: 0 5px; border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+}
+.cap-world { border-color: color-mix(in srgb, var(--primary) 34%, var(--outline)); }
+.cap-char .cap-av {
+  flex: 0 0 18px; width: 18px; height: 18px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 600; overflow: hidden;
+  color: var(--on-primary-container); background: var(--primary-container);
+}
+.cap-char .cap-av img { width: 100%; height: 100%; object-fit: cover; }
+.cap-more, .cap-empty {
+  font-size: 10.5px; line-height: 1.6;
+  color: var(--on-surface-faint); padding: 2px 4px;
+}
+@media (max-width: 1180px) { .chat-caps { display: none; } }
+
+/* 世界切换弹窗 */
+.world-pick-card { width: min(520px, 92vw); }
+.world-opt {
+  display: flex; flex-direction: column; gap: 3px;
+  width: 100%; text-align: left;
+  padding: 10px 12px; margin-bottom: 8px;
+  border-radius: 10px; border: 1px solid var(--outline);
+  background: var(--surface); color: var(--on-surface);
+  cursor: pointer;
+}
+.world-opt:hover { border-color: var(--primary); }
+.world-opt.on { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.world-opt .wo-name { font-size: 13px; font-weight: 600; }
+.world-opt .wo-body { font-size: 11.5px; color: var(--on-surface-faint); line-height: 1.6; }
+.world-opt .wo-on {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--primary);
+}
+.world-opt .wo-on .ic { width: 11px; height: 11px; }
+
 /* 文件同步状态：输入框上方那几行灰色小字（「XX 计数器已更新」这类）
    ★ 刻意做得很轻：它是**状态**不是消息，颜色压到 faint、字号压到 11px，
      不能跟正文抢视线。 */
