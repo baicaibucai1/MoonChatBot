@@ -916,6 +916,8 @@ const CHR_FIELDS = [
 // ★ 完整角色（含全部经历）的本地缓存，键是角色 id。
 //   列表接口只带最近 3 条经历，状态区要展示全量、删除时还要拿到原文，所以单独拉详情存这儿。
 const _chrDetail = {};
+// 从「写手设置 → 新建角色」进来时记下目标写手 id：建完自动挂进他的角色池
+let _chrNewWriter = '';
 async function fetchCharDetail(id) {
   const r = await api(`/api/characters/${encodeURIComponent(id)}`).catch(() => null);
   if (r && r.ok && r.character) { _chrDetail[id] = r.character; return r.character; }
@@ -1062,10 +1064,22 @@ async function saveCharacter(id) {
     r = await api('/api/characters', 'POST', body);
   }
   if (!r.ok) return toast(r.err || '保存失败', 'err');
-  toast(id ? `已保存${r.changed && r.changed.length ? '（' + r.changed.join('、') + '）' : ''}` : '角色已创建', 'ok');
+  // 新建 + 从写手设置进来 → 建完顺手挂进那位写手的角色池
+  const forWriter = _chrNewWriter;
+  _chrNewWriter = '';
+  let joined = false;
+  if (!id && forWriter && r.character && r.character.id) {
+    joined = await attachCharToWriter(forWriter, r.character.id);
+  }
+  toast(id
+    ? `已保存${r.changed && r.changed.length ? '（' + r.changed.join('、') + '）' : ''}`
+    : (joined ? '角色已创建，并加入该写手的角色池' : '角色已创建'), 'ok');
   const m = document.getElementById('chr-edit-modal');
   if (m) m.remove();
+  // ★ 先刷新角色池缓存再重绘设置里的勾选区：botPoolHtml 读的是 state.characters，
+  //   顺序反了的话新角色还没进 state，勾选项就画不出来。
   await loadCharacters();
+  if (joined) refreshBotPool(forWriter);
   if (view.type === 'chars') renderMain();
 }
 
@@ -1624,6 +1638,7 @@ function openBotSettings(id) {
           </select></div>
           <div class="field"><label>被截断时</label><div class="value">${IC_CHECK}<span class="lb">自动补全，不受此开关影响</span></div></div>
         </div>
+        ${botPoolHtml(b)}
         <div class="frm-hint">这里只管写手本体。QQ 连接（AppID / AppSecret / 运行环境）在写手卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
       </div>
       <div class="modal-foot cf-foot">
@@ -1638,6 +1653,72 @@ function openBotSettings(id) {
 function closeBotSettings() {
   const m = $('#bot-settings-modal');
   if (m) m.remove();
+}
+
+// 写手设置里的「这位写手的角色池」区块：勾选 = 这位写手能写他。
+// ★ 角色本体存在**全局共享角色池**里，勾选只改 bot.activeCharacterIds（引用），
+//   不动角色本身 —— 同一位角色可以被多位写手同时选用。
+function botPoolHtml(b) {
+  const all = state.characters || [];
+  const activeIds = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : []).map(String);
+  const rows = all.map((c) => {
+    const on = activeIds.includes(String(c.id));
+    const meta = [String(c.id), c.age || '', (c.tags || []).join(' / '),
+      c.experienceCount ? `${c.experienceCount} 条经历` : ''].filter(Boolean).join(' · ');
+    return `<label class="chr-pick${on ? ' on' : ''}" title="${esc(c.id)}">
+        <input type="checkbox" class="chr-pick-box" value="${esc(c.id)}"${on ? ' checked' : ''}>
+        <span class="ch-avatar">${characterAvatarInner(c)}</span>
+        <span class="chr-pick-n">${esc(c.name)}</span>
+        <span class="chr-pick-m">${esc(meta)}</span>
+      </label>`;
+  }).join('');
+  return `<div class="chr-pool">
+      <div class="chr-pool-head">${IC_USERS}<span class="lb">这位写手的角色池</span>
+        <span class="spacer"></span>
+        <span class="ch-count">已选 ${activeIds.length} / 池中 ${all.length}</span>
+        <button class="ghost sm" type="button" onclick="newCharForWriter('${b.id}')" title="新建一位角色，并自动加进这位写手的角色池">${IC_PLUS}<span class="lb">新建角色</span></button>
+      </div>
+      ${all.length
+      ? `<div class="chr-pool-list">${rows}</div>`
+      : `<div class="chr-pool-empty">角色池还是空的。点「新建角色」建一位，或者直接跟这位写手聊 —— 它可以在剧情里提议新建人物。</div>`}
+      <div class="chr-pool-note">勾选的角色会写进它的提示词（【你的角色池】），它只能改自己池里的角色、也只能给池里的角色沉淀经历。角色本体在全局角色池，所有写手共用。</div>
+    </div>`;
+}
+
+// 从写手设置里新建角色：建完自动挂进这位写手的池子（否则建完它自己也写不了）
+function newCharForWriter(botId) {
+  _chrNewWriter = botId;
+  openCharacterEditModal(null);
+}
+
+// 重绘写手设置里那块角色池（只换这一块，不动用户正在填的其他表单项）。
+// ★ 不加这个会有静默 bug：在设置里「新建角色」后新角色已经进池子了，
+//   但勾选列表还是旧的（没有它）—— 用户再点保存，saveBot 按可见勾选框写
+//   activeCharacterIds，就把刚建的角色又踢出去了。
+function refreshBotPool(botId) {
+  const wrap = document.querySelector('#bot-settings-modal .chr-pool');
+  if (!wrap) return;
+  const b = (state.bots || []).find((x) => x.id === botId);
+  if (!b) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = botPoolHtml(b);
+  const nu = tmp.querySelector('.chr-pool');
+  if (nu) wrap.replaceWith(nu);
+}
+
+// 把角色挂进某位写手的角色池（追加式，不动已有引用）
+async function attachCharToWriter(botId, charId) {
+  const b = (state.bots || []).find((x) => x.id === botId);
+  if (!b) return false;
+  const ids = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : []).slice();
+  if (!ids.includes(charId)) ids.push(charId);
+  const r = await api(`/api/bots/${encodeURIComponent(botId)}/characters`, 'PUT', { characterIds: ids });
+  if (!r.ok) {
+    toast(`已创建，但没能加进写手的角色池：${r.err || '未知错误'}`, 'err');
+    return false;
+  }
+  if (r.activeCharacterIds) b.activeCharacterIds = r.activeCharacterIds;
+  return true;
 }
 
 let _scene = 'c2c';
@@ -3823,7 +3904,11 @@ function renderEditBar(ed) {
     label = `管理员建议修改角色「${p.name || p.characterId}」的 ${ks}${p.reason ? `　原因：${p.reason}` : ''}`;
   }
   else if (ed.type === 'character_create') {
-    label = `管理员建议在角色池新建角色「${p.name}」${p.reason ? `　原因：${p.reason}` : ''}`;
+    // ★ 写手也能提议新建（propose_character_create），措辞要和管理员区分开
+    const who = p.writerName ? `写手「${p.writerName}」建议` : '管理员建议';
+    label = `${who}在角色池新建角色「${p.name}」`
+      + (p.writerName ? '，并加入自己的角色池' : '')
+      + `${p.reason ? `　原因：${p.reason}` : ''}`;
   }
   else if (ed.type === 'experience_commit') {
     // 写手提交的经历沉淀（走 opts.onPending），不是管理员 —— 措辞要区分开
@@ -3959,7 +4044,8 @@ async function confirmEdit(btn) {
     desc = `将修改角色「${p.name || p.characterId}」的 ${ks}（旧版本会自动留档，可回滚）`;
   }
   else if (ed.type === 'character_create') {
-    desc = `将在角色池新建角色「${p.name}」`;
+    desc = `将在角色池新建角色「${p.name}」`
+      + (p.writerName ? `，并加入写手「${p.writerName}」的角色池` : '');
   }
   else if (ed.type === 'experience_commit' || ed.type === 'experience_edit') {
     desc = p.op === 'remove'
@@ -3991,8 +4077,12 @@ async function confirmEdit(btn) {
     r = await api('/api/characters', 'POST', {
       name: p.name, persona: p.persona, traits: p.traits, age: p.age,
       appearance: p.appearance, background: p.background, tags: p.tags,
-      source: 'admin',
+      source: p.source || 'admin',
     });
+    // ★ 写手提议的新角色：建完挂进它的角色池，否则它自己也写不了（它只能写自己池里的角色）
+    if (r.ok && p.writerId && r.character && r.character.id) {
+      await attachCharToWriter(p.writerId, r.character.id);
+    }
   } else if (ed.type === 'experience_commit') {
     if (!p.characterId) return toast('缺少 characterId', 'err');
     // ★ 走 POST /api/characters/:id/commit —— 服务端内部调 characters.commitExperience：
@@ -4284,6 +4374,12 @@ async function saveBot(id) {
     // 长度自主权：空 = 跟随全局；三档之一 = 单独覆盖
     lengthPerm: $('#f-length-perm') && $('#f-length-perm').value ? $('#f-length-perm').value : undefined,
   };
+  // 角色池勾选（写手设置里的「这位写手的角色池」）。
+  // ★ 只在弹窗里真有这块时才写 —— 没有就保持原值，别把池子清成空。
+  const boxes = [...document.querySelectorAll('#bot-settings-modal .chr-pick-box')];
+  if (boxes.length) {
+    bots[i].activeCharacterIds = boxes.filter((x) => x.checked).map((x) => x.value);
+  }
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   // 保存成功后关掉设置弹窗并刷新（角色卡上的名称/模型/状态会随之更新）
@@ -5466,7 +5562,7 @@ Object.assign(window, {
   // 角色池 / 角色标签页（内联 onclick 引用；顶层 function 声明才会挂 window）
   openCharacterPool, characterEdit, saveCharacter, characterDelete,
   characterHistory, characterRollback, characterAttach, characterDetach,
-  characterSearch, loadCharacters,
+  characterSearch, loadCharacters, newCharForWriter,
   // 仅被模板字符串调用（eslint 认不出）→ 显式挂一次消除 no-unused-vars
   snippet, characterAvatarInner,
   // 挂在 oncontextmenu 上：lint 的 no-unused-vars 只认 onclick 里的引用

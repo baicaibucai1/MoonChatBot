@@ -273,9 +273,10 @@ try {
   check('system 含输出方式三档（叙述/对白/自主判断）',
     sysText.includes('叙述：') && sysText.includes('对白：') && sysText.includes('自己判断，直接写'),
     '');
-  check('system 含角色池段并带角色 id', /【你的角色（共 \d+ 位）】/.test(sysText) && sysText.includes(CHR_ID), '');
-  check('system 含改写约定 + 工具引导',
-    sysText.includes('propose_character_edit') && sysText.includes('不要直接断言'), '');
+  check('system 含角色池段并带角色 id', /【你的角色池（你选定 \d+ 位 \/ 池中 \d+ 位）】/.test(sysText) && sysText.includes(CHR_ID), '');
+  check('system 含改写 + 新建的写权限说明',
+    sysText.includes('propose_character_edit') && sysText.includes('propose_character_create')
+    && sysText.includes('自动加到你的角色池') && sysText.includes('只能改你自己角色池里的角色'), '');
 
   const shots = path.join(HERE, 'shots');
   fs.mkdirSync(shots, { recursive: true });

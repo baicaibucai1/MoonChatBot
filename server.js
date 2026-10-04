@@ -132,7 +132,8 @@ function buildWriterBlock(cfg, bot) {
   //   否则它只能靠名字猜，而名字可能重复/将来可能改。
   if (active.length) {
     lines.push('');
-    lines.push(`【你的角色（共 ${active.length} 位）】`);
+    // ★ 带上「池中总数」：写手得知道自己池子外还有谁，才会去用 list_characters 而不是凭空造
+    lines.push(`【你的角色池（你选定 ${active.length} 位 / 池中 ${all.length} 位）】`);
     for (const ch of active) {
       lines.push('');
       lines.push(`（id: ${ch.id}）`);
@@ -143,25 +144,29 @@ function buildWriterBlock(cfg, bot) {
     }
   } else if (all.length) {
     lines.push('');
-    lines.push(`【你的角色】当前没有选定要写的角色。角色池里有 ${all.length} 位可选：`
+    lines.push(`【你的角色池（你选定 0 位 / 池中 ${all.length} 位）】当前没有选定要写的角色。可选：`
       + all.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')
       + (all.length > 20 ? ' …' : '')
-      + '。可以在面板里选定角色后再聊。');
+      + '。用户可以在面板（写手设置里的「这位写手的角色池」）勾选，'
+      + '你也可以用 propose_character_create 提议新建一位——确认后会自动进你的池子。');
   } else {
     lines.push('');
-    lines.push('【你的角色】角色池还是空的。如果需要，你可以在剧情中创造人物，'
-      + '并建议用户把他们加进角色池。');
+    lines.push('【你的角色池（空）】还没有任何角色。你可以在剧情里创造人物，'
+      + '并用 propose_character_create 提议把他加进角色池（确认后自动归你）。');
   }
 
-  // ---- 改写角色卡的约定（用户决策：可以改，但可回滚） ----
+  // ---- 角色池的写权限（用户决策 2026-10-05：写手可以往**自己的角色池**里新建角色）----
+  // ★ 权限边界讲清楚，否则模型会两种极端：要么什么都不敢建、要么随手改别人家的角色。
   lines.push('');
-  lines.push('【关于改写角色设定】');
-  lines.push('剧情发展需要时（如角色成长、关系变化），你可以提议修改角色设定。'
-    + '修改会进入待确认队列，用户点了确认才生效，且旧版本会留档可回滚，所以你不用担心改坏。');
-  lines.push('要改就用 propose_character_edit 工具（字段：characterId / name / persona / traits / '
-    + 'age / appearance / background / reason），只需给出你要改的那几项。'
-    + '记不清角色 id 时先用 list_characters 查。');
-  lines.push('不要直接断言"我已经改了设定"——要说明这是提议，等用户确认。');
+  lines.push('【关于你的角色池：新建与改写】');
+  lines.push('- 新建：剧情里需要新人物（路人、对手、新登场者）时，用 propose_character_create 提议建一位。'
+    + '用户点了「确认应用」后，角色会进全局角色池，并**自动加到你的角色池**里，'
+    + '你下一轮就能写他、也能给他沉淀经历。');
+  lines.push('- 改写：用 propose_character_edit 改设定（成长、关系变化、补外表/背景）。'
+    + '**只能改你自己角色池里的角色** —— 改别人池里的角色会被拒绝（那是别的写手笔下的人物）。');
+  lines.push('- 两者都只是「提议」：用户确认才生效，改设定还会自动留档可回滚。'
+    + '所以不要断言「我已经建好了 / 我已经改好了」，只说这是提议、等用户确认。');
+  lines.push('- 记不清角色 id 就先用 list_characters 查（它会标出哪些是你当前选定的）。');
 
   // ---- 经历与计数器（用户决策 2026-10-04，详见《经历与计数器机制.md》）----
   // ★ 只有选了角色才讲这段：没角色时它没有可沉淀的对象，讲了只会让它乱调工具。
@@ -207,6 +212,8 @@ function listCharactersFor(bot, cfg) {
   } else if (declared.length === 0) {
     out += '\n【计数器】你还没有声明计数器（在「写手设定」里加一段「## 计数器」即可）。';
   }
+  out += '\n【写权限】只有标了「← 你当前选定」的角色你能改设定 / 沉淀经历；'
+    + '池里其他角色归别的写手。需要新人物请用 propose_character_create 提议新建（确认后自动归你）。';
   return out;
 }
 
@@ -298,6 +305,32 @@ async function chatWithBot(botId, content, opts = {}) {
           reason: { type: 'string', description: '为什么改（一句话，会展示给用户，帮助他判断是否同意）' },
         },
         required: ['characterId'],
+      },
+    },
+  });
+  // ★ 往自己的角色池里新建角色（用户决策 2026-10-05：给写手这个权限）。
+  //   与管理员侧 propose_character_create 同名同语义，差别只在 payload 里带 writerId：
+  //   确认后除了建角色，还要把它挂进这位写手的 activeCharacterIds —— 否则建完它也写不了。
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'propose_character_create',
+      description: '【写操作·需确认】往**你自己的角色池**里新建一位角色。'
+        + '不会立刻生效——生成一条待确认建议，用户点「确认应用」后才会创建，'
+        + '并自动成为你笔下的角色（不用再让人去面板勾选）。'
+        + '适合剧情里新出场的人物，或你需要一个新人物来推动情节。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '角色名（必填），如 银' },
+          persona: { type: 'string', description: '角色设定全文（推荐给：身份、性格、说话方式、与用户的关系）' },
+          traits: { type: 'string', description: '性格特点（可选，一句话）' },
+          age: { type: 'string', description: '年龄（可选）' },
+          appearance: { type: 'string', description: '外表形象（可选）' },
+          background: { type: 'string', description: '背景故事（可选）' },
+          reason: { type: 'string', description: '为什么要建这位角色（一句话，展示给用户帮助判断）' },
+        },
+        required: ['name'],
       },
     },
   });
@@ -495,6 +528,13 @@ async function chatWithBot(botId, content, opts = {}) {
         if (!ch) {
           content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`
             + (all.length ? `当前池里有：${all.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')}` : '');
+        } else if (!(Array.isArray(bot.activeCharacterIds) && bot.activeCharacterIds.includes(ch.id))) {
+          // ★ 权限边界：写手只能改写**自己角色池里**的角色。
+          //   池外的角色属于别的写手笔下（或还没归任何人），让它擅自改会出现「谁改的」说不清。
+          const mine = (bot.activeCharacterIds || []).map((id) => C.find(all, id)).filter(Boolean);
+          content = `角色「${ch.name}」不在你的角色池里 —— 你只能改写自己选定的角色。`
+            + (mine.length ? `你当前能改的是：${mine.map((x) => `${x.name}(${x.id})`).join('、')}。` : '你当前没有选定任何角色。')
+            + '如果你确实需要写这位角色，请在正文里告诉用户，让他在写手设置里把这位角色勾给你。';
         } else {
           const patch = C.buildEditPatch(args);
           if (!Object.keys(patch).length) {
@@ -516,6 +556,43 @@ async function chatWithBot(botId, content, opts = {}) {
               + '请以「提议」的口吻告知用户，不要说「已经改好了」。';
           }
         }
+      } else if (tc.function.name === 'propose_character_create') {
+        // ★ 同样只出待确认建议，不落盘。落盘在用户点「确认应用」后走
+        //   POST /api/characters（内部调 characters.create，首版自动进历史档）。
+        //   ★ payload 带 writerId：前端确认后要顺手 PUT /api/bots/:id/characters，
+        //     把新角色挂进这位写手的池子——否则建完它自己也写不了。
+        const C = require('./lib/characters');
+        const nm = String(args.name ?? '').trim();
+        if (!nm) {
+          content = '角色名不能为空。请给出 name 后重试。';
+        } else {
+          const all = C.list(cfg.characters);
+          const dup = all.find((x) => String(x.name || '').trim() === nm);
+          const reason = String(args.reason || '').trim();
+          if (opts.onPending) {
+            try {
+              opts.onPending({
+                type: 'character_create',
+                payload: {
+                  name: nm,
+                  persona: String(args.persona ?? ''),
+                  traits: String(args.traits ?? ''),
+                  age: String(args.age ?? ''),
+                  appearance: String(args.appearance ?? ''),
+                  background: String(args.background ?? ''),
+                  reason,
+                  writerId: bot.id,
+                  writerName: bot.name || bot.id,
+                  source: 'writer',
+                },
+              }, `待确认：写手「${bot.name || bot.id}」新建角色「${nm}」`);
+            } catch {}
+          }
+          content = `已生成新建角色「${nm}」的建议，等待用户在面板确认（确认后会自动进你的角色池）。`
+            + (dup ? `注意：角色池里已经有一位叫「${nm}」的（id: ${dup.id}）。如果不是同一位请换个名字；`
+              + `如果是同一位、你想改他，请用 propose_character_edit（前提是他已在你的角色池里）。` : '')
+            + '请以「提议」的口吻告知用户，不要说「已经建好了」。';
+        }
       } else if (tc.function.name === 'propose_experience_commit') {
         // ★ 经历沉淀：同样只出待确认建议，不落盘。
         //   落盘走 POST /api/characters/:id/commit（内部调 characters.commitExperience）。
@@ -526,6 +603,10 @@ async function chatWithBot(botId, content, opts = {}) {
         const ch = C.find(all, String(args.characterId || ''));
         if (!ch) {
           content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`;
+        } else if (!(Array.isArray(bot.activeCharacterIds) && bot.activeCharacterIds.includes(ch.id))) {
+          // 与改写设定同一条权限边界：只能给自己角色池里的角色记经历
+          content = `角色「${ch.name}」不在你的角色池里 —— 你只能给自己选定的角色沉淀经历。`
+            + '别的人物归别的写手管，你记上去就成了「谁写的说不清」。';
         } else {
           const declared = declaredCountersOf(botId);
           const raw = (args.counters && typeof args.counters === 'object' && !Array.isArray(args.counters))

@@ -70,12 +70,17 @@ export async function patchSandboxConfig(dir, opts = {}) {
   const cfgPath = path.join(dir, 'config.json');
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
 
-  // ★ 兜底：config.json 是运行时数据（未入库，可能被用户清空成 0 写手）。
-  //   而探针 / 前端测试都按 bots[0].id 拼 :id 参数，没有写手就跑不了。
-  //   所以沙箱自己造一位「探针写手」+ 一位探针角色 —— 只存在于副本里，绝不碰真实 config。
+  // ★★ 沙箱恒用固定 fixture（2026-10-05 改）：不管真实 config.json 里有没有写手/角色，
+  //   一律整段替换成探针数据。
+  //   为什么不再「只在为空时才补」：config.json 是**运行时数据**，用户随时会在面板里
+  //   新建写手（比如 ARC1）。一旦有真实写手，探针就按 bots[0] 取到它 —— 而它不带
+  //   heartbeats / activeCharacterIds 这些可选字段，于是：
+  //     ① api-baseline 报「消失 N 项」的假偏差（shape 契约被真实数据污染）；
+  //     ② verify-* 脚本硬编码的 BOT1 / 探针写手 全部落空，静默跑在错误的对象上。
+  //   沙箱的语义本来就是「可复现的隔离环境」，恒用 fixture 才是对的；真实 config 绝不改动。
   //   ★ 字段必须对齐 api-baseline.json 里 entry:cors-allowed 记录的完整 shape，
   //     否则基线会报「消失 N 项」的假偏差（shape 是结构性契约，缺字段就算变更）。
-  if (!(cfg.bots || []).length) {
+  {
     // ★ 数组字段都放至少一个元素：shape 是「结构性契约」，空数组会让
     //   heartbeats[].* / moments[].* / activeCharacterIds[] 这些内层字段整批消失，
     //   基线就会报「消失 N 项」的假偏差（内容本身是假的，只有形状有意义）。
@@ -94,7 +99,7 @@ export async function patchSandboxConfig(dir, opts = {}) {
       }],
     }];
   }
-  if (!(cfg.characters || []).length) {
+  {
     cfg.characters = [{
       id: 'CHRprobe0001', ts: 1700000000000, name: '探针角色',
       persona: '沙箱探针用的角色设定。', traits: '沉稳', age: '18',
