@@ -2589,6 +2589,12 @@ async function openMemFile(id, key) {
   const r = await api(`/api/memory/${id}/files`);
   const f = (r.files || []).find(x => x.key === key);
   if (!f) return toast('文件不存在', 'err');
+  // ★ 机器读的语法要给出来：这两份文件里有引擎会解析的标记行，
+  //   用户不知道写法就只能靠猜（或靠管理员 AI 猜）。
+  const SYNTAX_HINTS = {
+    standards: '计数器写在正文里：<code>##Counter：名字[最小,最大]</code>　，<code>[]</code> 留空或不写 = 不限',
+    world: '世界卡里可以有多个世界：<code>## 世界：名字</code>　（写手挑一个作为当前活跃世界）',
+  };
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'memfile-modal';
@@ -2614,6 +2620,7 @@ async function openMemFile(id, key) {
           <label class="frm">备注（可自定义说明，会显示在记忆库列表）</label>
           <input id="mf-desc" type="text" value="${esc(f.desc)}" placeholder="这段记忆的用途说明…" maxlength="80">
         </div>
+        ${SYNTAX_HINTS[key] ? `<div class="mf-syntax">${IC_BULB}<span>${SYNTAX_HINTS[key]}</span></div>` : ''}
         <label class="frm">内容概览</label>
         <pre class="mf-preview">${esc(f.content)}</pre>
       </div>
@@ -3942,10 +3949,17 @@ function renderEditBar(ed) {
   }
   else if (ed.type === 'experience_commit') {
     // 写手提交的经历沉淀（走 opts.onPending），不是管理员 —— 措辞要区分开
+    // ★ 写成「好感度 +10（0 → 10）」：只给增量的话，被范围收敛到边界时用户看不出来
     const d = p.counters && Object.keys(p.counters).length
-      ? '，计数器 ' + Object.entries(p.counters).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、')
+      ? '，计数器 ' + Object.entries(p.counters).map(([k, v]) => {
+        const b = Number((p.counterFrom || {})[k]) || 0;
+        return `${k} ${v > 0 ? '+' : ''}${fmtNum(v)}（${fmtNum(b)} → ${fmtNum(b + v)}）`;
+      }).join('、')
       : '';
-    label = `写手建议为「${p.name}」沉淀一段经历${d}${p.reason ? `　原因：${p.reason}` : ''}`;
+    const cl = Array.isArray(p.clamped) && p.clamped.length
+      ? `　（已按范围收敛：${p.clamped.map(x => `${x.name} 上限 ${x.max}`).join('、')}）`
+      : '';
+    label = `写手建议为「${p.name}」沉淀一段经历${d}${cl}${p.reason ? `　原因：${p.reason}` : ''}`;
   }
   else if (ed.type === 'counter_edit') {
     label = p.op === 'remove'
@@ -4024,7 +4038,14 @@ async function previewEdit(btn) {
     else if (p.text) lines.push(`【经历】\n${p.text}`);
     if (p.counters && Object.keys(p.counters).length) {
       lines.push('【计数器变化】\n' + Object.entries(p.counters)
-        .map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('\n'));
+        .map(([k, v]) => {
+          const b = Number((p.counterFrom || {})[k]) || 0;
+          return `${k}　${fmtNum(b)} → ${fmtNum(b + v)}（${v > 0 ? '+' : ''}${fmtNum(v)}）`;
+        }).join('\n'));
+    }
+    if (Array.isArray(p.clamped) && p.clamped.length) {
+      lines.push('【已按范围收敛】\n'
+        + p.clamped.map((x) => `${x.name}：想给 ${fmtNum(x.want)}，实际落到 ${fmtNum(x.value)}`).join('\n'));
     }
     if (p.dropped && p.dropped.length) {
       lines.push(`【已忽略】\n${p.dropped.join('、')}（不是该写手声明过的计数器名，不会生效）`);

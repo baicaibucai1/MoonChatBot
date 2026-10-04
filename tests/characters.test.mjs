@@ -572,6 +572,111 @@ test('parseDeclaredCounters：剥掉名字上的引号', () => {
   assert.deepEqual(characters.parseDeclaredCounters('## 计数器\n- 「好感度」：0–100'), ['好感度']);
 });
 
+// ---------- ★ 计数器新语法：##Counter：名字[范围] ----------
+
+test('parseCounterSpecs：基本语法（## 后有无空格都认，全角/半角冒号都认）', () => {
+  const md = [
+    '# 角色：银',
+    '##Counter：好感度[0,100]',
+    '## Counter：信任[0,100]',
+    '##counter: 秘密[]',
+    '##Counter：羁绊',
+  ].join('\n');
+  const specs = characters.parseCounterSpecs(md);
+  assert.deepEqual(specs.map((s) => s.name), ['好感度', '信任', '秘密', '羁绊']);
+  assert.deepEqual([specs[0].min, specs[0].max], [0, 100]);
+  assert.equal(specs[2].min, null, '[] 留空 = 不限');
+  assert.equal(specs[2].max, null);
+  assert.equal(specs[3].min, null, '不写方括号 = 不限');
+  assert.equal(specs[3].max, null);
+});
+
+test('parseCounterSpecs：范围写法宽容（波浪线/连字符/中文逗号/负数/单点）', () => {
+  assert.deepEqual(characters.parseCounterRange('0~100'), { min: 0, max: 100 });
+  assert.deepEqual(characters.parseCounterRange('0-100'), { min: 0, max: 100 });
+  assert.deepEqual(characters.parseCounterRange('0，100'), { min: 0, max: 100 });
+  assert.deepEqual(characters.parseCounterRange('0–100'), { min: 0, max: 100 });
+  assert.deepEqual(characters.parseCounterRange('-10~10'), { min: -10, max: 10 });
+  assert.deepEqual(characters.parseCounterRange('-10-10'), { min: -10, max: 10 });
+  assert.deepEqual(characters.parseCounterRange('100'), { min: null, max: 100 }, '单值 = 上限');
+  assert.deepEqual(characters.parseCounterRange(''), { min: null, max: null });
+  assert.deepEqual(characters.parseCounterRange('120,0'), { min: 0, max: 120 }, '写反了自动纠正');
+});
+
+test('parseCounterSpecs：名字后面可以跟说明，说明不进名字', () => {
+  const specs = characters.parseCounterSpecs('##Counter：理智[0,100] 低于 20 会失控');
+  assert.equal(specs.length, 1);
+  assert.equal(specs[0].name, '理智');
+  assert.equal(specs[0].desc, '低于 20 会失控');
+});
+
+test('parseCounterSpecs：`##Counter` 行优先于旧「## 计数器」小节', () => {
+  const md = '## 计数器\n- 旧写法：0-100\n##Counter：好感度[0,100]';
+  assert.deepEqual(characters.parseDeclaredCounters(md), ['好感度'], '新语法赢了就只认新的');
+});
+
+test('characterCounterSpecs：persona / 背景 / 外表 任一一处写的都能扫到', () => {
+  const c = characters.normalizeCharacter({
+    id: 'CHR1',
+    persona: '##Counter：好感度[0,100]',
+    background: '##Counter：声望[]',
+    appearance: '##Counter：伤痕[0,10]',
+  });
+  const specs = characters.characterCounterSpecs(c);
+  assert.deepEqual(specs.map((s) => s.name), ['好感度', '声望', '伤痕']);
+  assert.equal(characters.findCounterSpec(specs, '好感度').max, 100);
+  assert.equal(characters.findCounterSpec(specs, '声望').max, null);
+  assert.equal(characters.findCounterSpec(specs, '不存在'), null);
+});
+
+test('clampCounterValue：越界收敛到边界，没越界就原样通过', () => {
+  const spec = { name: '好感度', min: 0, max: 100 };
+  assert.deepEqual(characters.clampCounterValue(spec, 130), { value: 100, clamped: true, min: 0, max: 100 });
+  assert.deepEqual(characters.clampCounterValue(spec, -5), { value: 0, clamped: true, min: 0, max: 100 });
+  assert.deepEqual(characters.clampCounterValue(spec, 60), { value: 60, clamped: false, min: 0, max: 100 });
+  assert.equal(characters.clampCounterValue(null, 9999).clamped, false, '没有规格 = 不限');
+});
+
+test('projectCounters：增量按范围收敛，且与实际落盘用的是同一套算法', () => {
+  const specs = [{ name: '好感度', min: 0, max: 100 }];
+  const { applied, clamped } = characters.projectCounters({ 好感度: 95 }, { 好感度: 20 }, specs);
+  assert.deepEqual(applied, { 好感度: 5 }, '95 + 20 越过 100 → 只加 5');
+  assert.equal(clamped.length, 1);
+  assert.equal(clamped[0].want, 115);
+  assert.equal(clamped[0].value, 100);
+});
+
+test('commitExperience：带 specs 时把结果压回范围，applied 报的是**实际生效**的增量', () => {
+  const pool = [];
+  const c = characters.create(pool, { id: 'CHR1', name: '银', persona: '##Counter：好感度[0,100]' }, 'user');
+  const specs = characters.characterCounterSpecs(c);
+  const r = characters.commitExperience(pool, c.id, { text: '被救了一次', counters: { 好感度: 200 } }, specs);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.applied, { 好感度: 100 }, '0 + 200 → 收敛到 100');
+  assert.equal(r.clamped.length, 1);
+  assert.equal(r.clamped[0].value, 100);
+  assert.equal(characters.find(pool, c.id).counters.好感度, 100);
+  // 经历条目上记的也是实际增量，不能记成 200
+  assert.deepEqual(r.entry.counters, { 好感度: 100 });
+});
+
+test('setCounter：绝对值同样按范围收敛（管理员面板/接口直接打也逃不掉）', () => {
+  const pool = [];
+  const c = characters.create(pool, { id: 'CHR1', name: '银', persona: '##Counter：好感度[0,50]' }, 'user');
+  const specs = characters.characterCounterSpecs(c);
+  const r = characters.setCounter(pool, c.id, '好感度', 80, specs);
+  assert.equal(r.after, 50);
+  assert.equal(r.clamped.length, 1);
+  assert.equal(characters.find(pool, c.id).counters.好感度, 50);
+});
+
+test('describeCounterSpec / describeCounterRange：可读形式', () => {
+  assert.equal(characters.describeCounterSpec({ name: '好感度', min: 0, max: 100 }), '好感度（0~100）');
+  assert.equal(characters.describeCounterSpec({ name: '秘密', min: null, max: null }), '秘密（不限）');
+  assert.equal(characters.describeCounterRange({ min: null, max: 100 }), '≤100');
+  assert.equal(characters.describeCounterRange({ min: 0, max: null }), '≥0');
+});
+
 // ---------- 沉淀经历 ----------
 
 test('commitExperience：增量累加计数器 + 追加一条经历（带 by）', () => {

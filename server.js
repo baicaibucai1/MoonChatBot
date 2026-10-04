@@ -103,14 +103,49 @@ function makeChatFn(botId) {
 // ★ 找哪份文件（用户决策 2026-10-05）：计数器设计属于「② 标准要求」，
 //   所以**先读 standards.md**；老写手把声明写在「写手设定」(persona.md) 里的，
 //   继续认 —— 两处都读、新文件优先，老配置不会突然失效。
-function declaredCountersOf(botId) {
+// 该写手声明了哪些计数器：**带范围**的规格 [{ name, min, max }]。
+// 新语法 `##Counter：名字[0,100]` 解析得出范围；旧写法只有名字 → min/max 为 null（= 不限）。
+function declaredCounterSpecsOf(botId) {
   const c = require('./lib/characters');
   const from = (key) => {
-    try { return c.parseDeclaredCounters(memory.readMemoryFile(botId, key) || ''); } catch { return []; }
+    let text = '';
+    try { text = memory.readMemoryFile(botId, key) || ''; } catch { text = ''; }
+    const specs = c.parseCounterSpecs(text);
+    if (specs.length) return specs;
+    // 旧写法只有名字 —— 名字照样要认（权限层），范围就当「不限」
+    return c.parseDeclaredCounters(text).map((n) => ({ name: n, min: null, max: null }));
   };
   const std = from('standards');
   if (std.length) return std;
   return from('persona');
+}
+
+// ★ 某个角色 + 某位写手 → 这台戏实际生效的计数器规格。
+//   角色卡上的 `##Counter：名字[范围]` 是**权威来源**（它写在角色身上，跟着角色走）；
+//   写手在「标准要求」里声明的同名规格作为**补充**（角色卡没写范围时才用）。
+function counterSpecsFor(botId, ch) {
+  const c = require('./lib/characters');
+  const own = c.characterCounterSpecs(ch);
+  const byWriter = declaredCounterSpecsOf(botId);
+  const out = own.slice();
+  const seen = new Set(own.map((s) => s.name));
+  for (const s of byWriter) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    out.push(s);
+  }
+  return out;
+}
+
+// 「被收敛了」的回执文案：`好感度 想给 130，已收敛到上限 100`
+function clampedText(clamped) {
+  if (!Array.isArray(clamped) || !clamped.length) return '';
+  return clamped.map((x) => {
+    const b = [];
+    if (Number.isFinite(x.min) && x.want < x.min) b.push(`下限 ${x.min}`);
+    if (Number.isFinite(x.max) && x.want > x.max) b.push(`上限 ${x.max}`);
+    return `「${x.name}」想给 ${x.want}${b.length ? '，已收敛到' + b.join('/') + ` → ${x.value}` : ''}`;
+  }).join('；');
 }
 
 function buildWriterBlock(cfg, bot) {
@@ -118,7 +153,9 @@ function buildWriterBlock(cfg, bot) {
   const all = Array.isArray(cfg.characters) ? cfg.characters : [];
   const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
   const active = activeIds.map((id) => c.find(all, id)).filter(Boolean);
-  const declared = active.length ? declaredCountersOf(bot.id) : [];
+  // ★ 带范围的规格（角色卡 `##Counter：名字[范围]` 优先，其次写手「标准要求」里的声明）
+  const declaredSpecs = active.length ? declaredCounterSpecsOf(bot.id) : [];
+  const declared = declaredSpecs.map((s) => s.name);
 
   const lines = [];
   lines.push('');
@@ -145,8 +182,8 @@ function buildWriterBlock(cfg, bot) {
       lines.push('');
       lines.push(`（id: ${ch.id}）`);
       lines.push(c.brief(ch, { full: true }));
-      // 角色当前状态：只显示**本写手声明过**的计数器 + 最近经历
-      const st = c.stateBrief(ch, declared, { recent: 8 });
+      // 角色当前状态：只显示**本写手声明过**的计数器（带范围）+ 最近经历
+      const st = c.stateBrief(ch, declared, { recent: 8, specs: counterSpecsFor(bot.id, ch) });
       if (st) lines.push(st);
     }
   } else if (all.length) {
@@ -199,11 +236,15 @@ function buildWriterBlock(cfg, bot) {
     lines.push('');
     lines.push('【关于角色经历与计数器】');
     if (declared.length) {
-      lines.push(`- 你声明过的计数器：${declared.join('、')}。**只有这些名字对你有意义** —— `
-        + '别的写手声明的计数器你看不到、也不该去改（同名才是共享同一个值）。');
+      lines.push(`- 你声明过的计数器：${declaredSpecs.map((s) => c.describeCounterSpec(s)).join('、')}。`
+        + '**只有这些名字对你有意义** —— 别的写手声明的计数器你看不到、也不该去改（同名才是共享同一个值）。');
+      lines.push('- ★ 范围以**角色卡上写的 `##Counter：名字[最小,最大]` 为准**（角色卡没写时才用你这里的）。'
+        + '超出范围不会被拒绝，但会被**自动收敛到边界** —— 上限 100 时你给 +20 到 130，实际只会落到 100，'
+        + '工具回执会明确告诉你「已收敛到上限」；看到这句就别再重复加了。');
+      lines.push('- 计数器可以在角色卡正文里直接写：`##Counter：好感度[0,100]`，`[]` 留空 = 不限。');
     } else {
-      lines.push('- 你还没有声明任何计数器。想用得先提议在你的「标准要求」里补一段「## 计数器」，'
-        + '每条写成「- 名字：范围 / 初始值 / 何时增减」（用 propose_memory_edit，选 standards 这个文件）。');
+      lines.push('- 你还没有声明任何计数器。想用得先提议在你的「标准要求」里补一段计数器声明，'
+        + '每条写成 `##Counter：名字[0,100]`（`[]` 留空表示不限；用 propose_memory_edit，选 standards 这个文件）。');
     }
     lines.push('- 剧情里出现值得留存的变化（角色成长、关系变化、关键决定）时，用 '
       + 'propose_experience_commit 提议把这段经历**沉淀到角色卡**上，可以同时带上计数器的**增量**'
@@ -224,18 +265,23 @@ function listCharactersFor(bot, cfg) {
   const lines = all.map((x) => `- ${x.name}（id: ${x.id}）${active.has(x.id) ? ' ← 你当前选定' : ''}`
     + (x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : ''));
   let out = `【角色池】共 ${all.length} 位\n` + lines.join('\n');
-  // ★ 只列出**本写手声明过**的计数器名（同名共享、异名不引用）
-  const declared = declaredCountersOf(bot.id);
+  // ★ 只列出**本写手声明过**的计数器名（同名共享、异名不引用），并带上范围
+  const declaredSpecs = declaredCounterSpecsOf(bot.id);
+  const declared = declaredSpecs.map((s) => s.name);
   const rows = [];
   for (const x of all) {
     const view = c.declaredView(x, declared);
+    const specs = counterSpecsFor(bot.id, x);
     const ks = Object.keys(view);
-    if (ks.length) rows.push(`- ${x.name}：` + ks.map((n) => `${n} ${view[n]}`).join('、'));
+    if (ks.length) {
+      rows.push(`- ${x.name}：` + ks.map((n) => `${n} ${view[n]}（${c.describeCounterRange(c.findCounterSpec(specs, n))}）`).join('、'));
+    }
   }
   if (rows.length) {
-    out += `\n【计数器的当前值（只列你声明过的：${declared.join('、')}）】\n` + rows.join('\n');
+    out += `\n【计数器的当前值（只列你声明过的：${declaredSpecs.map((s) => c.describeCounterSpec(s)).join('、')}）】\n`
+      + rows.join('\n');
   } else if (declared.length === 0) {
-    out += '\n【计数器】你还没有声明计数器（在「标准要求」里加一段「## 计数器」即可）。';
+    out += '\n【计数器】你还没有声明计数器（在「标准要求」里加一段 `##Counter：名字[0,100]` 即可）。';
   }
   out += '\n【写权限】只有标了「← 你当前选定」的角色你能改设定 / 沉淀经历；'
     + '池里其他角色归别的写手。需要新人物请用 propose_character_create 提议新建（确认后自动归你）。';
@@ -692,17 +738,24 @@ async function chatWithBot(botId, content, opts = {}) {
           content = `角色「${ch.name}」不在你的角色池里 —— 你只能给自己选定的角色沉淀经历。`
             + '别的人物归别的写手管，你记上去就成了「谁写的说不清」。';
         } else {
-          const declared = declaredCountersOf(botId);
+          const declaredSpecs = declaredCounterSpecsOf(botId);
+          const declared = declaredSpecs.map((s) => s.name);
+          const specs = counterSpecsFor(botId, ch);
           const raw = (args.counters && typeof args.counters === 'object' && !Array.isArray(args.counters))
             ? args.counters : {};
-          const deltas = C.filterDeclared(raw, declared);
-          const dropped = Object.keys(raw).filter((k) => !(k in deltas));
+          // ★ 先按「本写手声明过的名字」过滤（异名不引用），再按范围收敛。
+          //   收敛必须在**提议阶段**就做：这里算出来的值就是用户确认后真正会写进去的值。
+          const kept = C.filterDeclared(raw, declared);
+          const proj = C.projectCounters(ch.counters || {}, kept, specs);
+          const deltas = proj.applied;
+          const dropped = Object.keys(raw).filter((k) => !(k in kept));
           const text = String(args.text || '').trim().slice(0, 500);
           if (!text && !Object.keys(deltas).length) {
             content = '这条沉淀既没有经历内容、也没有有效的计数器变化，无法提交。'
               + (dropped.length ? `（你给的 ${dropped.join('、')} 不是本写手声明过的计数器名，已忽略）` : '');
           } else {
             const reason = String(args.reason || '').trim();
+            const cur = ch.counters || {};
             if (opts.onPending) {
               try {
                 opts.onPending({
@@ -711,17 +764,26 @@ async function chatWithBot(botId, content, opts = {}) {
                   // 用户决策里「经历产生地在写手」，所以这里落的是写手名而不是 'admin'。
                   payload: {
                     characterId: ch.id, name: ch.name, text, counters: deltas, dropped, reason,
+                    // ★ 带上「变前/变后」：确认条要能写出「好感度 +10（0 → 10）」，
+                    //   光有增量用户看不出收敛到了边界上。
+                    counterFrom: Object.fromEntries(Object.keys(deltas).map((k) => [k, Number(cur[k]) || 0])),
+                    clamped: proj.clamped,
                     by: bot.name || bot.id,
                   },
                 }, `待确认：为「${ch.name}」沉淀经历`);
               } catch {}
             }
             const dTxt = Object.keys(deltas).length
-              ? '，计数器 ' + Object.entries(deltas).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、')
+              ? '，计数器 ' + Object.entries(deltas).map(([k, v]) => {
+                const b = Number(cur[k]) || 0;
+                return `${k} ${v > 0 ? '+' : ''}${v}（${b} → ${b + v}）`;
+              }).join('、')
               : '';
+            const cTxt = clampedText(proj.clamped);
             content = `已生成对「${ch.name}」的经历沉淀建议${dTxt}，等待用户在面板确认。`
               + '请以「提议」的口吻告知用户。'
-              + (dropped.length ? ` 注意：${dropped.join('、')} 不是你声明过的计数器名，已被忽略。` : '');
+              + (dropped.length ? ` 注意：${dropped.join('、')} 不是你声明过的计数器名，已被忽略。` : '')
+              + (cTxt ? ` ★ 已按范围收敛：${cTxt} —— 请按收敛后的数值跟用户说，别再重复加。` : '');
           }
         }
       } else {
@@ -1201,7 +1263,9 @@ function buildAdminSystem(cfg, botId) {
   lines.push('- 用户说「改角色」通常指改**角色池里的角色设定**（用 propose_character_edit）；说「改写手」才指写手配置（用 propose_bot_config_edit）。拿不准就先说清你理解为哪个，再动手。');
   lines.push('');
   lines.push('【角色经历与计数器】（务必分清「值」和「规则」）');
-  lines.push('- 计数器的**值**在**角色卡**上（全体写手共用一张表）；计数器的**规则**（范围/初始值/何时增减）在**写手的「标准要求」**（standards）里。改数值用 propose_counter_edit；改规则要去改 standards 这个文件。');
+  lines.push('- 计数器的**值**在**角色卡**上（全体写手共用一张表）；计数器的**规则**（名字/范围/何时增减）写在两处：'
+    + '**角色卡正文里的 `##Counter：名字[最小,最大]`**（跟着角色走，优先），以及**写手的「标准要求」**（standards，写手自己声明用哪些）。'
+    + '`[]` 留空或不写 = 不限。改数值用 propose_counter_edit（超出范围会被自动收敛到边界）；改规则要改角色卡正文或 standards 这个文件。');
   lines.push('- ★ **同名共享、异名不引用**：两位写手都声明了「好感度」→ 它们读写同一个值；写手只看得见自己声明过的名字。所以给写手加计数器前，先看它已声明了哪些，别重复造同名。');
   lines.push('- **经历是追加式**的：不要「修改」历史条目，要改就删除后重加（propose_experience_edit 先 op=remove 再 op=add）。');
   lines.push('- 想知道角色现在什么状态，用 read_character_state 读它的计数器与经历，别凭印象猜。');
@@ -1716,8 +1780,8 @@ function adminToolSchemas(webEnabled) {
       function: {
         name: 'propose_counter_edit',
         description: '【写操作·需确认】建议设置或删除角色卡上的一个计数器（设置是**绝对值**，不是增量）。'
-          + '不落盘，用户确认后才写入。注意：计数器的「值」在角色卡，'
-          + '而计数器的「规则」（范围/初始值/何时增减）在写手的「写手设定」里 —— 改规则请改写手设定，别改这里。',
+          + '不落盘，用户确认后才写入。★ 角色卡正文里的 `##Counter：名字[最小,最大]` 定义了范围，'
+          + '超出范围的值会被**自动收敛到边界**（回执会说明）。改数值用这里；改范围请去改角色卡正文或写手的「标准要求」。',
         parameters: {
           type: 'object',
           properties: {
@@ -2088,7 +2152,10 @@ async function runAdminTool(cfg, name, args = {}) {
     const lines = [];
     lines.push(`【${ch.name}（${ch.id}）当前状态】`);
     const ck = Object.keys(counters);
-    lines.push('计数器：' + (ck.length ? ck.map((k) => `${k} ${counters[k]}`).join('、') : '（无）'));
+    const cspecs = c.characterCounterSpecs(ch);
+    lines.push('计数器：' + (ck.length
+      ? ck.map((k) => `${k} ${counters[k]}（${c.describeCounterRange(c.findCounterSpec(cspecs, k))}）`).join('、')
+      : '（无）'));
     lines.push(`经历：共 ${exps.length} 条${exps.length > recent.length ? `，下面是最近 ${recent.length} 条` : ''}`);
     for (const e of recent) {
       const d = Object.keys(e.counters || {}).length
@@ -2110,15 +2177,18 @@ async function runAdminTool(cfg, name, args = {}) {
     if (op === 'set') {
       const val = Number(args.value);
       if (!Number.isFinite(val)) throw new Error('设置计数器时必须给数值 value');
+      // ★ 管理员没有「写手」上下文，角色卡上的 `##Counter：` 就是唯一权威来源
+      const r = c.clampCounterValue(c.findCounterSpec(c.characterCounterSpecs(ch), nm), val);
       const payload = {
         type: 'counter_edit',
         payload: {
-          characterId: ch.id, name: ch.name, counter: nm, op, value: val,
+          characterId: ch.id, name: ch.name, counter: nm, op, value: r.value,
           before: Number((ch.counters || {})[nm]) || 0, reason: String(args.reason || ''),
         },
       };
       return {
-        text: `已生成把「${ch.name}」的计数器「${nm}」设为 ${val} 的建议，等待用户确认。`,
+        text: `已生成把「${ch.name}」的计数器「${nm}」设为 ${r.value} 的建议，等待用户确认。`
+          + (r.clamped ? ` ★ 你给的 ${val} 超出范围${c.describeCounterRange(r)}，已收敛到 ${r.value}。` : ''),
         summary: `待确认：改计数器「${nm}」`, pending: payload,
       };
     }

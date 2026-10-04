@@ -205,7 +205,8 @@ async function main() {
         await page.waitForTimeout(400);
         const pv = await page.textContent('#edit-preview').catch(() => '');
         check('预览列出经历正文', pv.includes(EXP_TEXT), pv.slice(0, 100));
-        check('预览列出计数器变化', /好感度\s*\+5/.test(pv));
+        // 新格式：`好感度　0 → 5（+5）`（带变前/变后，被范围收敛时才看得出差别）
+        check('预览列出计数器变化', /好感度/.test(pv) && /\+5/.test(pv) && /→/.test(pv), pv.slice(0, 200));
         check('★ 预览标出「已忽略」的未声明计数器「仇恨」', /仇恨/.test(pv) && /已忽略/.test(pv), pv.slice(0, 200));
         await page.screenshot({ path: path.join(SHOT, 'exp-preview.png') });
         await page.evaluate(() => document.getElementById('edit-preview')?.remove());
