@@ -34,6 +34,10 @@ const IC_MEMORY = ICON('<circle cx="8" cy="8" r="5.5"/><path d="M8 5.5v5M5.5 8h5
 const IC_CHANNEL = ICON('<circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none"/><path d="M4.6 4.6a4.8 4.8 0 0 0 0 6.8M11.4 4.6a4.8 4.8 0 0 1 0 6.8M2.6 2.6a7.6 7.6 0 0 0 0 10.8M13.4 2.6a7.6 7.6 0 0 1 0 10.8"/>');
 const IC_HEART = ICON('<path d="M8 13.2S2.5 9.8 2.5 6.1A3.1 3.1 0 0 1 8 4.2a3.1 3.1 0 0 1 5.5 1.9c0 3.7-5.5 7.1-5.5 7.1z"/>');
 const IC_PALETTE = ICON('<path d="M8 2.5a5.5 5.5 0 0 0 0 11c.9 0 1.4-.6 1.4-1.2 0-.4-.2-.7-.4-1-.2-.2-.3-.5-.3-.8 0-.6.5-1.1 1.1-1.1H10a3.5 3.5 0 0 0 3.5-3.6A5.6 5.6 0 0 0 8 2.5z"/><circle cx="5.6" cy="7" r=".85" fill="currentColor" stroke="none"/><circle cx="7.8" cy="5.3" r=".85" fill="currentColor" stroke="none"/><circle cx="10.3" cy="6.2" r=".85" fill="currentColor" stroke="none"/>');
+// 角色池：两个人形（前一个实心、后一个描边）——「笔下的人物们」，比单个头像更贴语义
+const IC_USERS = ICON('<circle cx="6" cy="5.6" r="2.3"/><path d="M1.8 13.2c0-2.3 1.9-3.6 4.2-3.6s4.2 1.3 4.2 3.6"/><path d="M11 3.6a2.3 2.3 0 0 1 0 4.4M12 9.8c1.5.3 2.4 1.4 2.4 3.4"/>');
+// 版本档：时钟箭头 —— 「历史版本，可回滚」
+const IC_HISTORY = ICON('<path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8"/><path d="M2.4 2.8v2.8h2.8"/><path d="M8 5.4V8l1.9 1.4"/>');
 const IC_GLOBE = ICON('<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11"/><ellipse cx="8" cy="8" rx="2.5" ry="5.5"/>');
 const IC_LAYERS = ICON('<path d="M8 2.2 2.4 5.4 8 8.6l5.6-3.2z"/><path d="M2.4 8.2 8 11.4l5.6-3.2"/><path d="M2.4 11 8 14.2 13.6 11"/>');
 const IC_CHART = ICON('<path d="M3 13V8.5M6.3 13V3.5M9.7 13V6.5M13 13V2.5"/>');
@@ -87,6 +91,7 @@ const IC_INJECT = ICON('<path d="M8 2.8v6.8M5.2 6.8 8 9.6l2.8-2.8M3 12.8h10"/>')
 
 const BOT_TABS = [
   { id: 'chat', n: '对话', ic: IC_CHAT },
+  { id: 'characters', n: '角色', ic: IC_USERS },
   { id: 'memory', n: '记忆', ic: IC_MEMORY },
   { id: 'gallery', n: '画廊', ic: IC_PALETTE },
   { id: 'channel', n: '渠道', ic: IC_CHANNEL },
@@ -339,7 +344,7 @@ function sideCtx(ev, id) {
   menu.id = 'side-ctx';
   menu.innerHTML = `
     <div class="ctx-head">${esc(b.name || b.id)}</div>
-    <div class="ctx-item" data-a="fav">${IC_STAR}<span class="lb">${favored ? '取消收藏' : '收藏此角色'}</span></div>`;
+    <div class="ctx-item" data-a="fav">${IC_STAR}<span class="lb">${favored ? '取消收藏' : '收藏此写手'}</span></div>`;
   document.body.appendChild(menu);
   // 贴着鼠标放，但不许溢出视口（先量尺寸再定位，所以得先 append）
   const pad = 8;
@@ -428,11 +433,25 @@ function renderSidebar() {
         ${botFavored(b.id) ? `<span class="side-fav" title="已收藏 · 右键可取消">${IC_STAR}</span>` : ''}
       </div>`;
       }).join('')
-    : '<div class="side-empty">暂无角色</div>';
-  // 底部按钮状态指示（设置/模型）
+    : '<div class="side-empty">暂无写手</div>';
+  // 底部按钮状态指示（设置/模型/工作区）
+  // ⚠️ 高亮判据用「onclick 里有对应的打开函数名」，不能用 view.type 直接比 ——
+  //   view.type 是 'models'/'model-form' 等多个值，而 onclick 写的是 openModels()。
   document.querySelectorAll('.side-btns .settings-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.getAttribute('onclick').includes(view.type));
+    const fn = btn.getAttribute('onclick') || '';
+    const active = (fn.includes('openSettings') && view.type === 'settings')
+      || (fn.includes('openModels') && (view.type === 'models' || view.type === 'model' || view.type === 'model-form'))
+      || (fn.includes('openWorkspace') && view.type === 'workspace');
+    btn.classList.toggle('active', active);
   });
+  // 「角色池」是列表区的一个条目（不是底部按钮），单独维护高亮 + 角色数
+  const charsItem = document.getElementById('side-chars');
+  if (charsItem) {
+    charsItem.classList.toggle('active', view.type === 'chars');
+    const meta = document.getElementById('side-chars-meta');
+    const n = (state.characters || []).length;
+    if (meta) meta.textContent = n ? `${n} 位角色 · 全体写手共用` : '还没有角色';
+  }
 }
 
 // 新建线程（返回新线程 id；失败返回 null）
@@ -508,6 +527,7 @@ function renderMain() {
   if (view.type === 'model') return renderModelDetail(view.id);
   if (view.type === 'settings') return renderSettings();
   if (view.type === 'workspace') return renderWorkspace();
+  if (view.type === 'chars') return renderCharacterPool();
   return renderBotDetail(view.id);
 }
 
@@ -534,7 +554,7 @@ function ensureDefaultThread(botId) {
 function emptyThreadsCard(id, pending) {
   if (pending) return '<div class="card"><div class="empty-hint">正在准备第一条对话…</div></div>';
   return `<div class="card">
-      <div class="empty-hint">这个角色还没有对话。</div>
+      <div class="empty-hint">这位写手还没有对话。</div>
       <div class="empty-thread-actions"><button class="primary sm" onclick="newThread('${id}')">${IC_PLUS}<span class="lb">新建对话</span></button></div>
     </div>`;
 }
@@ -573,6 +593,7 @@ function renderChatTabHtml(b) {
         <button class="tb-add" onclick="newThread('${id}')" title="新建对话">${IC_PLUS}</button>
       </div>
 
+      <div class="chat-split">
       <div class="card session-card chat-main">
         <div class="card-title">
           <span class="chat-title-text">${esc(cur.title || '新对话')}</span>
@@ -588,11 +609,18 @@ function renderChatTabHtml(b) {
           <div class="cp-head"><span class="cp-text"></span></div>
           <div class="cp-bar"><div class="cp-fill"></div></div>
         </div>
+        <!-- 写手提议的「待确认写操作」常驻区（见 renderPendingStrip 的说明） -->
+        <div class="pending-strip" id="pending-strip"></div>
+        <!-- 文件同步状态：灰色小字一行行写「这一轮动了什么」（见 syncLine） -->
+        <div class="sync-line" id="sync-line"></div>
         <div class="chat-input">
           <textarea id="f-chat" rows="1" placeholder="与 ${esc(b.name || b.id)} 说话… Enter 发送，Shift+Enter 换行" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${id}')}"></textarea>
-          <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这个角色接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
+          <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这位写手接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
           <button class="primary sm" onclick="directChat('${id}')">发送</button>
         </div>
+      </div>
+      <!-- 右侧胶囊列：当前活跃的世界 / 活跃的角色（点一下能换） -->
+      <div class="chat-caps" id="chat-caps"></div>
       </div>
     </div>`;
 }
@@ -730,6 +758,524 @@ function avatarInner(b) {
 // 「精彩时刻」由 AI 从记忆档案 + 最近对话里提炼的高光片段。原先挂在角色卡第二行、
 // 挤成横排小条（因为角色卡是窄条横幅，怕把对话视线往下挤）；现在独立成标签页，
 // 空间充裕 → 改成卡片网格，摘要与台词**默认全展开**（画廊是用来浏览的，不该再藏一层）。
+// 「角色」标签页：这位写手笔下的角色（从全局角色池里挑选）
+// ------------------------------------------------------------------
+// ★ 认知：bot 是**写手**，角色是它笔下的人物，存在全局共享的池子里。
+//   所以这里管的是「这位写手要用哪几位角色」，而不是「这位角色是谁」。
+//   池子本身（新建 / 编辑 / 删除）在全局「角色池」页 —— 左侧栏入口。
+function renderCharactersTabHtml(b) {
+  const all = state.characters || [];
+  const activeIds = Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : [];
+  const mine = activeIds.map(id => all.find(c => c.id === id)).filter(Boolean);
+  const rest = all.filter(c => !activeIds.includes(c.id));
+
+  const head = `<div class="card-title">${IC_USERS}<span class="lb">写手的角色</span>
+      <span class="spacer"></span>
+      <span class="ch-count">已选 ${mine.length} / 池中 ${all.length}</span>
+      <button class="ghost sm" onclick="openCharacterPool()" title="打开全局角色池：新建 / 编辑 / 删除角色">${IC_USERS}<span class="lb">角色池</span></button>
+    </div>`;
+
+  if (!all.length) {
+    return `<div class="card ch-card">${head}
+      <div class="gal-empty">
+        <div class="gal-empty-ic">${IC_USERS}</div>
+        <div class="gal-empty-t">角色池还是空的</div>
+        <div class="gal-empty-h">角色是写手笔下的人物。去角色池里建一位，或者直接跟写手聊——它可以在剧情里创造人物并建议你加进池子。</div>
+        <div class="gal-empty-act"><button class="primary sm" onclick="openCharacterPool()">${IC_PLUS}<span class="lb">去角色池新建</span></button></div>
+      </div>
+    </div>`;
+  }
+
+  const mineCards = mine.length
+    ? mine.map(c => `
+      <div class="ch-item">
+        <div class="ch-avatar">${characterAvatarInner(c)}</div>
+        <div class="ch-main">
+          <div class="ch-name">${esc(c.name)}</div>
+          <div class="ch-meta">${esc(c.id)}${c.age ? ' · ' + esc(c.age) : ''}${c.tags?.length ? ' · ' + c.tags.map(t => esc(t)).join(' / ') : ''}${(c.experienceCount || 0) ? ' · ' + c.experienceCount + ' 条经历' : ''}</div>
+          ${c.persona ? `<div class="ch-snippet">${esc(snippet(c.persona, 90))}</div>` : ''}
+          ${charStateHtml(c, 2)}
+        </div>
+        <div class="ch-acts">
+          <button class="ghost sm" onclick="characterHistory('${c.id}')" title="查看历史版本，可回滚">${IC_HISTORY}<span class="lb">版本</span></button>
+          <button class="ghost sm" onclick="characterEdit('${c.id}')" title="编辑角色设定">${IC_SETTINGS}<span class="lb">编辑</span></button>
+          <button class="ghost sm" onclick="characterDetach('${b.id}','${c.id}')" title="从这位写手的角色里移除（不影响角色池）">移除</button>
+        </div>
+      </div>`).join('')
+    : `<div class="ch-hint">这位写手还没选角色。${rest.length ? '从下面挑一位，或者先跟它聊一会儿让它自己提议。' : ''}</div>`;
+
+  const addPanel = rest.length
+    ? `<div class="ch-add">
+        <div class="ch-add-t">从角色池添加</div>
+        <div class="ch-add-list">
+          ${rest.map(c => `<button class="ch-chip" onclick="characterAttach('${b.id}','${c.id}')" title="加进这位写手的角色">${IC_PLUS}<span class="ch-chip-n">${esc(c.name)}</span></button>`).join('')}
+        </div>
+      </div>`
+    : '';
+
+  return `<div class="card ch-card">${head}
+    <div class="ch-list">${mineCards}</div>
+    ${addPanel}
+  </div>`;
+}
+
+// 角色头像：现在还没有形象库，先用「名字首字」的占位块 —— 比空白更容易分辨
+// ★ 角色形象：角色设定本身是纯文本，图片只以**链接**挂在卡上（avatar 是 URL）。
+//   链接失效时退回名字首字，不留一个破图占位。
+function characterAvatarInner(c) {
+  const a = String((c && c.avatar) || '').trim();
+  if (/^(https?:\/\/|\/)/i.test(a)) {
+    const ch = esc(String((c && c.name) || '?').trim().charAt(0) || '?');
+    return `<img src="${esc(assetUrl(a))}" alt="" onerror="this.replaceWith(document.createTextNode('${ch}'))">`;
+  }
+  if (a) return esc(a);
+  return esc(String((c && c.name) || '?').trim().charAt(0) || '?');
+}
+
+// 角色卡上的「计数器 + 最近经历」小摘要（角色池页 / 写手的角色页共用）
+// ★ 只读展示：计数器的「规则」在写手的写手设定里，值的改动走管理员建议或写手提议，
+//   面板不提供直接改数值的入口（避免两处都能改、最后说不清是谁动的）。
+function charStateHtml(c, recent) {
+  const cs = c && c.counters && typeof c.counters === 'object' ? Object.entries(c.counters) : [];
+  const all = (c && Array.isArray(c.experiences)) ? c.experiences : [];
+  const n = recent || 2;
+  const exps = all.slice(-n).reverse();
+  if (!cs.length && !exps.length) return '';
+  const counters = cs.length
+    ? `<div class="ch-state-row"><span class="ch-state-k">计数器</span><span class="ch-counters">${
+      cs.map(([k, v]) => `<span class="ch-counter" title="${esc(k)}">${esc(k)}<b>${esc(fmtNum(v))}</b></span>`).join('')
+    }</span></div>`
+    : '';
+  const history = exps.length
+    ? `<div class="ch-state-row"><span class="ch-state-k">经历</span><div class="ch-exps">${
+      exps.map(e => `<div class="ch-exp"><span class="ch-exp-t">${esc(snippet(e.text || '', 70))}</span>${
+        e.by ? `<span class="ch-exp-by">${esc(e.by)}</span>` : ''}</div>`).join('')
+    }${all.length > n ? `<div class="ch-exp-more">共 ${all.length} 条</div>` : ''}</div></div>`
+    : '';
+  return `<div class="ch-state">${counters}${history}</div>`;
+}
+
+// 截断到 n 字（角色简介在列表里只露个头，全文在编辑弹窗里看）
+// ★ 顺手剥掉 Markdown 标记：persona 常常是手写的 `# 人格\n## 基本信息 …`，
+//   直接截断会把井号原样显示出来，列表看起来像没洗干净。剥掉后是纯文本摘要。
+function snippet(text, n) {
+  const s = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')      // 代码块
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')   // 行首标题井号
+    .replace(/^\s{0,3}[-*+]\s+/gm, '')    // 行首列表符号
+    .replace(/^\s{0,3}>\s?/gm, '')        // 行首引用
+    .replace(/\*\*(.+?)\*\*/g, '$1')      // 粗体
+    .replace(/\*(.+?)\*/g, '$1')          // 斜体
+    .replace(/`([^`]+)`/g, '$1')          // 行内代码
+    .replace(/\s+/g, ' ')
+    .trim();
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+// 拉取角色池（列表接口同时带回 usedBy，用来显示「被哪些写手使用」）
+async function loadCharacters() {
+  const r = await api('/api/characters');
+  if (r && r.ok) {
+    state.characters = r.characters || [];
+    // 只有当前正停在这个标签页时才重绘 —— 否则会把用户正在看的别的页面顶掉
+    if (view.type === 'bot' && _botTab === 'characters') {
+      const b = (state.bots || []).find(x => x.id === view.id);
+      const el = document.querySelector('.bot-tab-body');
+      if (b && el) el.innerHTML = renderCharactersTabHtml(b);
+    } else if (view.type === 'chars') {
+      renderMain();
+    }
+  }
+  return state.characters || [];
+}
+
+// 把角色加进写手（先本地算好完整数组再 PUT —— 见 memory 里「PUT 是整份覆盖」那条坑）
+async function characterAttach(botId, charId) {
+  const b = (state.bots || []).find(x => x.id === botId);
+  if (!b) return toast('写手不存在', 'err');
+  const ids = Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds.slice() : [];
+  if (!ids.includes(charId)) ids.push(charId);
+  await saveWriterCharacters(botId, ids);
+}
+
+// 从写手的角色里移除（不影响角色池本身）
+async function characterDetach(botId, charId) {
+  const b = (state.bots || []).find(x => x.id === botId);
+  if (!b) return;
+  const ids = (b.activeCharacterIds || []).filter(x => x !== charId);
+  await saveWriterCharacters(botId, ids);
+}
+
+async function saveWriterCharacters(botId, ids) {
+  const r = await api(`/api/bots/${encodeURIComponent(botId)}/characters`, 'PUT', { characterIds: ids });
+  if (!r.ok) return toast(r.err || '保存失败', 'err');
+  // 本地同步（避免等一次 loadState 才看到变化）
+  const b = (state.bots || []).find(x => x.id === botId);
+  if (b) b.activeCharacterIds = r.activeCharacterIds || ids;
+  if (r.rejected && r.rejected.length) toast(`已忽略 ${r.rejected.length} 个无效角色 id`, '');
+  renderMain();
+}
+
+// 角色可编辑字段（与后端 lib/characters.js 的 EDITABLE_FIELDS 对齐）
+const CHR_FIELDS = [
+  ['name', '角色名', '例：银'],
+  ['persona', '角色设定', '这个人物是谁：身份、性格、说话方式、与主人的关系……（写手改写剧情时会读它）'],
+  ['traits', '性格特点', '例：表面冷淡、内里依恋；不擅长表达情绪'],
+  ['age', '年龄', '例：外表 8 岁'],
+  ['appearance', '外表形象', '例：银发红瞳的仿真机器人男孩'],
+  ['background', '背景故事', '出身、经历、来到故事里之前发生过什么'],
+];
+
+// ★ 完整角色（含全部经历）的本地缓存，键是角色 id。
+//   列表接口只带最近 3 条经历，状态区要展示全量、删除时还要拿到原文，所以单独拉详情存这儿。
+const _chrDetail = {};
+// 从「写手设置 → 新建角色」进来时记下目标写手 id：建完自动挂进他的角色池
+let _chrNewWriter = '';
+async function fetchCharDetail(id) {
+  const r = await api(`/api/characters/${encodeURIComponent(id)}`).catch(() => null);
+  if (r && r.ok && r.character) { _chrDetail[id] = r.character; return r.character; }
+  return null;
+}
+
+// 新建 / 编辑角色（同一个弹窗，id 为空即新建）
+async function openCharacterEditModal(charId, opts) {
+  const c = charId ? (state.characters || []).find(x => x.id === charId) : null;
+  const isNew = !c;
+  // ★ 新建时把全局「角色卡模板」套进「角色设定」—— 用户改一次模板，以后每张卡都是同一套骨架
+  const presetPersona = isNew ? charTemplateOf() : '';
+  // 编辑已有角色时先取一次全量（状态区要用），失败就退回列表里那份
+  const full = isNew ? null : ((await fetchCharDetail(c.id)) || c);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'chr-edit-modal';
+  overlay.innerHTML = `
+    <div class="modal-card chr-edit-modal">
+      <div class="modal-head">
+        <span>${IC_USERS}<span class="lb">${isNew ? '新建角色' : '编辑角色'}</span></span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('chr-edit-modal').remove()">${IC_CLOSE}<span class="lb">关闭</span></button>
+      </div>
+      <div class="modal-body">
+        ${isNew ? '' : `<p class="empty-hint" style="margin:0 0 10px">角色 id：<code>${esc(c.id)}</code>　保存在全局角色池，所有写手共用。改动会自动留档，可回滚。</p>`}
+        ${CHR_FIELDS.map(([k, label, ph]) => `
+          <label class="frm">${label}</label>
+          ${k === 'name'
+            ? `<input id="chr-${k}" type="text" placeholder="${esc(ph)}" value="${esc((c && c[k]) || '')}">`
+            : `<textarea id="chr-${k}" rows="${k === 'persona' ? (isNew ? 12 : 5) : 2}" placeholder="${esc(ph)}">${esc(k === 'persona' && isNew ? presetPersona : ((c && c[k]) || ''))}</textarea>`}
+        `).join('')}
+        <label class="frm">形象链接（图片 URL）</label>
+        <input id="chr-avatar" type="text" placeholder="https://…　角色设定是纯文本，图片不进正文，只以链接挂在卡上" value="${esc((c && c.avatar) || '')}">
+        <label class="frm">标签（逗号分隔）</label>
+        <input id="chr-tags" type="text" placeholder="例：主角, 机器人, 未来" value="${esc(((c && c.tags) || []).join(', '))}">
+        ${isNew ? '' : charStateAdminHtml(full)}
+        <div class="chr-modal-acts">
+          <button class="primary" onclick="saveCharacter(${isNew ? 'null' : `'${c.id}'`})">${isNew ? '创建角色' : '保存修改'}</button>
+          ${isNew ? '' : `<button class="ghost sm" onclick="characterHistory('${c.id}')">${IC_HISTORY}<span class="lb">版本档</span></button>`}
+        </div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  bindCharState(overlay);
+  const first = document.getElementById('chr-name');
+  if (first) first.focus();
+}
+
+// 编辑弹窗里的「角色状态」区：计数器 + 经历，可逐条删除。
+// ★ 只提供删除：新增/改值走管理员建议（propose_counter_edit / propose_experience_edit），
+//   或在剧情里由写手提议沉淀 → 用户确认。面板不直接改数值，谁动的才有据可查。
+function charStateAdminHtml(c) {
+  if (!c) return '';
+  const cs = c.counters && typeof c.counters === 'object' ? Object.entries(c.counters) : [];
+  const exps = (Array.isArray(c.experiences) ? c.experiences : []).slice().reverse();
+  const head = (t, n) => `<div class="chr-state-head">${t}<span class="spacer"></span><span class="chr-state-n">${n}</span></div>`;
+  const counters = cs.length
+    ? `<div class="ch-counters">${cs.map(([k, v]) => `<span class="ch-counter" title="${esc(k)}">${esc(k)}<b>${esc(fmtNum(v))}</b><button class="ch-x" data-act="rm-counter" data-cid="${esc(c.id)}" data-name="${esc(k)}" title="删除这个计数器">${IC_CLOSE}</button></span>`).join('')}</div>`
+    : `<div class="chr-state-empty">还没有计数器。计数器的名字与范围写在角色卡正文里（<code>##Counter：名字[0,100]</code>），或写在写手的「标准要求」里；值由剧情里的经历带动。</div>`;
+  const rows = exps.length
+    ? `<div class="chr-exp-list">${exps.slice(0, 30).map(e => `<div class="chr-exp-row">
+          <span class="chr-exp-ts">${esc(fmtTime(e.ts))}</span>
+          <span class="chr-exp-t">${esc(e.text || '')}</span>
+          ${e.by ? `<span class="ch-exp-by">${esc(e.by)}</span>` : ''}
+          <button class="ch-x" data-act="rm-exp" data-cid="${esc(c.id)}" data-eid="${esc(e.id)}" title="删除这条经历">${IC_CLOSE}</button>
+        </div>`).join('')}${exps.length > 30 ? `<div class="chr-state-empty">（只列出最近 30 条，共 ${exps.length} 条）</div>` : ''}</div>`
+    : `<div class="chr-state-empty">还没有沉淀过经历。写手在剧情里提议 → 你点「确认应用」→ 才会写进来。</div>`;
+  return `<div class="chr-state">
+      ${head('计数器', cs.length + ' 项')}${counters}
+      ${head('经历', exps.length + ' 条')}${rows}
+      <p class="chr-state-note">计数器和经历是流水，<b>不进版本档</b>——删掉无法用「回滚」找回。</p>
+    </div>`;
+}
+
+// 绑定状态区里的删除按钮。
+// ★ 刻意不用内联 onclick：计数器名与经历文本是自由文本，可能含引号，内联会撑破 JS 字符串。
+function bindCharState(scope) {
+  if (!scope) return;
+  scope.querySelectorAll('.chr-state [data-act]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'rm-counter') charCounterDel(btn.dataset.cid, btn.dataset.name);
+      else if (act === 'rm-exp') charExpDel(btn.dataset.cid, btn.dataset.eid);
+    });
+  });
+}
+
+// 删掉一个计数器（不可回滚，二次确认）
+async function charCounterDel(charId, name) {
+  if (!(await uiConfirm({
+    title: '删除计数器',
+    message: `确定删除计数器「${name}」？\n\n计数器和经历是流水，不进版本档，删掉之后无法用「回滚」找回。`,
+    okText: '删除', danger: true,
+  }))) return;
+  const r = await api(`/api/characters/${encodeURIComponent(charId)}/counters/${encodeURIComponent(name)}`, 'DELETE');
+  if (!r.ok) return toast(r.err || '删除失败', 'err');
+  toast(`已删除计数器「${name}」`, 'ok');
+  await refreshCharState(charId);
+  await loadCharacters();
+}
+
+// 删掉一条经历（不可回滚，二次确认）
+async function charExpDel(charId, expId) {
+  const hit = ((_chrDetail[charId] || {}).experiences || []).find(x => x.id === expId);
+  if (!(await uiConfirm({
+    title: '删除经历',
+    message: `确定删除这条经历？\n\n「${snippet(hit ? hit.text : '', 60)}」\n\n经历是流水，不进版本档，删掉无法用「回滚」找回。`,
+    okText: '删除', danger: true,
+  }))) return;
+  const r = await api(`/api/characters/${encodeURIComponent(charId)}/experiences/${encodeURIComponent(expId)}`, 'DELETE');
+  if (!r.ok) return toast(r.err || '删除失败', 'err');
+  toast('已删除该条经历', 'ok');
+  await refreshCharState(charId);
+  await loadCharacters();
+}
+
+// 重绘弹窗里的状态区（删完一项只换这一块，不动用户正在编辑的表单）
+async function refreshCharState(charId) {
+  const cur = await fetchCharDetail(charId);
+  const el = document.querySelector('#chr-edit-modal .chr-state');
+  if (!el) return;
+  if (!cur) return el.remove();
+  const tmp = document.createElement('div');
+  tmp.innerHTML = charStateAdminHtml(cur);
+  const nu = tmp.querySelector('.chr-state');
+  if (nu) { el.replaceWith(nu); bindCharState(document.getElementById('chr-edit-modal')); }
+}
+
+// 从标签页 / 全局池页进来的编辑入口
+function characterEdit(id) { openCharacterEditModal(id); }
+
+async function saveCharacter(id) {
+  const body = {};
+  for (const [k] of CHR_FIELDS) {
+    const el = $(`#chr-${k}`);
+    if (el) body[k] = el.value.trim();
+  }
+  const tagsEl = $('#chr-tags');
+  if (tagsEl) body.tags = tagsEl.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  // 形象链接：图片不进正文，只以 URL 挂在角色卡上
+  const avEl = $('#chr-avatar');
+  if (avEl) body.avatar = avEl.value.trim();
+  if (!body.name) return toast('角色名不能为空', 'err');
+  // 新建时把模板里的 {{名字}} 占位换成实际角色名（用户可能没填模板，没有占位就不动）
+  if (!id && body.persona) body.persona = body.persona.replace(/\{\{\s*(?:名字|name)\s*\}\}/gi, body.name);
+
+  let r;
+  if (id) {
+    r = await api(`/api/characters/${encodeURIComponent(id)}`, 'PUT', body);
+  } else {
+    r = await api('/api/characters', 'POST', body);
+  }
+  if (!r.ok) return toast(r.err || '保存失败', 'err');
+  // 新建 + 从写手设置进来 → 建完顺手挂进那位写手的角色池
+  const forWriter = _chrNewWriter;
+  _chrNewWriter = '';
+  let joined = false;
+  if (!id && forWriter && r.character && r.character.id) {
+    joined = await attachCharToWriter(forWriter, r.character.id);
+  }
+  toast(id
+    ? `已保存${r.changed && r.changed.length ? '（' + r.changed.join('、') + '）' : ''}`
+    : (joined ? '角色已创建，并加入该写手的角色池' : '角色已创建'), 'ok');
+  const m = document.getElementById('chr-edit-modal');
+  if (m) m.remove();
+  // ★ 先刷新角色池缓存再重绘设置里的勾选区：botPoolHtml 读的是 state.characters，
+  //   顺序反了的话新角色还没进 state，勾选项就画不出来。
+  await loadCharacters();
+  if (joined) refreshBotPool(forWriter);
+  if (view.type === 'chars') renderMain();
+}
+
+// 删除角色（★ 连根拔：提示会同时清掉哪些写手的引用）
+async function characterDelete(id) {
+  const c = (state.characters || []).find(x => x.id === id);
+  if (!c) return;
+  const usedBy = c.usedBy || [];
+  const warn = usedBy.length
+    ? `\n⚠️ 有 ${usedBy.length} 位写手正在用它：${usedBy.map(u => u.name).join('、')}。\n删除后会从这些写手的角色里一并移除。`
+    : '';
+  if (!(await uiConfirm({
+    title: '删除角色',
+    message: `确定把「${c.name}」从角色池里删除？${warn}\n此操作不可撤销（版本档也会一起删掉）。`,
+    okText: '删除', danger: true,
+  }))) return;
+  const r = await api(`/api/characters/${encodeURIComponent(id)}`, 'DELETE');
+  if (!r.ok) return toast(r.err || '删除失败', 'err');
+  toast(r.prunedBots ? `已删除（同时清理了 ${r.prunedBots} 位写手的引用）` : '已删除', 'ok');
+  await loadCharacters();
+  if (view.type === 'chars') renderMain();
+}
+
+// 版本档：列出历史版本，任选一版回滚
+async function characterHistory(id) {
+  const c = (state.characters || []).find(x => x.id === id);
+  const r = await api(`/api/characters/${encodeURIComponent(id)}/history`);
+  if (!r.ok) return toast(r.err || '读取版本档失败', 'err');
+  const hist = r.history || [];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'chr-hist-modal';
+  overlay.innerHTML = `
+    <div class="modal-card chr-hist-modal">
+      <div class="modal-head">
+        <span>${IC_HISTORY}<span class="lb">版本档 · ${esc((c && c.name) || id)}</span></span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('chr-hist-modal').remove()">${IC_CLOSE}<span class="lb">关闭</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="empty-hint" style="margin:0 0 10px">每次改动前，旧版本都会自动存档。回滚会把当年那份设定原样恢复；回滚本身也会留档，所以再想回去也可以。</p>
+        ${hist.length ? hist.map(h => {
+          // ★ 展示重点：这次改的是哪几个字段，以及**它们改之前长什么样**。
+          //   snapshot 存的是全量（回滚需要），但用户关心的是「我改了什么」——
+          //   只把 changed 里的字段拎出来显示，其他字段不必占版面。
+          const chg = Array.isArray(h.changed) ? h.changed.filter(k => k !== 'rollback') : [];
+          const fields = chg.length
+            ? chg.map(k => {
+              const meta = CHR_FIELDS.find(f => f[0] === k);
+              const label = meta ? meta[1] : k;
+              const val = k === 'tags'
+                ? ((h[k] || []).join(' / ') || '（空）')
+                : (String(h[k] ?? '').trim() || '（空）');
+              return `<div class="chr-hist-field"><span class="chr-hist-fn">${esc(label)}</span>`
+                + `<span class="chr-hist-fv">${esc(snippet(val, 100))}</span></div>`;
+            }).join('')
+            : `<div class="chr-hist-body">${esc(snippet(h.persona || h.name || '', 180))}</div>`;
+          return `
+          <div class="chr-hist-item">
+            <div class="chr-hist-head">
+              <span class="chr-hist-time">${esc(fmtTime(h.ts))}</span>
+              <span class="chr-hist-by ${h.by === 'ai' ? 'ai' : ''}">${h.by === 'ai' ? '写手改写' : '你编辑'}</span>
+              ${chg.length ? `<span class="chr-hist-chg">改动：${esc(chg.map(k => (CHR_FIELDS.find(f => f[0] === k) || [k, k])[1]).join('、'))}</span>` : ''}
+              <span class="spacer"></span>
+              <button class="ghost sm" onclick="characterRollback('${id}', ${h.index})">回滚到此版本</button>
+            </div>
+            ${fields}
+          </div>`;
+        }).join('')
+          : '<div class="empty-hint">还没有历史版本 —— 这个角色从建立到现在没被改过。</div>'}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+async function characterRollback(id, index) {
+  if (!(await uiConfirm({ title: '回滚角色设定', message: '将把角色设定恢复到这个历史版本。\n当前版本会先存进版本档，所以回滚之后还能再改回来。', okText: '回滚' }))) return;
+  const r = await api(`/api/characters/${encodeURIComponent(id)}/rollback`, 'POST', { index });
+  if (!r.ok) return toast(r.err || '回滚失败', 'err');
+  toast('已回滚到该版本', 'ok');
+  const m = document.getElementById('chr-hist-modal');
+  if (m) m.remove();
+  await loadCharacters();
+  if (view.type === 'chars') renderMain();
+}
+
+// 时间戳格式化（版本档里显示「谁在什么时候改的」）
+function fmtTime(ts) {
+  const d = new Date(Number(ts) || 0);
+  if (!Number.isFinite(d.getTime()) || d.getTime() <= 0) return '未知时间';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// ---- 全局角色池页（左侧栏入口；不属于任何一位写手）----
+function openCharacterPool() {
+  view = { type: 'chars' };
+  renderSidebar(); renderMain();
+}
+
+function renderCharacterPool() {
+  main.innerHTML = characterPoolHtml();
+}
+
+// 角色池页的 HTML（拆出来是为了搜索时能只重绘这块，不必经 renderMain）
+function characterPoolHtml() {
+  const all = state.characters || [];
+  const q = String(_charQuery || '').trim().toLowerCase();
+  const list = q ? all.filter(c =>
+    String(c.name || '').toLowerCase().includes(q)
+    || String(c.persona || '').toLowerCase().includes(q)
+    || (c.tags || []).some(t => String(t).toLowerCase().includes(q))) : all;
+
+  const rows = list.length ? list.map(c => {
+    const usedBy = c.usedBy || [];
+    return `
+    <div class="ch-item">
+      <div class="ch-avatar">${characterAvatarInner(c)}</div>
+      <div class="ch-main">
+        <div class="ch-name">${esc(c.name)}<span class="ch-id">${esc(c.id)}</span></div>
+        <div class="ch-meta">${[
+          c.age ? esc(c.age) : '',
+          c.tags?.length ? c.tags.map(t => esc(t)).join(' / ') : '',
+          (c.experienceCount || 0) ? `${c.experienceCount} 条经历` : '',
+          (c.historyCount || 0) ? `${c.historyCount} 个历史版本` : '',
+        ].filter(Boolean).join(' · ') || '（无更多信息）'}</div>
+        ${c.persona ? `<div class="ch-snippet">${esc(snippet(c.persona, 120))}</div>` : ''}
+        ${charStateHtml(c, 2)}
+        <div class="ch-usedby">${usedBy.length
+          ? `被 ${usedBy.map(u => esc(u.name)).join('、')} 使用`
+          : '还没有写手选用'}</div>
+      </div>
+      <div class="ch-acts">
+        <button class="ghost sm" onclick="characterHistory('${c.id}')">${IC_HISTORY}<span class="lb">版本</span></button>
+        <button class="ghost sm" onclick="characterEdit('${c.id}')">${IC_SETTINGS}<span class="lb">编辑</span></button>
+        <button class="ghost sm ghost-del" onclick="characterDelete('${c.id}')">删除</button>
+      </div>
+    </div>`;
+  }).join('') : `<div class="gal-empty">
+      <div class="gal-empty-ic">${IC_USERS}</div>
+      <div class="gal-empty-t">${q ? '没有匹配的角色' : '角色池还是空的'}</div>
+      <div class="gal-empty-h">${q ? '换个关键词试试' : '角色是写手笔下的人物。建一位，然后在写手的「角色」标签页里选它。'}</div>
+      ${q ? '' : `<div class="gal-empty-act"><button class="primary sm" onclick="characterEdit()">${IC_PLUS}<span class="lb">新建角色</span></button></div>`}
+    </div>`;
+
+  return `
+    <div class="card ch-card">
+      <div class="card-title">${IC_USERS}<span class="lb">角色池</span>
+        <span class="spacer"></span>
+        <input id="chr-search" class="chr-search" type="search" placeholder="搜索角色名 / 设定 / 标签"
+               value="${esc(_charQuery || '')}" oninput="characterSearch(this.value)">
+        <span class="ch-count">共 ${all.length} 位</span>
+        <button class="primary sm" onclick="characterEdit()">${IC_PLUS}<span class="lb">新建角色</span></button>
+      </div>
+      <p class="empty-hint" style="margin:0 0 10px">角色池是全体写手共用的：写手从池子里挑选自己要写的角色；写手在剧情里改写角色设定时，会以「待确认建议」的形式给你，确认后才写入，旧版本自动留档可回滚。</p>
+      <div class="ch-list">${rows}</div>
+    </div>`;
+}
+
+let _charQuery = '';
+function characterSearch(v) {
+  _charQuery = v;
+  // 只重绘列表，不重建输入框（否则每敲一个字光标就跳掉）
+  const card = document.querySelector('.ch-card');
+  if (!card) return renderCharacterPool();
+  const tmp = document.createElement('div');
+  tmp.innerHTML = characterPoolHtml();
+  card.replaceWith(tmp.firstElementChild);
+  const el = document.getElementById('chr-search');
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+
+// 「记忆画廊」标签页：AI 提炼的精彩时刻
 function renderGalleryTabHtml(b) {
   const arr = Array.isArray(b.moments) && b.moments.length ? b.moments : null;
   const gen = `<button class="ghost sm gal-gen" onclick="momentsGen('${b.id}')"
@@ -742,7 +1288,7 @@ function renderGalleryTabHtml(b) {
       <div class="gal-empty">
         <div class="gal-empty-ic">${IC_SPARKLE}</div>
         <div class="gal-empty-t">还没有精彩时刻</div>
-        <div class="gal-empty-h">让 AI 从这个角色的记忆档案与最近对话里，提炼出值得留存的高光片段</div>
+        <div class="gal-empty-h">让 AI 从这位写手的记忆档案与最近对话里，提炼出值得留存的高光片段</div>
       </div>
     </div>`;
   }
@@ -791,16 +1337,17 @@ async function momentDel(id, index) {
 function renderBotDetail(id) {
   const b = (state.bots || []).find(x => x.id === id);
   if (!b) {
-    main.innerHTML = `<div class="card"><div class="empty-hint">选择一个角色，或点击左侧 ${IC_PLUS} 添加。</div></div>`;
+    main.innerHTML = `<div class="card"><div class="empty-hint">选择一位写手，或点击左侧 ${IC_PLUS} 添加。</div></div>`;
     return;
   }
   const tab = BOT_TABS.some(x => x.id === _botTab) ? _botTab : 'chat';
   _botTab = tab;
   const body = tab === 'chat' ? renderChatTabHtml(b)
-    : tab === 'memory' ? renderMemoryTabHtml(b)
-      : tab === 'gallery' ? renderGalleryTabHtml(b)
-        : tab === 'channel' ? renderChannelTabHtml(b)
-          : renderHeartTabHtml(b);
+    : tab === 'characters' ? renderCharactersTabHtml(b)
+      : tab === 'memory' ? renderMemoryTabHtml(b)
+        : tab === 'gallery' ? renderGalleryTabHtml(b)
+          : tab === 'channel' ? renderChannelTabHtml(b)
+            : renderHeartTabHtml(b);
 
   main.innerHTML = `
     ${renderBotCard(b)}
@@ -809,6 +1356,13 @@ function renderBotDetail(id) {
 
   // 各标签页自己的数据加载（切 tab 即分组加载，不做无用请求）
   if (tab === 'chat') {
+    // 切回对话页时把还没处理的提议重新挂上（提议是常驻状态，不随一次流式结束而消失）
+    renderPendingStrip(id);
+    // 同步状态同理：它是**可回看的状态**，切走再切回来该还在
+    renderSyncLine(id);
+    // 右侧胶囊：角色从 state 直接读，世界要取一次世界卡
+    renderChatCaps(id);
+    loadWorlds(id);
     if (_chatTid) {
       const tid = _chatTid;
       loadSessions(id, tid);
@@ -819,6 +1373,8 @@ function renderBotDetail(id) {
     }
     // 标签条重绘后（此时布局刚落定）把当前对话滚进视野
     requestAnimationFrame(scrollActiveThreadTab);
+  } else if (tab === 'characters') {
+    loadCharacters();
   } else if (tab === 'memory') {
     loadMemoryFiles(id);
     loadMemLayers(id);
@@ -867,7 +1423,7 @@ function renderBotCard(b) {
           </div>
         </div>
         <div class="bc-actions">
-          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑角色信息：名称 / 头像 / 模型 / 记忆条数 / 联网 / 流式">${IC_SETTINGS}<span class="lb">设置</span></button>
+          <button class="ghost sm" onclick="openBotSettings('${b.id}')" title="编辑写手信息：名称 / 头像 / 模型 / 记忆条数 / 联网 / 流式">${IC_SETTINGS}<span class="lb">设置</span></button>
           <button class="ghost sm ghost-del" onclick="delBot('${b.id}')">删除</button>
         </div>
       </div>
@@ -972,12 +1528,12 @@ function renderChannelTabHtml(b) {
         ${on ? badge(st) : '<span class="status-chip"><span class="chip-dot off"></span>未连接</span>'}
       </div>
       <div class="chan-lead">
-        <label class="switch" title="开启后本角色会登录下方的 QQ 官方机器人">
+        <label class="switch" title="开启后本写手会登录下方的 QQ 官方机器人">
           <input type="checkbox" id="ch-enabled" ${on ? 'checked' : ''}>
           <span class="slider"></span>
         </label>
         <span class="chan-lead-text">连接 QQ
-          <span class="chan-lead-sub">开启后本角色会以 AppID + AppSecret 登录 QQ 官方机器人，收发单聊 / 群聊 / 频道消息。不开启也不影响面板里的对话、记忆与心跳 —— 不连 QQ 是完整可用的形态。</span>
+          <span class="chan-lead-sub">开启后本写手会以 AppID + AppSecret 登录 QQ 官方机器人，收发单聊 / 群聊 / 频道消息。不开启也不影响面板里的对话、记忆与心跳 —— 不连 QQ 是完整可用的形态。</span>
         </span>
       </div>
       <div class="grid-3">
@@ -1045,7 +1601,7 @@ function openBotSettings(id) {
   overlay.innerHTML = `
     <div class="modal-card bot-settings-modal">
       <div class="modal-head">
-        <span>设置角色 — ${esc(b.name || b.id)}</span>
+        <span>设置写手 — ${esc(b.name || b.id)}</span>
         <span class="spacer"></span>
         <button class="ghost sm" onclick="closeBotSettings()">${IC_CLOSE}<span class="lb">关闭</span></button>
       </div>
@@ -1109,7 +1665,8 @@ function openBotSettings(id) {
           </select></div>
           <div class="field"><label>被截断时</label><div class="value">${IC_CHECK}<span class="lb">自动补全，不受此开关影响</span></div></div>
         </div>
-        <div class="frm-hint">这里只管角色本体。QQ 连接（AppID / AppSecret / 运行环境）在角色卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
+        ${botPoolHtml(b)}
+        <div class="frm-hint">这里只管写手本体。QQ 连接（AppID / AppSecret / 运行环境）在写手卡下的「渠道」标签页 —— 不连 QQ 也能正常对话、记忆、心跳。</div>
       </div>
       <div class="modal-foot cf-foot">
         <button class="ghost" onclick="closeBotSettings()">取消</button>
@@ -1123,6 +1680,72 @@ function openBotSettings(id) {
 function closeBotSettings() {
   const m = $('#bot-settings-modal');
   if (m) m.remove();
+}
+
+// 写手设置里的「这位写手的角色池」区块：勾选 = 这位写手能写他。
+// ★ 角色本体存在**全局共享角色池**里，勾选只改 bot.activeCharacterIds（引用），
+//   不动角色本身 —— 同一位角色可以被多位写手同时选用。
+function botPoolHtml(b) {
+  const all = state.characters || [];
+  const activeIds = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : []).map(String);
+  const rows = all.map((c) => {
+    const on = activeIds.includes(String(c.id));
+    const meta = [String(c.id), c.age || '', (c.tags || []).join(' / '),
+      c.experienceCount ? `${c.experienceCount} 条经历` : ''].filter(Boolean).join(' · ');
+    return `<label class="chr-pick${on ? ' on' : ''}" title="${esc(c.id)}">
+        <input type="checkbox" class="chr-pick-box" value="${esc(c.id)}"${on ? ' checked' : ''}>
+        <span class="ch-avatar">${characterAvatarInner(c)}</span>
+        <span class="chr-pick-n">${esc(c.name)}</span>
+        <span class="chr-pick-m">${esc(meta)}</span>
+      </label>`;
+  }).join('');
+  return `<div class="chr-pool">
+      <div class="chr-pool-head">${IC_USERS}<span class="lb">这位写手的角色池</span>
+        <span class="spacer"></span>
+        <span class="ch-count">已选 ${activeIds.length} / 池中 ${all.length}</span>
+        <button class="ghost sm" type="button" onclick="newCharForWriter('${b.id}')" title="新建一位角色，并自动加进这位写手的角色池">${IC_PLUS}<span class="lb">新建角色</span></button>
+      </div>
+      ${all.length
+      ? `<div class="chr-pool-list">${rows}</div>`
+      : `<div class="chr-pool-empty">角色池还是空的。点「新建角色」建一位，或者直接跟这位写手聊 —— 它可以在剧情里提议新建人物。</div>`}
+      <div class="chr-pool-note">勾选的角色会写进它的提示词（【你的角色池】），它只能改自己池里的角色、也只能给池里的角色沉淀经历。角色本体在全局角色池，所有写手共用。</div>
+    </div>`;
+}
+
+// 从写手设置里新建角色：建完自动挂进这位写手的池子（否则建完它自己也写不了）
+function newCharForWriter(botId) {
+  _chrNewWriter = botId;
+  openCharacterEditModal(null);
+}
+
+// 重绘写手设置里那块角色池（只换这一块，不动用户正在填的其他表单项）。
+// ★ 不加这个会有静默 bug：在设置里「新建角色」后新角色已经进池子了，
+//   但勾选列表还是旧的（没有它）—— 用户再点保存，saveBot 按可见勾选框写
+//   activeCharacterIds，就把刚建的角色又踢出去了。
+function refreshBotPool(botId) {
+  const wrap = document.querySelector('#bot-settings-modal .chr-pool');
+  if (!wrap) return;
+  const b = (state.bots || []).find((x) => x.id === botId);
+  if (!b) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = botPoolHtml(b);
+  const nu = tmp.querySelector('.chr-pool');
+  if (nu) wrap.replaceWith(nu);
+}
+
+// 把角色挂进某位写手的角色池（追加式，不动已有引用）
+async function attachCharToWriter(botId, charId) {
+  const b = (state.bots || []).find((x) => x.id === botId);
+  if (!b) return false;
+  const ids = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : []).slice();
+  if (!ids.includes(charId)) ids.push(charId);
+  const r = await api(`/api/bots/${encodeURIComponent(botId)}/characters`, 'PUT', { characterIds: ids });
+  if (!r.ok) {
+    toast(`已创建，但没能加进写手的角色池：${r.err || '未知错误'}`, 'err');
+    return false;
+  }
+  if (r.activeCharacterIds) b.activeCharacterIds = r.activeCharacterIds;
+  return true;
 }
 
 let _scene = 'c2c';
@@ -1152,7 +1775,7 @@ function hbModeSel(el) {
 function hbTaskRowHtml(time, prompt) {
   return `<div class="hb-task-row">
     <input class="hb-t-time" type="text" placeholder="HH:MM" value="${esc(time)}">
-    <input class="hb-t-prompt" type="text" placeholder="该时间点要机器人做的事 / 提示词" value="${esc(prompt)}">
+    <input class="hb-t-prompt" type="text" placeholder="该时间点要写手做的事 / 提示词" value="${esc(prompt)}">
     <button class="ghost sm" onclick="this.closest('.hb-task-row').remove()" title="删除该时间点">${IC_CLOSE}</button>
   </div>`;
 }
@@ -1268,7 +1891,7 @@ function renderHeartCard(b) {
     : [Object.assign({}, b.heartbeat || {})];
   return `
     <div class="card heart-card">
-      <div class="card-title">${IC_HEART}<span class="lb">心跳任务（机器人主动发言）</span>
+      <div class="card-title">${IC_HEART}<span class="lb">心跳任务（写手主动发言）</span>
         <span class="spacer"></span>
         <span class="hb-status" id="hb-status" style="font-size:10px;color:var(--text-faint)"></span>
         <button class="ghost sm" onclick="hbAddBlock('${esc(b.id)}')">${IC_PLUS}<span class="lb">新增任务</span></button>
@@ -1361,6 +1984,7 @@ const SETTING_TABS = [
   { id: 'generation', n: '生成', ic: IC_SLIDERS },
   { id: 'general', n: '联网', ic: IC_GLOBE },
   { id: 'global', n: '全局设定', ic: IC_LAYERS },
+  { id: 'character', n: '角色卡', ic: IC_USERS },
   { id: 'stats', n: '用量统计', ic: IC_CHART },
 ];
 function settingsTabId() {
@@ -1381,7 +2005,7 @@ function renderSettings() {
   const show = (id) => id === tab ? '' : ' style="display:none"';
   const globalCard = `
     <div class="card">
-      <div class="card-title">全局设定（机器人勾选「采用全局设定」时生效）
+      <div class="card-title">全局设定（写手勾选「采用全局设定」时生效）
         <span class="spacer"></span>
         <button class="ghost sm" onclick="newGlobalFile()">${IC_PLUS}<span class="lb">新增文件</span></button>
       </div>
@@ -1413,6 +2037,7 @@ function renderSettings() {
     <div class="st-sec" data-sec="generation"${show('generation')}>${renderGeneration()}</div>
     <div class="st-sec" data-sec="general"${show('general')}>${renderGeneral()}</div>
     <div class="st-sec" data-sec="global"${show('global')}>${globalCard}${renderAdminSetting()}</div>
+    <div class="st-sec" data-sec="character"${show('character')}>${renderCharacterTemplate()}</div>
     <div class="st-sec" data-sec="stats"${show('stats')}>${statsCard}</div>`;
   _gFiles = [];
   _gKey = '';
@@ -1444,6 +2069,49 @@ function renderAdminSetting() {
         <div class="fixed-rule">${esc(ADMIN_FIXED_RULE)}</div>
       </div>
     </div>`;
+}
+
+// ---- 设置页「角色卡」：角色卡模板（全局）----
+// ★ 角色设定本身是**纯文本**，图片不进正文 —— 只以链接挂在卡上（形象链接字段）。
+//   模板里那行 `##Counter：名字[范围]` 引擎会读，所以默认模板里就带一条。
+function charTemplateOf() {
+  const t = typeof state.characterTemplate === 'string' ? state.characterTemplate : '';
+  return t.trim() ? t : (state.characterTemplateDefault || '');
+}
+function renderCharacterTemplate() {
+  return `
+    <div class="card gen-card">
+      <div class="card-title">角色卡模板（新建角色时套用）
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="resetCharTemplate()">${IC_REFRESH}<span class="lb">恢复默认</span></button>
+        <button class="primary sm" onclick="saveCharTemplate()">保存</button>
+      </div>
+      <p class="empty-hint" style="margin:0 0 10px">
+        新建角色时，这份正文会预填进角色的「角色设定」。它决定一张角色卡的<b>基本样式</b>：
+        分几个小节、每节写什么。<code>{{名字}}</code> 是占位，会换成实际角色名。
+      </p>
+      <textarea id="chr-tpl" rows="18" spellcheck="false" placeholder="（留空则用默认模板）">${esc(charTemplateOf())}</textarea>
+      <p class="empty-hint" style="margin-top:10px">
+        ★ 计数器直接写在正文里：<code>##Counter：名字[最小,最大]</code>，<code>[]</code> 留空或不写 = 不限。
+        角色卡上写的范围<b>优先于</b>写手「标准要求」里写的同名范围。
+      </p>
+    </div>`;
+}
+
+async function saveCharTemplate() {
+  const tpl = ($('#chr-tpl') && $('#chr-tpl').value) || '';
+  const r = await api('/api/config', 'PUT', { characterTemplate: tpl });
+  if (!r.ok) return toast(r.err || '保存失败', 'err');
+  state.characterTemplate = tpl;
+  toast('角色卡模板已保存', 'ok');
+}
+
+async function resetCharTemplate() {
+  const el = $('#chr-tpl');
+  if (!el) return;
+  if (!(await uiConfirm({ title: '恢复默认模板', message: '把模板换回系统默认（当前编辑的内容会丢失，保存后生效）。确认？', okText: '恢复' }))) return;
+  el.value = state.characterTemplateDefault || '';
+  toast('已填入默认模板，点「保存」生效', 'ok');
 }
 
 function backFromSettings() {
@@ -1571,7 +2239,7 @@ async function loadUsageStats() {
       ${cards.map(c => `<div class="stat-card"><label>${esc(c.label)}</label><div data-count="${c.val}">0</div><span>${esc(c.sub)}</span></div>`).join('')}
     </div>
     <div class="stat-sec">
-      <label>按机器人</label>
+      <label>按写手</label>
       ${byBot.length ? byBot.map(x => `
         <div class="bar-row">
           <span class="bar-label">${esc(x.botId)}</span>
@@ -1606,11 +2274,26 @@ async function loadMemoryFiles(id) {
 // 记忆层级标签
 const TIER_LABEL = { 1: '强制', 2: '摘要', 3: '冷' };
 
+// ★ 六段式组成（用户决策 2026-10-05）：写手档案 = ①②③ + 背景资料，
+//   自动生成 = ④⑤，其余用户自己新建的 = ⑥ 附加提示词。
+//   面板按这三组分开列，否则 7 个文件混在一起看不出「写手是由什么组成的」。
+const PRESET_MEM_ORDER = ['persona', 'standards', 'world', 'plot', 'content', 'traits'];
+const PRESET_MEM_KEYS = new Set(PRESET_MEM_ORDER);
+
 function renderMemFiles(id, files) {
   const el = $('#mem-files');
   if (!el) return;
   if (!files.length) { el.innerHTML = `<div class="empty-hint">暂无记忆文件，点击右上角 ${IC_PLUS} 新增</div>`; return; }
-  el.innerHTML = files.map((f, i) => `
+  const byPreset = (a, b) => PRESET_MEM_ORDER.indexOf(a.key) - PRESET_MEM_ORDER.indexOf(b.key);
+  const preset = files.filter((f) => !f.sys && PRESET_MEM_KEYS.has(f.key)).sort(byPreset);
+  const custom = files.filter((f) => !f.sys && !PRESET_MEM_KEYS.has(f.key));
+  const sys = files.filter((f) => f.sys);
+  const group = (title, sub, arr) => (!arr.length ? '' : `
+    <div class="mem-group">
+      <div class="mem-sec-title">${esc(title)}<span class="mem-sec-sub">${esc(sub)}</span></div>
+      ${arr.map(memFileRow).join('')}
+    </div>`);
+  const memFileRow = (f, i) => `
     <div class="mem-file ${f.enabled ? '' : 'disabled'}" data-key="${esc(f.key)}" draggable="true"
          onclick="openMemFile('${id}','${f.key}')" title="点击概览内容 / 编辑备注；拖动左侧手柄调整重要性" style="animation-delay:${Math.min(i * 45, 300)}ms"
          ondragstart="memDragStart(event,'${id}','${esc(f.key)}')" ondragover="memDragOver(event)"
@@ -1627,7 +2310,10 @@ function renderMemFiles(id, files) {
       <span class="mf-desc">${esc(f.desc) || '无备注'}</span>
       <span class="mf-state">${f.enabled ? '启用' : '已禁用'}</span>
       <button class="ghost sm mf-del" onclick="event.stopPropagation();delMemoryFile('${id}','${f.key}')" title="删除文件">${IC_CLOSE}</button>
-    </div>`).join('');
+    </div>`;
+  el.innerHTML = group('写手档案', '① 写手设定 · ② 标准要求（输出头尾 / 计数器） · ③ 世界卡 · 世界观/背景 · 资料库 · 写作特征', preset)
+    + group('附加提示词（自建）', '⑥ 你自己新建的记忆文件，内容同样会注入对话', custom)
+    + group('自动生成', '④ 剧情概览 · ⑤ 剧情归档（原文） —— 由 AI 维护', sys);
 }
 
 // ---- 记忆文件拖动排序（重要性分级：越靠前越重要） ----
@@ -1780,7 +2466,7 @@ function renderMemDistill(id) {
     : (s.summaryFileExists ? `<span class="lay-dim">${IC_CHECK}<span class="lb">文件已创建（暂无经历可压缩）</span></span>` : '<span class="lay-dim">未创建（点「生成/更新」立即创建）</span>');
   const evPreview = s.eventCount
     ? s.events.slice(-3).reverse().map((e) => `· [${fmtShortTs(e.ts)}] ${esc(e.event)}`).join('<br>')
-    : `<span class="lay-dim">暂无事件（对话中自动提炼，或使用「AI 归档」记录剧情）</span>`;
+    : `<span class="lay-dim">暂无剧情事件（对话中自动提炼，或使用「AI 归档」记录剧情）</span>`;
   // 「从核心卡还原种子」：种子（persona.md）丢失/清空后一键恢复；需已有核心卡
   const coreSeedBtn = s.core
     ? `<button class="ghost sm" onclick="seedFromCore('${id}')" title="把核心卡内容写回 persona.md（种子丢失/清空后一键恢复）">${IC_COLLAPSE}<span class="lb">还原种子</span></button>`
@@ -1793,8 +2479,8 @@ function renderMemDistill(id) {
   el.innerHTML = `
     <div class="distill-block span2 ${dfCls('core')}"><div class="distill-label" onclick="distillFold(event,'${id}','core')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>人格核心卡 ${badge(s.core ? s.coreFresh : null)}${s.core && s.core.manual ? '<span class="distill-ok">手动编辑</span>' : ''}<span class="spacer"></span>${coreSeedBtn}<button class="ghost sm" onclick="openCoreEditModal('${id}')">${IC_PENCIL}<span class="lb">编辑</span></button></div><div class="distill-body">${coreBody}</div></div>
     ${sumBlocks}
-    <div class="distill-block ${dfCls('events')}"><div class="distill-label" onclick="distillFold(event,'${id}','events')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>经历事件流<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">${IC_SETTINGS}<span class="lb">管理</span></button></div><div class="distill-body">${evPreview}</div></div>
-    <div class="distill-block ${dfCls('evsum')}"><div class="distill-label" onclick="distillFold(event,'${id}','evsum')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>经历摘要（旧事件压缩）<span class="spacer"></span><button class="ghost sm" onclick="regenEventsSummary('${id}')">生成/更新</button>${(s.summary || s.summaryFileExists) ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
+    <div class="distill-block ${dfCls('events')}"><div class="distill-label" onclick="distillFold(event,'${id}','events')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>⑤ 剧情记录（全记录）<span class="distill-count">${s.eventCount} 条 · 归档 ${s.archiveCount}</span><span class="spacer"></span><button class="ghost sm" onclick="openEventManage('${id}')">${IC_SETTINGS}<span class="lb">管理</span></button></div><div class="distill-body">${evPreview}</div></div>
+    <div class="distill-block ${dfCls('evsum')}"><div class="distill-label" onclick="distillFold(event,'${id}','evsum')" title="点击展开/收起正文"><span class="dd-ic">${IC_CARET}</span>④ 剧情概览（AI 蒸馏）<span class="spacer"></span><button class="ghost sm" onclick="regenEventsSummary('${id}')">生成/更新</button>${(s.summary || s.summaryFileExists) ? `<button class="ghost sm" onclick="clearEventsSummary('${id}')">清空</button>` : ''}</div><div class="distill-body">${evBody}</div></div>`;
 }
 
 // AI 蒸馏内容块展开状态：key = `${botId}::${块标识}`；重绘/切页后保持用户选择
@@ -1975,6 +2661,12 @@ async function openMemFile(id, key) {
   const r = await api(`/api/memory/${id}/files`);
   const f = (r.files || []).find(x => x.key === key);
   if (!f) return toast('文件不存在', 'err');
+  // ★ 机器读的语法要给出来：这两份文件里有引擎会解析的标记行，
+  //   用户不知道写法就只能靠猜（或靠管理员 AI 猜）。
+  const SYNTAX_HINTS = {
+    standards: '计数器写在正文里：<code>##Counter：名字[最小,最大]</code>　，<code>[]</code> 留空或不写 = 不限',
+    world: '世界卡里可以有多个世界：<code>## 世界：名字</code>　（写手挑一个作为当前活跃世界）',
+  };
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'memfile-modal';
@@ -2000,6 +2692,7 @@ async function openMemFile(id, key) {
           <label class="frm">备注（可自定义说明，会显示在记忆库列表）</label>
           <input id="mf-desc" type="text" value="${esc(f.desc)}" placeholder="这段记忆的用途说明…" maxlength="80">
         </div>
+        ${SYNTAX_HINTS[key] ? `<div class="mf-syntax">${IC_BULB}<span>${SYNTAX_HINTS[key]}</span></div>` : ''}
         <label class="frm">内容概览</label>
         <pre class="mf-preview">${esc(f.content)}</pre>
       </div>
@@ -2200,7 +2893,9 @@ async function loadSessions(id, tid) {
 //                            可安全回落一次性 POST /api/bots/:id/chat
 //   noFallback 为真        ：请求已经打到服务端（user 消息已落库，回复可能也已生成）
 //                            → 绝不能重放，否则同一条 user 消息会被写两遍
-async function streamBotChat(id, content, tid, onDelta, onProgress) {
+// onPending 是**第三条信道**（与 onDelta / onProgress 并列）：写手提议「沉淀经历 / 改角色卡」
+// 走 SSE 的 `pending` 事件，语义是「等用户点确认」。混进正文会让前端从文本里反解结构 —— 正是要避免的事。
+async function streamBotChat(id, content, tid, onDelta, onProgress, onPending, onSync) {
   let resp;
   try {
     resp = await fetch(API_BASE + `/api/bots/${id}/chat/stream`, {
@@ -2218,6 +2913,12 @@ async function streamBotChat(id, content, tid, onDelta, onProgress) {
     saw = true;
     if (ev.type === 'text') { if (onDelta) onDelta(String(ev.d || '')); }
     else if (ev.type === 'progress') { if (onProgress) { try { onProgress(ev.p || {}); } catch {} } }
+    else if (ev.type === 'pending') { if (onPending && ev.edit) { try { onPending(ev.edit, ev.summary || ''); } catch {} } }
+    // 输出后自检的「本轮同步了什么」：又一条独立信道（见 server.js runSelfCheck）
+    else if (ev.type === 'sync') { if (onSync && Array.isArray(ev.items)) { try { onSync(ev.items); } catch {} } }
+    // ping 是服务端心跳（防中间层按空闲超时掐断长文写作），**只用于保活、不渲染** ——
+    // 落到下面那几个分支之外，自然被忽略；但它已让 saw = true，
+    // 所以连接真断了时的报错会准确地说「响应不完整（连接被中断）」而不是「无响应」。
     else if (ev.type === 'done') done = ev;
     else if (ev.type === 'err') srvErr = ev.err || '调用失败';
   }, () => { /* 传输层异常：交由下面的「零事件」判定统一处理 */ });
@@ -2306,6 +3007,14 @@ function openOutputSheet(id) {
             <option value="full" ${b.lengthPerm === 'full' ? 'selected' : ''}>全权</option>
           </select>
         </div>
+        <div class="os-row">
+          <div class="os-label">写完自检<div class="os-desc">正文写完后核对一遍：计数器 / 世界 / 剧情要点</div></div>
+          <select id="os-selfcheck">
+            <option value="" ${tri(b.selfCheck) === '' ? 'selected' : ''}>跟随全局（当前：${state.selfCheck === false ? '关闭' : '开启'}）</option>
+            <option value="true" ${b.selfCheck === true ? 'selected' : ''}>开启</option>
+            <option value="false" ${b.selfCheck === false ? 'selected' : ''}>关闭</option>
+          </select>
+        </div>
       </div>
       <div class="modal-foot cf-foot">
         <button class="ghost" onclick="closeOutputSheet()">取消</button>
@@ -2336,6 +3045,7 @@ async function saveOutputSheet(id) {
   b.longReplyTarget = tEl && tEl.value.trim() !== '' ? clampInt(tEl.value, 0, 0, 100000) : undefined;
   b.longReplyAuto = triOf('#os-auto');
   b.lengthPerm = $('#os-perm') && $('#os-perm').value ? $('#os-perm').value : undefined;
+  b.selfCheck = triOf('#os-selfcheck');
   const r = await api('/api/config', 'PUT', { bots });
   if (r.ok) { closeOutputSheet(); await loadState(); toast('已更新输出设置', 'ok'); }
   else toast(r.err, 'err');
@@ -2418,6 +3128,150 @@ function makeStreamBubble(container, bot) {
   return { paint, el };
 }
 
+// 写手提议的「待确认写操作」，按写手分组常驻：{ botId: [edit, ...] }
+// ★ 为什么常驻、而不是直接挂在会话列表尾部：
+//   那条列表每 4 秒被 loadSessions 整块重绘一次（_sessionTimer 轮询），
+//   挂进去的确认条会在用户点到之前就被抹掉——写手提议永远等不到回答。
+//   挪到独立容器里，轮询碰不到它；切走再切回来（renderBotDetail）也能重挂。
+let _pendingEdits = {};
+
+// ---- 对话页右侧胶囊：活跃世界 / 活跃角色（用户决策 2026-10-05）----
+// 为什么放在右侧而不是顶部：顶部已经被「线程条 + 对话标题」占满，
+// 再塞一排胶囊会把正文往下挤。右侧竖排在宽屏上几乎不占正文宽度，且**扫一眼就知道
+// 「这一轮是在哪个世界、写哪几个人」** —— 这是写长故事时最常需要确认的两件事。
+//
+// 数据来源分两处（刻意如此）：
+//   · 世界：世界卡（memory/world.md）里的 `## 世界：名字` 小节 + bot.activeWorld → 走接口取。
+//   · 角色：全局角色池 + bot.activeCharacterIds → state 里就有，不用额外请求。
+let _worlds = {};   // { botId: { worlds:[{name,body}], active, effective, changeCount } }
+
+async function loadWorlds(id) {
+  const r = await api(`/api/memory/${encodeURIComponent(id)}/worlds`).catch(() => null);
+  if (r && r.ok) _worlds[id] = r;
+  renderChatCaps(id);
+}
+
+function renderChatCaps(id) {
+  const el = document.getElementById('chat-caps');
+  if (!el) return;
+  const b = (state.bots || []).find(x => x.id === id);
+  if (!b) { el.innerHTML = ''; return; }
+
+  const w = _worlds[id] || { worlds: [], effective: '' };
+  const worldPill = w.effective
+    ? `<button class="cap-pill cap-world" onclick="switchWorld('${id}')" title="点击切换当前活跃世界（世界卡里的 ## 世界：小节）">
+         ${IC_GLOBE}<span class="cap-t">${esc(w.effective)}</span>
+         ${w.worlds.length > 1 ? `<span class="cap-n">${w.worlds.length}</span>` : ''}
+       </button>`
+    : '';
+
+  const chars = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : [])
+    .map(cid => (state.characters || []).find(c => c.id === cid))
+    .filter(Boolean);
+  const MAXC = 6;
+  const charPills = chars.slice(0, MAXC).map(c => `
+    <button class="cap-pill cap-char" onclick="characterEdit('${esc(c.id)}')" title="编辑角色卡：${esc(c.name)}">
+      <span class="cap-av">${characterAvatarInner(c)}</span><span class="cap-t">${esc(c.name)}</span>
+    </button>`).join('');
+
+  const head = (ic, t) => `<div class="cap-head">${ic}<span>${t}</span></div>`;
+  el.innerHTML = `
+    ${w.effective ? head(IC_GLOBE, '活跃世界') + worldPill : ''}
+    ${chars.length ? head(IC_USERS, `活跃角色 ${chars.length}`) + charPills
+      + (chars.length > MAXC ? `<div class="cap-more">还有 ${chars.length - MAXC} 位（在角色页看全部）</div>` : '')
+      : (w.effective ? '' : '<div class="cap-empty">这位写手还没选角色，也没有多世界</div>')}`;
+}
+
+// 切换活跃世界：弹出世界卡里的世界列表（只有一个小节也允许，用于确认当前状态）
+async function switchWorld(id) {
+  const w = _worlds[id];
+  if (!w || !w.worlds.length) return toast('世界卡里还没有「## 世界：名字」小节', 'err');
+  const old = document.getElementById('world-pick');
+  if (old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'world-pick';
+  overlay.innerHTML = `
+    <div class="modal-card world-pick-card">
+      <div class="modal-head">
+        <span>${IC_GLOBE}<span class="lb">当前活跃世界</span></span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('world-pick').remove()">${IC_CLOSE}<span class="lb">关闭</span></button>
+      </div>
+      <div class="modal-body">
+        <p class="empty-hint" style="margin:0 0 10px">
+          写手只会按当前活跃世界来写（地名、势力、规则都取它）。世界卡里的小节写法：<code>## 世界：名字</code>
+        </p>
+        ${w.worlds.map(x => `
+          <button class="world-opt ${x.name === w.effective ? 'on' : ''}" data-name="${esc(x.name)}" onclick="pickWorld('${id}', this.dataset.name)">
+            <span class="wo-name">${esc(x.name)}</span>
+            ${x.body ? `<span class="wo-body">${esc(x.body.replace(/\s+/g, ' ').slice(0, 90))}</span>` : ''}
+            ${x.name === w.effective ? `<span class="wo-on">${IC_CHECK}当前</span>` : ''}
+          </button>`).join('')}
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+async function pickWorld(id, name) {
+  const r = await api(`/api/memory/${encodeURIComponent(id)}/worlds/active`, 'POST', { name });
+  if (!r.ok) return toast(r.err || '切换失败', 'err');
+  const el = document.getElementById('world-pick');
+  if (el) el.remove();
+  await loadWorlds(id);
+  toast(`已切换到世界「${name}」`, 'ok');
+}
+
+// ---- 文件同步状态（输入框上方那行灰字）----
+// 用户决策 2026-10-05：「对话界面，底部应该用灰色小字撰写文件同步状态，比如 XX计数器已经更新」
+//
+// ★ 为什么单独做一条而不是复用 toast：
+//   toast 是「发生了什么」的一次性提示，看完就没了；同步状态是**可回看的状态**——
+//   用户想知道「刚才那轮到底动了什么」，滚动到底就该看见。
+// ★ 只保留最近 SYNC_KEEP 条：这是状态行，不是日志面板。
+const SYNC_KEEP = 6;
+let _syncLog = {};   // { botId: [{kind,text,ts}] }
+
+function pushSync(botId, items) {
+  if (!botId || !Array.isArray(items) || !items.length) return;
+  const arr = _syncLog[botId] || (_syncLog[botId] = []);
+  for (const it of items) {
+    if (!it || !it.text) continue;
+    arr.push({ kind: it.kind || 'info', text: String(it.text), ts: Date.now() });
+  }
+  if (arr.length > SYNC_KEEP) arr.splice(0, arr.length - SYNC_KEEP);
+  renderSyncLine(botId);
+}
+
+function renderSyncLine(botId) {
+  const el = document.getElementById('sync-line');
+  if (!el) return;
+  const list = _syncLog[botId] || [];
+  el.innerHTML = list.length
+    ? list.map((x) => `<div class="sl-row k-${esc(x.kind)}">${IC_FILE}<span>${esc(x.text)}</span></div>`).join('')
+    : '';
+}
+
+function renderPendingStrip(botId) {
+  const el = document.getElementById('pending-strip');
+  if (!el) return;
+  const list = _pendingEdits[botId] || [];
+  el.innerHTML = list.length
+    ? `<div class="ps-head">${IC_CLOCK}<span class="lb">写手提议把这些沉淀到角色卡上，等你确认</span></div>`
+      + list.map((ed) => renderEditBar(ed)).join('')
+    : '';
+}
+
+// 处理完（确认 / 忽略）就从常驻列表里摘掉，否则下次重绘它会阴魂不散地回来
+function dropPending(edit) {
+  const sig = JSON.stringify(edit);
+  for (const id of Object.keys(_pendingEdits)) {
+    const kept = (_pendingEdits[id] || []).filter((x) => JSON.stringify(x) !== sig);
+    if (kept.length !== (_pendingEdits[id] || []).length) _pendingEdits[id] = kept;
+  }
+}
+
 // ---- 面板直接对话（在对话页的当前线程里说话）----
 async function directChat(id) {
   const ta = $('#f-chat');
@@ -2446,12 +3300,14 @@ async function directChat(id) {
   // 服务端就已落库（流式路由是先写 user 消息再调模型），这时填回去
   // 只会诱导用户把同一句重发一遍。
   const restoreInput = () => { if (ta && !ta.value) ta.value = content; };
+  // 写手提议的「待确认写操作」（如沉淀经历）—— 直接推进常驻列表（引用同一份数组）
+  const pendings = (_pendingEdits[id] = _pendingEdits[id] || []);
 
   try {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    }, (p) => setProgress(p));
+    }, (p) => setProgress(p), (edit) => pendings.push(edit), (items) => pushSync(id, items));
     if (r && r.ok) {
       paint(r.reply, false);
       toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
@@ -2460,6 +3316,9 @@ async function directChat(id) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat，保住「流式不可用的环境仍能对话」
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
+      // 非流式路径没有 SSE 信道，待确认写操作在 pending / sync 里一起带回来
+      for (const x of (r.pendings || [])) if (x && x.edit) pendings.push(x.edit);
+      if (Array.isArray(r.sync)) pushSync(id, r.sync);
       if (r.ok) toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
       else { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
@@ -2474,6 +3333,7 @@ async function directChat(id) {
     await loadSessions(id, tid);
     // 消息数与活跃时间变了 → 局部刷新线程条与侧栏（不重建视图，保住输入焦点）
     if (tid) await refreshThreadsUI(id, tid);
+    renderPendingStrip(id);
     if (btn) { btn.disabled = false; btn.textContent = '发送'; }
   }
 }
@@ -2536,17 +3396,21 @@ async function modalChat(id, tid) {
 
   // 同 directChat：只有请求压根没到服务端时才把原文填回
   const restoreInput = () => { if (ta && !ta.value) ta.value = content; };
+  // 与 directChat 同构：提议落进常驻列表（见 renderPendingStrip 的说明）
+  const pendings = (_pendingEdits[id] = _pendingEdits[id] || []);
 
   try {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    }, (p) => setProgress(p));
+    }, (p) => setProgress(p), (edit) => pendings.push(edit), (items) => pushSync(id, items));
     if (r && r.ok) paint(r.reply, false);
   } catch (err) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat
       const r = await api(`/api/bots/${id}/chat`, 'POST', tid ? { content, threadId: tid } : { content });
+      for (const x of (r.pendings || [])) if (x && x.edit) pendings.push(x.edit);
+      if (Array.isArray(r.sync)) pushSync(id, r.sync);
       if (!r.ok) { toast('对话失败: ' + r.err, 'err'); restoreInput(); }
     } else {
       toast('对话失败: ' + err.message, 'err');
@@ -2568,6 +3432,7 @@ async function modalChat(id, tid) {
       const mb = document.querySelector('#session-modal .modal-body');
       if (mb) mb.scrollTop = mb.scrollHeight;
       if (tid) refreshThreadsUI(id, tid);
+      renderPendingStrip(id);
     }
     if (btnEl) { btnEl.disabled = false; btnEl.textContent = '发送'; }
   }
@@ -2645,7 +3510,7 @@ function exportSessions(id, tid) {
   const bot = (state.bots || []).find(x => x.id === id);
   const th = tid ? threadsOf(id).threads.find(x => x.id === tid) : null;
   const lines = list.map(s => {
-    const who = s.role === 'assistant' ? (bot?.name || '角色') : '用户';
+    const who = s.role === 'assistant' ? (bot?.name || '写手') : '用户';
     return `[${new Date(s.ts).toLocaleString()}] ${who}\n${s.content}`;
   });
   const head = `${bot?.name || id}${th ? ' · ' + (th.title || '') : ''} 对话记录（${list.length} 条）`;
@@ -2691,9 +3556,23 @@ try {
 // 记住本环境对流式的支持情况：失败过 → 以后直接走普通路径
 function adminMarkStream(ok) {
   try {
-    if (ok) localStorage.removeItem('qqbot-stream-blocked');
-    else localStorage.setItem('qqbot-stream-blocked', '1');
+    if (ok) {
+      localStorage.removeItem('qqbot-stream-blocked');
+      _adminNoEvent = 0;      // 成功一次就清掉「连续零事件」，下次不用再攒两次
+    } else {
+      localStorage.setItem('qqbot-stream-blocked', '1');
+    }
   } catch {}
+}
+// ★★ 「连续零事件」计数（2026-10-05）：**一次**零事件不足以断定本环境不支持 SSE ——
+//   单次网络抖动、服务刚重启都可能连不上。旧实现一次就永久关掉流式，
+//   之后所有管理员对话都退化成「一分钟起步的普通模式」，用户看着就像「调用模型就断掉」。
+//   现在要连续两次才降级；任何一次成功都会把它清零。
+let _adminNoEvent = 0;
+function adminBumpNoEvent() {
+  _adminNoEvent++;
+  if (_adminNoEvent >= 2) adminForceNormal('当前环境不支持流式输出，已自动切换为普通模式');
+  return _adminNoEvent;
 }
 // 流式失败后静默回落普通模式（本环境不支持 SSE，下次就直接走普通路径）。
 // 不再有按钮要同步 —— 这不是用户可切换的偏好，只是环境能力探测的结果。
@@ -2801,6 +3680,7 @@ function openAdminPanel() {
             { k: 'cfg', icon: IC_SETTINGS, name: '配置模型' },
             { k: 'prompt', icon: IC_PENCIL, name: '编写提示词' },
             { k: 'edit', icon: IC_PENCIL, name: '改写记忆' },
+            { k: 'chars', icon: IC_USERS, name: '角色池' },
             { k: 'summary', icon: IC_LAYERS, name: '总结会话' },
             { k: 'mem', icon: IC_MEMORY, name: '总结记忆' },
   ];
@@ -2809,7 +3689,7 @@ function openAdminPanel() {
       <div class="modal-head">
         <div class="admin-head-l">
           <span class="admin-title">${IC_BOT}<span class="lb">面板管理员</span></span>
-          <span class="admin-sub">配置模型 · 提示词 · 总结 · Agent 工具 · 编辑需你确认</span>
+          <span class="admin-sub">配置模型 · 提示词 · 角色池 · 总结 · 编辑需你确认</span>
         </div>
         <span class="spacer"></span>
         <select id="admin-model" class="admin-model-sel" onchange="adminPickModel(this.value)" ${usable.length ? '' : 'disabled'}>
@@ -2823,7 +3703,7 @@ function openAdminPanel() {
         <span class="at-cap">正在操作</span>
         <span class="at-name">${esc(nowBot.name || nowBot.id)}</span>
         <span class="at-id">${esc(nowBot.id)} · ${nowBot.sandbox === false ? '正式' : '沙箱'}</span>
-        <span class="at-sub">管理员将读取 / 建议修改该机器人的记忆与会话，确认前绝不写入</span>
+        <span class="at-sub">管理员将读取 / 建议修改该写手的记忆与会话，确认前绝不写入</span>
       </div>` : ''}
       <div class="admin-layout">
         <div class="admin-chat-col">
@@ -2894,33 +3774,49 @@ function adminClear() {
   if (msgs) msgs.innerHTML = '';
 }
 
-// 快捷指令：组织 prompt 并发送（botIdOverride 决定注入哪个机器人的上下文）
+// 快捷指令：组织 prompt 并发送（botIdOverride 决定注入哪位写手的上下文）
 function adminQuick(type) {
   const botId = currentBotId();
   const botName = currentBotName();
   let prompt = '';
   if (type === 'model') prompt = '请帮我创建/接入一个新模型：先用 get_panel_state 查看现有模型避免重复；信息不足时用 web_search 查官方 API 地址与模型 ID，再用 create_model 工具直接添加（无需确认）。';
-  else if (type === 'edit') prompt = botName ? `请使用工具完整读取机器人「${botName}」的记忆库文件与最近会话，诊断人设/表述/设定问题。如需修改，用 propose_memory_edit / propose_global_edit / propose_bot_config_edit 提交修改建议（我会确认后才会真正写入）。` : '请使用工具读取当前机器人记忆库与最近会话进行诊断；需要修改时用 propose_* 工具提交建议（用户确认后才写入）。';
+  else if (type === 'edit') prompt = botName ? `请使用工具完整读取写手「${botName}」的记忆库文件与最近会话，诊断人设/表述/设定问题。如需修改，用 propose_memory_edit / propose_global_edit / propose_bot_config_edit 提交修改建议（我会确认后才会真正写入）。` : '请使用工具读取当前写手记忆库与最近会话进行诊断；需要修改时用 propose_* 工具提交建议（用户确认后才写入）。';
   else if (type === 'cfg') prompt = '请先调用 get_panel_state / list_robots 了解现状，再评估模型与全局配置并给出具体建议（选型、参数、联网）。';
-  else if (type === 'prompt') prompt = '请为机器人写一份高质量的人设提示词（Markdown，含角色背景、性格、说话风格、行为准则）；如你想基于现有记忆库改写，请先用 read_memory_file 读取原文再产出，并可用 propose_global_edit 提供全局提示词修改建议。';
-  else if (type === 'summary') prompt = botName ? `请使用 read_sessions 读取机器人「${botName}」最近的会话记录并总结，提炼关键信息与后续建议。` : '请使用 read_sessions 读取当前机器人最近会话并总结。';
-  else if (type === 'mem') prompt = botName ? `请使用 list_memory_files / read_memory_file 浏览机器人「${botName}」的记忆库，总结当前设定并指出可优化处。` : '请使用工具读取当前机器人的记忆库并总结设定。';
+  else if (type === 'chars') prompt = '请先调用 list_characters 查看当前角色池，然后告诉我池子里有哪些角色、各自被哪些写手选用，并指出哪些角色的设定还比较单薄、值得补充。如需调整或新增角色，用 propose_character_edit / propose_character_create 提交建议（我会确认后才会真正写入）。';
+  else if (type === 'prompt') prompt = '请为写手写一份高质量的人设提示词（Markdown，含角色背景、性格、说话风格、行为准则）；如你想基于现有记忆库改写，请先用 read_memory_file 读取原文再产出，并可用 propose_global_edit 提供全局提示词修改建议。';
+  else if (type === 'summary') prompt = botName ? `请使用 read_sessions 读取写手「${botName}」最近的会话记录并总结，提炼关键信息与后续建议。` : '请使用 read_sessions 读取当前写手最近会话并总结。';
+  else if (type === 'mem') prompt = botName ? `请使用 list_memory_files / read_memory_file 浏览写手「${botName}」的记忆库，总结当前设定并指出可优化处。` : '请使用工具读取当前写手的记忆库并总结设定。';
   adminSend(prompt, botId);
 }
 
 // 工具展示元信息（图标 + 中文名）
 const ADMIN_TOOL_META = {
-  list_robots: [IC_MEMORY, '机器人列表'],
+  list_robots: [IC_MEMORY, '写手列表'],
   get_panel_state: [IC_LAYERS, '面板概况'],
+  list_characters: [IC_USERS, '角色池'],
   list_memory_files: [IC_MEMORY, '记忆库'],
   read_memory_file: [IC_FILE, '读取记忆'],
   read_sessions: [IC_CHAT, '读取会话'],
   read_global_files: [IC_SETTINGS, '全局文件'],
   read_global_file: [IC_SETTINGS, '全局文件'],
   create_model: [IC_PLUS, '新增模型'],
+  summarize_moments: [IC_SPARKLE, '提炼精彩时刻'],
   propose_memory_edit: [IC_PENCIL, '待确认·记忆'],
+  propose_memory_tier: [IC_LAYERS, '待确认·层级'],
+  propose_core_edit: [IC_PENCIL, '待确认·核心卡'],
   propose_global_edit: [IC_PENCIL, '待确认·全局'],
-  propose_bot_config_edit: [IC_PENCIL, '待确认·配置'],
+  propose_bot_config_edit: [IC_PENCIL, '待确认·写手配置'],
+  propose_character_edit: [IC_USERS, '待确认·角色'],
+  propose_character_create: [IC_PLUS, '待确认·新建角色'],
+  propose_world_change: [IC_GLOBE, '待确认·世界改变'],
+  read_character_state: [IC_LAYERS, '角色状态'],
+  propose_counter_edit: [IC_SETTINGS, '待确认·计数器'],
+  propose_experience_edit: [IC_HISTORY, '待确认·经历'],
+  ws_write_file: [IC_FILE, '写工作区'],
+  ws_list_files: [IC_FILE, '工作区'],
+  ws_read_file: [IC_FILE, '读工作区'],
+  ws_delete_file: [IC_TRASH, '删工作区'],
+  propose_ws_inject: [IC_INJECT, '待确认·注入'],
   web_search: [IC_GLOBE, '联网搜索'],
   web_fetch: [IC_LINK, '抓取网页'],
   list_admin_sessions: [IC_LAYERS, '历史会话'],
@@ -3061,7 +3957,24 @@ async function adminSend(prompt, botIdOverride) {
       msgs.appendChild(aiRow);
       msgs.scrollTop = msgs.scrollHeight;
       const ctrl = new AbortController();
-      const wd = setTimeout(() => { try { ctrl.abort(); } catch {} }, 5000); // 5s 内无进展即放弃流式
+      // ★★ 看门狗：**「无进展」而不是「总时长」**（2026-10-05 修「管理员调用模型就断掉」）
+      //
+      //   旧写法是 `setTimeout(abort, 5000)` —— 从请求发出起计时，5 秒后**无条件** abort。
+      //   注释写的是「5s 内无进展即放弃」，但代码里根本没有重置逻辑。
+      //   而管理员 Agent 是**多轮工具循环**（读记忆库 → 读会话 → 再产出），
+      //   模型首字十几秒、几十秒都属正常，且工具轮期间后端一个字节都不发
+      //   → 每一次正常的长思考都被误杀。
+      //
+      //   现在配合后端心跳（每 15s 一帧 ping）：**每收到任何一帧就重置计时器**，
+      //   只有「真的哑了很久」才放弃。首帧单独给更宽的额度（要覆盖模型首字 + 工具轮）。
+      const FIRST_MS = 90000;   // 等首帧：覆盖「模型想很久 + 多轮工具」
+      const IDLE_MS = 45000;    // 首帧之后逐帧的间隔上限（后端 15s 一拍，留 3 倍余量）
+      let hbTimer = null;
+      const armWatchdog = (ms) => {
+        clearTimeout(hbTimer);
+        hbTimer = setTimeout(() => { try { ctrl.abort(); } catch {} }, ms);
+      };
+      armWatchdog(FIRST_MS);
       let acc = '';
       let modelName = '';
       let streamSaw = false;   // 是否收到过任何流式事件（判断本环境是否支持 SSE）
@@ -3079,7 +3992,15 @@ async function adminSend(prompt, botIdOverride) {
           await readAdminSSE(resp.body, (ev) => {
             saw = true;
             streamSaw = true;
-            if (ev.type === 'text') {
+            // ★ 任何一帧（含 open / ping）都算「有进展」→ 续命。
+            //   这正是心跳存在的意义：让「连接活着」与「模型在想」可区分。
+            armWatchdog(IDLE_MS);
+            if (ev.type === 'open' || ev.type === 'ping') { /* 心跳帧：只用于续命，不渲染 */ }
+            else if (ev.type === 'text') {
+              // ⚠️ 语义坑：管理员这条链路的 `text` 是**增量**（server.js 的 `text += d.content`
+              //    之后 emit 单个 delta）→ 这里必须 `+=`。
+              //    而「写手对话」那条（/api/bots/:id/chat/stream）发的是**累积全文**，
+              //    前端必须整体替换。两条链路语义相反，抄错方向会得到重复叠加的乱码。
               acc += ev.d;
               if (isOpen()) {
                 sb.innerHTML = mdSafe(acc) + '<span class="caret"></span>';
@@ -3095,8 +4016,15 @@ async function adminSend(prompt, botIdOverride) {
               doneSeen = true;   // 收到 done → 服务端已完成本轮
               modelName = ev.modelName || '';
               if (Array.isArray(ev.pendings)) for (const p of ev.pendings) if (p) pendings.push(p);
+              // ★ done 之后只剩收尾（服务端紧接着 res.end）。把看门狗收紧到 5s：
+              //   万一服务端没能正常关闭连接，也别白等满一整个 IDLE_MS。
+              armWatchdog(5000);
             }
-          }, () => {});
+          }, (e) => {
+            // 读流出错（多为我们主动 abort）。记一笔便于排查，不改变控制流 ——
+            // 后续「有没有 ok」由上面那几个分支统一决定。
+            if (e && e.name !== 'AbortError') console.warn('[admin:stream] 读流出错:', e.message || e);
+          });
           if (acc && saw) {
             if (isOpen()) sb.innerHTML = (modelName ? `<span class="admin-model-tag">${esc(modelName)}</span>` : '') + mdSafe(acc);
             _adminHistory.push({ role: 'assistant', content: acc });
@@ -3120,13 +4048,40 @@ async function adminSend(prompt, botIdOverride) {
           }
         }
       } catch (e) { /* 流式连接异常，稍后统一处理 */ }
-      finally { clearTimeout(wd); try { ctrl.abort(); } catch {} }
+      finally { clearTimeout(hbTimer); try { ctrl.abort(); } catch {} }
       if (!ok) {
-        aiRow.remove();
-        // 全程零事件 → 本环境不支持 SSE 长连接（如内嵌预览）→ 记忆并切普通模式
-        if (!streamSaw) adminForceNormal('当前环境不支持流式输出，已自动切换为普通模式');
+        // ★★ 这里必须分两种情况，处置**完全相反** —— 它是「工具副作用不重复执行」的唯一防线。
+        //
+        //   · streamSaw = true → 收到过**任何**一帧（含 open 心跳）。
+        //     说明请求已经打到服务端、Agent 循环已经在跑，工具可能已经执行
+        //     （ws_write_file 写草稿、create_model 建模型都是**立即生效的写操作**）。
+        //     前端 abort 只是「不等了」，服务端那一轮照跑不误。
+        //     此时若回落普通模式重发 → 同一批工具跑第二遍 → 重复写盘。
+        //     处置：**保留**已收到的正文、如实告知「连接中断」，本轮到此为止。
+        //
+        //   · streamSaw = false → 连 open 都没收到，连接压根没建起来 → 安全回落。
+        if (streamSaw) {
+          if (acc) {
+            if (isOpen()) {
+              sb.innerHTML = mdSafe(acc)
+                + '<div class="lay-dim" style="font-size:11.5px;margin-top:6px">连接中断，以上是已收到的部分。'
+                + '服务端可能仍在本轮处理中，稍后可刷新查看。</div>';
+            }
+            _adminHistory.push({ role: 'assistant', content: acc });
+          } else if (isOpen()) {
+            sb.innerHTML = '<span class="lay-dim">连接中断（尚未收到内容）。服务端可能仍在处理 —— '
+              + '本轮不会自动重发，以免重复执行工具。</span>';
+          }
+          ok = true;                 // ★ 落定本轮：**绝不**再走下面的普通模式重发
+          adminLoadSessions();
+        } else {
+          // 零事件：连接没建起来，气泡里也没有任何内容 → 撤掉它并允许回落。
+          // 连续两次才判定「本环境不支持流式」（单次抖动不该永久降级）。
+          aiRow.remove();
+          adminBumpNoEvent();
+        }
       } else {
-        adminMarkStream(true);   // 本轮流式成功 → 记住本环境可流式
+        adminMarkStream(true);   // 本轮流式成功 → 记住本环境可流式（并清零「连续零事件」计数）
       }
     }
 
@@ -3195,12 +4150,52 @@ function scanActionJson(reply, key) {
 }
 function extractCreateModel(reply) { return scanActionJson(reply, 'createModel'); }
 
-// 提取编辑建议（记忆/全局/机器人配置），返回 { type, payload } 或 null
+// 提取编辑建议（记忆/全局/机器人配置/角色卡），返回 { type, payload } 或 null
 function extractEdit(reply) {
   const m = scanActionJson(reply, 'editMemory');
   if (m) return { type: 'memory', payload: m };
   const g = scanActionJson(reply, 'editGlobal');
   if (g) return { type: 'global', payload: g };
+  const c = scanActionJson(reply, 'editCharacter');
+  if (c) return { type: 'character_edit', payload: { ...c, patch: c.patch || c.fields || {} } };
+  const nc = scanActionJson(reply, 'createCharacter');
+  if (nc) return { type: 'character_create', payload: nc };
+  // 计数器 / 经历：纯文本约定里只有 characterId，面板要显示角色名 → 从本地角色池补上。
+  // ★ 计数器名统一读 `counter`（与结构化 pending 的 payload 保持一致）——
+  //   老写法 `name` 里塞的是计数器名，会把角色名和计数器名搅在一起，这里顺手兼容一下。
+  const ec = scanActionJson(reply, 'editCounter');
+  if (ec) {
+    const ch = (state.characters || []).find(x => x.id === String(ec.characterId || '')) || {};
+    const nm = String(ec.counter || ec.name || '').trim();
+    return {
+      type: 'counter_edit',
+      payload: {
+        characterId: ec.characterId, name: ch.name || String(ec.characterId || ''),
+        counter: nm, op: ec.op === 'remove' ? 'remove' : 'set',
+        value: Number(ec.value), before: Number((ch.counters || {})[nm]) || 0,
+        reason: ec.reason || '',
+      },
+    };
+  }
+  const ee = scanActionJson(reply, 'editExperience');
+  if (ee) {
+    const ch = (state.characters || []).find(x => x.id === String(ee.characterId || '')) || {};
+    return {
+      type: 'experience_edit',
+      payload: {
+        characterId: ee.characterId, name: ch.name || String(ee.characterId || ''),
+        op: ee.op === 'remove' ? 'remove' : 'add',
+        expId: ee.expId || '', text: ee.text || '', reason: ee.reason || '',
+      },
+    };
+  }
+  const wc = scanActionJson(reply, 'worldChange');
+  if (wc) {
+    return {
+      type: 'world_change',
+      payload: { botId: wc.botId || '', botName: wc.botName || '', text: wc.text || '', reason: wc.reason || '' },
+    };
+  }
   const b = scanActionJson(reply, 'editBot');
   if (b) return { type: 'bot', payload: b };
   return null;
@@ -3216,7 +4211,48 @@ function renderEditBar(ed) {
   else if (ed.type === 'core') label = `管理员建议修改人格核心卡：${p.botId}`;
   else if (ed.type === 'global') label = `管理员建议修改全局文件：「${p.key}」`;
   else if (ed.type === 'ws_inject') label = `管理员建议把工作区草稿「${p.key}」注入到 ${p.targetType === 'global' ? '全局设定' : (p.targetId || '?') + ' 的记忆库'}（目标文件 ${p.destKey || p.key}.md）`;
-  else label = `管理员建议更新机器人配置：${p.id || ''}`;
+  else if (ed.type === 'character_edit') {
+    const ks = Object.keys(p.patch || {}).join('、') || '无字段';
+    label = `管理员建议修改角色「${p.name || p.characterId}」的 ${ks}${p.reason ? `　原因：${p.reason}` : ''}`;
+  }
+  else if (ed.type === 'character_create') {
+    // ★ 写手也能提议新建（propose_character_create），措辞要和管理员区分开
+    const who = p.writerName ? `写手「${p.writerName}」建议` : '管理员建议';
+    label = `${who}在角色池新建角色「${p.name}」`
+      + (p.writerName ? '，并加入自己的角色池' : '')
+      + `${p.reason ? `　原因：${p.reason}` : ''}`;
+  }
+  else if (ed.type === 'world_change') {
+    const who = p.botName ? `写手「${p.botName}」建议` : '管理员建议';
+    label = `${who}在世界卡上记一条世界改变：${snippet(p.text || '', 40)}${p.reason ? `　原因：${p.reason}` : ''}`;
+  }
+  else if (ed.type === 'experience_commit') {
+    // 写手提交的经历沉淀（走 opts.onPending），不是管理员 —— 措辞要区分开
+    // ★ 写成「好感度 +10（0 → 10）」：只给增量的话，被范围收敛到边界时用户看不出来
+    const d = p.counters && Object.keys(p.counters).length
+      ? '，计数器 ' + Object.entries(p.counters).map(([k, v]) => {
+        const b = Number((p.counterFrom || {})[k]) || 0;
+        return `${k} ${v > 0 ? '+' : ''}${fmtNum(v)}（${fmtNum(b)} → ${fmtNum(b + v)}）`;
+      }).join('、')
+      : '';
+    const cl = Array.isArray(p.clamped) && p.clamped.length
+      ? `　（已按范围收敛：${p.clamped.map(x => `${x.name} 上限 ${x.max}`).join('、')}）`
+      : '';
+    label = `写手建议为「${p.name}」沉淀一段经历${d}${cl}${p.reason ? `　原因：${p.reason}` : ''}`;
+  }
+  else if (ed.type === 'counter_edit') {
+    label = p.op === 'remove'
+      ? `管理员建议删除角色「${p.name}」的计数器「${p.counter}」（当前 ${fmtNum(p.before)}）`
+      : `管理员建议把角色「${p.name}」的计数器「${p.counter}」从 ${fmtNum(p.before)} 改为 ${fmtNum(p.value)}`;
+    if (p.reason) label += `　原因：${p.reason}`;
+  }
+  else if (ed.type === 'experience_edit') {
+    label = p.op === 'remove'
+      ? `管理员建议删除角色「${p.name}」的一条经历：${snippet(p.text || '', 40)}`
+      : `管理员建议给角色「${p.name}」记一条经历：${snippet(p.text || '', 40)}`;
+    if (p.reason) label += `　原因：${p.reason}`;
+  }
+  else label = `管理员建议更新写手配置：${p.id || ''}`;
   return `<div class="admin-msg ai"><div class="admin-bubble admin-action admin-write">
     <span class="admin-action-label">${IC_SETTINGS}<span class="lb">是否同意此更改？</span><br><span class="admin-action-sub">${esc(label)}</span></span>
     <span class="spacer"></span>
@@ -3230,10 +4266,14 @@ function renderEditBar(ed) {
 function dismissEdit(btn) {
   const bar = btn.closest('.admin-action');
   if (!bar) return;
+  let ed = null;
+  try { ed = JSON.parse(btn.dataset.json); } catch { ed = null; }
   bar.classList.add('ignored');
   bar.querySelectorAll('button').forEach((b) => { b.disabled = true; });
   const lab = bar.querySelector('.admin-action-label');
   if (lab) lab.innerHTML = IC_CLOSE + '<span class="lb">已忽略此建议（未做任何更改）</span>';
+  // 从常驻列表里摘掉（写手提议那条会一直挂着等确认，不摘会重绘回来）
+  if (ed) dropPending(ed);
   toast('已忽略该建议', '');
 }
 
@@ -3244,6 +4284,58 @@ async function previewEdit(btn) {
   const p = ed.payload || {};
   let content;
   if (ed.type === 'bot' || ed.type === 'core') content = JSON.stringify(p, null, 2);
+  else if (ed.type === 'character_edit') {
+    // 角色改动看「旧 → 新」比看裸 JSON 有用得多：光看新文本判断不出改了哪儿
+    const cur = ((state.characters || []).find(c => c.id === p.characterId)) || {};
+    const lines = [];
+    for (const [k, v] of Object.entries(p.patch || {})) {
+      const label = (CHR_FIELDS.find(f => f[0] === k) || [k, k])[1];
+      const oldV = Array.isArray(cur[k]) ? cur[k].join('、') : (cur[k] || '（空）');
+      const newV = Array.isArray(v) ? v.join('、') : String(v ?? '');
+      lines.push(`【${label}】\n  改前：${oldV}\n  改后：${newV}`);
+    }
+    content = lines.join('\n\n') || '（没有要改的字段）';
+  }
+  else if (ed.type === 'character_create') {
+    // 新建：直接把将写入的字段摊开，用户一眼看清要建一个什么样的人
+    const lines = [];
+    for (const [k, ph] of CHR_FIELDS) {
+      const v = Array.isArray(p[k]) ? p[k].join('、') : String(p[k] ?? '');
+      if (v.trim()) lines.push(`【${ph}】\n${v}`);
+    }
+    content = lines.join('\n\n') || '（没有内容）';
+  }
+  else if (ed.type === 'world_change') {
+    const lines = [`【世界改变】\n${p.text || ''}`];
+    if (p.reason) lines.push(`【为什么记】\n${p.reason}`);
+    lines.push('（只追加到世界卡的「世界的改变」小节，不动世界设定底稿）');
+    content = lines.join('\n\n');
+  }
+  else if (ed.type === 'experience_commit' || ed.type === 'experience_edit') {
+    const lines = [];
+    if (p.op === 'remove') lines.push(`【要删除的经历】\n${p.text || ''}`);
+    else if (p.text) lines.push(`【经历】\n${p.text}`);
+    if (p.counters && Object.keys(p.counters).length) {
+      lines.push('【计数器变化】\n' + Object.entries(p.counters)
+        .map(([k, v]) => {
+          const b = Number((p.counterFrom || {})[k]) || 0;
+          return `${k}　${fmtNum(b)} → ${fmtNum(b + v)}（${v > 0 ? '+' : ''}${fmtNum(v)}）`;
+        }).join('\n'));
+    }
+    if (Array.isArray(p.clamped) && p.clamped.length) {
+      lines.push('【已按范围收敛】\n'
+        + p.clamped.map((x) => `${x.name}：想给 ${fmtNum(x.want)}，实际落到 ${fmtNum(x.value)}`).join('\n'));
+    }
+    if (p.dropped && p.dropped.length) {
+      lines.push(`【已忽略】\n${p.dropped.join('、')}（不是该写手声明过的计数器名，不会生效）`);
+    }
+    content = lines.join('\n\n') || '（没有内容）';
+  }
+  else if (ed.type === 'counter_edit') {
+    content = p.op === 'remove'
+      ? `【删除计数器】\n${p.counter}　当前值：${fmtNum(p.before)}`
+      : `【${p.counter}】\n  改前：${fmtNum(p.before)}\n  改后：${fmtNum(p.value)}`;
+  }
   else if (ed.type === 'ws_inject') {
     const r = await api(`/api/workspace/${encodeURIComponent(p.key)}`).catch(() => ({ ok: false }));
     content = r.ok ? (r.content || '（空）') : ('读取失败：' + (r.err || ''));
@@ -3251,8 +4343,14 @@ async function previewEdit(btn) {
   const title = ed.type === 'memory' ? `预览：${p.botId} 记忆「${p.key}」`
     : ed.type === 'global' ? `预览：全局「${p.key}」`
       : ed.type === 'core' ? `预览：${p.botId} 人格核心卡`
+        : ed.type === 'character_edit' ? `预览：角色「${p.name || p.characterId}」的改动`
+        : ed.type === 'character_create' ? `预览：新建角色「${p.name}」`
+        : ed.type === 'world_change' ? '预览：世界卡新增一条改变'
+        : ed.type === 'experience_commit' ? `预览：为「${p.name}」沉淀经历`
+        : ed.type === 'experience_edit' ? `预览：${p.op === 'remove' ? '删除' : '新增'}「${p.name}」的经历`
+        : ed.type === 'counter_edit' ? `预览：角色「${p.name}」的计数器「${p.counter}」`
         : ed.type === 'ws_inject' ? `预览：工作区「${p.key}」写入${p.targetType === 'global' ? '全局' : '「' + p.targetId + '」'}「${p.destKey || p.key}」`
-          : `预览：机器人「${p.id}」配置`;
+          : `预览：写手「${p.id}」配置`;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'edit-preview';
@@ -3278,12 +4376,84 @@ async function confirmEdit(btn) {
   else if (ed.type === 'core') desc = `将覆盖 ${p.botId} 的人格核心卡`;
   else if (ed.type === 'global') desc = `将覆盖全局文件「${p.key}」的内容`;
   else if (ed.type === 'ws_inject') desc = `将把工作区草稿「${p.key}」注入到 ${p.targetType === 'global' ? '全局设定' : (p.targetId || '?') + ' 的记忆库'}（写入为「${p.destKey || p.key}」）`;
-  else desc = `将更新机器人「${p.id}」的配置`;
+  else if (ed.type === 'character_edit') {
+    const ks = Object.keys(p.patch || {}).join('、') || '无字段';
+    desc = `将修改角色「${p.name || p.characterId}」的 ${ks}（旧版本会自动留档，可回滚）`;
+  }
+  else if (ed.type === 'character_create') {
+    desc = `将在角色池新建角色「${p.name}」`
+      + (p.writerName ? `，并加入写手「${p.writerName}」的角色池` : '');
+  }
+  else if (ed.type === 'world_change') {
+    desc = `将在世界卡上追加一条世界改变：${snippet(p.text || '', 40)}`;
+  }
+  else if (ed.type === 'experience_commit' || ed.type === 'experience_edit') {
+    desc = p.op === 'remove'
+      ? `将删除角色「${p.name}」的一条经历`
+      : `将给角色「${p.name}」记一条经历（只加流水，不改它的设定）`;
+    if (p.counters && Object.keys(p.counters).length) {
+      desc += `，并调整计数器 ${Object.entries(p.counters).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、')}`;
+    }
+  }
+  else if (ed.type === 'counter_edit') {
+    desc = p.op === 'remove'
+      ? `将删除角色「${p.name}」的计数器「${p.counter}」`
+      : `将把角色「${p.name}」的计数器「${p.counter}」从 ${fmtNum(p.before)} 改为 ${fmtNum(p.value)}`;
+  }
+  else desc = `将更新写手「${p.id}」的配置`;
   if (!(await uiConfirm({ title: '确认应用更改', message: `${desc}，\n确认应用？`, okText: '确认应用' }))) return;
   let r;
   if (ed.type === 'memory') {
     if (!p.botId || !p.key) return toast('缺少 botId 或 key', 'err');
     r = await api(`/api/memory/${p.botId}/files/${p.key}`, 'PUT', { content: p.content || '' });
+  } else if (ed.type === 'character_edit') {
+    if (!p.characterId) return toast('缺少 characterId', 'err');
+    // ★ 走 PUT /api/characters/:id —— 服务端内部调 characters.update()，
+    //   会自动把「改前状态」推进 history，回滚能力由它保证，前端不用管。
+    r = await api(`/api/characters/${encodeURIComponent(p.characterId)}`, 'PUT', p.patch || {});
+  } else if (ed.type === 'character_create') {
+    if (!p.name) return toast('缺少角色名', 'err');
+    // POST /api/characters 内部调 characters.create()，首版会自动进历史档
+    r = await api('/api/characters', 'POST', {
+      name: p.name, persona: p.persona, traits: p.traits, age: p.age,
+      appearance: p.appearance, background: p.background, tags: p.tags,
+      source: p.source || 'admin',
+    });
+    // ★ 写手提议的新角色：建完挂进它的角色池，否则它自己也写不了（它只能写自己池里的角色）
+    if (r.ok && p.writerId && r.character && r.character.id) {
+      await attachCharToWriter(p.writerId, r.character.id);
+    }
+  } else if (ed.type === 'world_change') {
+    if (!p.text) return toast('缺少改变内容', 'err');
+    const wid = p.botId || (view.type === 'bot' ? view.id : '');
+    if (!wid) return toast('缺少写手 id', 'err');
+    p.botId = wid;   // 记回来：下面的「刷新记忆文件列表」按 p.botId 判断
+    // ★ world 必须一起送：多世界共用一条流水，不标就分不清这条改变是哪个世界的
+    r = await api(`/api/memory/${encodeURIComponent(wid)}/world-changes`, 'POST',
+      { text: p.text, by: p.by || '', world: p.world || '' });
+  } else if (ed.type === 'experience_commit') {
+    if (!p.characterId) return toast('缺少 characterId', 'err');
+    // ★ 走 POST /api/characters/:id/commit —— 服务端内部调 characters.commitExperience：
+    //   计数器按**增量**累加、经历追加一条。这两样都**不进版本档**（设计如此：
+    //   版本档的语义是「设定改过几版」，塞流水会把它冲垮）。
+    r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/commit`, 'POST', {
+      text: p.text, counters: p.counters || {}, by: p.by || '',
+    });
+  } else if (ed.type === 'experience_edit') {
+    if (!p.characterId) return toast('缺少 characterId', 'err');
+    if (p.op === 'remove') {
+      if (!p.expId) return toast('缺少 expId', 'err');
+      r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/experiences/${encodeURIComponent(p.expId)}`, 'DELETE');
+    } else {
+      r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/experiences`, 'POST', { text: p.text, by: 'admin' });
+    }
+  } else if (ed.type === 'counter_edit') {
+    if (!p.characterId || !p.counter) return toast('缺少 characterId 或计数器名', 'err');
+    if (p.op === 'remove') {
+      r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/counters/${encodeURIComponent(p.counter)}`, 'DELETE');
+    } else {
+      r = await api(`/api/characters/${encodeURIComponent(p.characterId)}/counters`, 'POST', { name: p.counter, value: p.value });
+    }
   } else if (ed.type === 'ws_inject') {
     if (!p.key) return toast('缺少工作区文件名', 'err');
     r = await api('/api/workspace/inject', 'POST', {
@@ -3300,11 +4470,17 @@ async function confirmEdit(btn) {
     r = await api(`/api/global/files/${p.key}`, 'PUT', { content: p.content || '' });
   } else {
     const bots = (state.bots || []).map(b => b.id === p.id ? { ...b, ...p } : b);
-    if (!bots.some(b => b.id === p.id)) return toast('机器人不存在：' + p.id, 'err');
+    if (!bots.some(b => b.id === p.id)) return toast('写手不存在：' + p.id, 'err');
     r = await api('/api/config', 'PUT', { bots });
   }
   if (r.ok) {
     toast('已写入', 'ok');
+    // ★ 确认落地后往底部同步状态追加一条「真的更新了」。
+    //   之前只有「待你确认」，用户点完确认就再也看不到结果 —— 状态行要闭环。
+    const doneLine = confirmSyncText(ed, p, r);
+    if (doneLine) pushSync(p.botId || (view.type === 'bot' ? view.id : ''), [doneLine]);
+    // 从常驻列表里摘掉（写手提议那条会一直挂着等确认，不摘会重绘回来）
+    dropPending(ed);
     const bar = btn.closest('.admin-action');
     if (bar) {
       bar.classList.add('applied');
@@ -3316,10 +4492,44 @@ async function confirmEdit(btn) {
       btn.innerHTML = IC_CHECK + '<span class="lb">已写入</span>';
     }
     await loadState();
-    if ((ed.type === 'memory' || ed.type === 'memory_tier' || ed.type === 'core') && view.type === 'bot' && view.id === p.botId) loadMemoryFiles(p.botId);
+    if ((ed.type === 'memory' || ed.type === 'memory_tier' || ed.type === 'core' || ed.type === 'world_change') && view.type === 'bot' && view.id === p.botId) loadMemoryFiles(p.botId);
+    // 角色相关的改动会影响角色卡上的计数器/经历 → 刷新角色池缓存并重绘
+    if (/^(character_|experience_|counter_)/.test(ed.type)) {
+      await loadCharacters();
+      if (view.type === 'chars' || (view.type === 'bot' && view.tab === 'characters')) renderMain();
+    }
   } else {
     toast(r.err || '写入失败', 'err');
   }
+}
+
+// 确认应用之后，底部同步状态该写什么（返回 null = 这类操作不上状态行）
+// ★ 只写「用户看得见结果」的三类：计数器、世界改变、经历。记忆文件/配置之类不占这行 ——
+//   它们是设置操作，本来就有 toast 与列表刷新在反馈。
+function confirmSyncText(ed, p, r) {
+  const at = (p.by || '').includes('（自检）') ? '（自检）' : '';
+  if (ed.type === 'experience_commit') {
+    const d = p.counters && Object.keys(p.counters).length
+      ? Object.entries(p.counters).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${fmtNum(v)}`).join('、')
+      : '';
+    // 服务端在响应里回了实际落盘的值（applied），有就以它为准 —— 它才是真相
+    const ap = r && r.applied && Object.keys(r.applied).length
+      ? '，实际 ' + Object.entries(r.applied).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${fmtNum(v)}`).join('、')
+      : '';
+    return { kind: 'counter', text: `「${p.name}」计数器已更新${at}${d ? '：' + d : ''}${ap}` };
+  }
+  if (ed.type === 'counter_edit') {
+    return { kind: 'counter', text: p.op === 'remove'
+      ? `「${p.name}」计数器「${p.counter}」已删除`
+      : `「${p.name}」计数器「${p.counter}」已更新：${fmtNum(p.before)} → ${fmtNum(p.value)}` };
+  }
+  if (ed.type === 'world_change') {
+    return { kind: 'world', text: `世界卡已记录一条改变${at}：${snippet(p.text || '', 24)}` };
+  }
+  if (ed.type === 'experience_edit' && p.op !== 'remove') {
+    return { kind: 'event', text: `「${p.name}」已记一条经历：${snippet(p.text || '', 24)}` };
+  }
+  return null;
 }
 
 // 一键添加管理员生成的模型配置（不写 apiKey，由用户到模型管理页补充）
@@ -3545,6 +4755,12 @@ async function saveBot(id) {
     // 长度自主权：空 = 跟随全局；三档之一 = 单独覆盖
     lengthPerm: $('#f-length-perm') && $('#f-length-perm').value ? $('#f-length-perm').value : undefined,
   };
+  // 角色池勾选（写手设置里的「这位写手的角色池」）。
+  // ★ 只在弹窗里真有这块时才写 —— 没有就保持原值，别把池子清成空。
+  const boxes = [...document.querySelectorAll('#bot-settings-modal .chr-pick-box')];
+  if (boxes.length) {
+    bots[i].activeCharacterIds = boxes.filter((x) => x.checked).map((x) => x.value);
+  }
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   // 保存成功后关掉设置弹窗并刷新（角色卡上的名称/模型/状态会随之更新）
@@ -3558,7 +4774,7 @@ async function restartBot(id) {
 }
 
 async function delBot(id) {
-  if (!(await uiConfirm({ title: '删除机器人', message: `确定删除机器人「${id}」？\n删除后该机器人的记忆库文件与配置将被移除。`, okText: '删除', danger: true }))) return;
+  if (!(await uiConfirm({ title: '删除写手', message: `确定删除写手「${id}」？\n删除后该写手的记忆库文件与配置将被移除。`, okText: '删除', danger: true }))) return;
   const bots = (state.bots || []).filter(x => x.id !== id);
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已删除', 'ok') : toast(r.err, 'err');
@@ -3577,8 +4793,8 @@ async function sendMsg(id) {
   if (r.ok) { $('#f-content').value = ''; loadSessions(id); }
 }
 
-// ================= 角色表单（添加） =================
-// 只创建角色本体：ID / 名称 / 绑定模型 / 历史条数。
+// ================= 写手表单（添加） =================
+// 只创建写手本体：ID / 名称 / 绑定模型 / 历史条数。
 // QQ 相关（AppID / AppSecret / 运行环境）已全部移入「渠道」标签页 —— 连接 QQ 不是必须的，
 // 所以创建这一步不该向用户索要任何 QQ 信息。
 function renderBotForm() {
@@ -3586,20 +4802,20 @@ function renderBotForm() {
   const modelOpts = models.map(m => `<option value="${m.id}">${esc(m.name || m.id)}</option>`).join('') || '<option value="">先添加模型</option>';
   main.innerHTML = `
     <div class="page-head">
-      <h2>添加机器人</h2>
+      <h2>添加写手</h2>
       <span class="spacer"></span>
       <button class="ghost sm" onclick="backToBots()">${IC_BACK}<span class="lb">返回</span></button>
     </div>
     <div class="card">
       <div class="grid-2">
         <div class="field"><label>ID（唯一标识，如 BOT2）</label><input id="f-id" type="text" placeholder="BOT2"></div>
-        <div class="field"><label>名称</label><input id="f-name" type="text" placeholder="我的机器人"></div>
+        <div class="field"><label>名称</label><input id="f-name" type="text" placeholder="我的写手"></div>
       </div>
       <div class="grid-2" style="margin-top:12px">
         <div class="field"><label>绑定模型</label><select id="f-model">${modelOpts}</select></div>
         <div class="field"><label>历史记忆条数</label><input id="f-history" type="number" value="10"></div>
       </div>
-      <div class="frm-hint">创建后即可直接对话，不需要填任何 QQ 信息。要接入 QQ 时，到该角色卡下的「渠道」标签页开启并填写 AppID / AppSecret。</div>
+      <div class="frm-hint">创建后即可直接对话，不需要填任何 QQ 信息。要接入 QQ 时，到该写手卡下的「渠道」标签页开启并填写 AppID / AppSecret。</div>
       <div style="margin-top:18px;display:flex;gap:8px">
         <button class="primary" onclick="createBot()">创建</button>
         <button class="ghost" onclick="backToBots()">取消</button>
@@ -3621,8 +4837,8 @@ async function createBot() {
     personaFile: '',
     intents: ['GROUP_AND_C2C_EVENT', 'PUBLIC_GUILD_MESSAGES'],
   };
-  if (!entry.id) return toast('请填写机器人 ID', 'err');
-  if (!ID_OK.test(entry.id)) return toast('机器人 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）', 'err');
+  if (!entry.id) return toast('请填写写手 ID', 'err');
+  if (!ID_OK.test(entry.id)) return toast('写手 ID 含非法字符（仅允许中文/字母/数字/下划线/连字符，最长 64 位）', 'err');
   if ((state.bots || []).some(b => b.id === entry.id)) return toast('该 ID 已存在', 'err');
   const bots = (state.bots || []).concat(entry);
   const r = await api('/api/config', 'PUT', { bots });
@@ -3789,7 +5005,7 @@ async function saveModel(id) {
 }
 
 async function delModel(id) {
-  if (!(await uiConfirm({ title: '删除模型', message: `确定删除模型「${id}」？\n删除后引用该模型的机器人需重新绑定。`, okText: '删除', danger: true }))) return;
+  if (!(await uiConfirm({ title: '删除模型', message: `确定删除模型「${id}」？\n删除后引用该模型的写手需重新绑定。`, okText: '删除', danger: true }))) return;
   const models = (state.models || []).filter(x => x.id !== id);
   const r = await api('/api/config', 'PUT', { models });
   r.ok ? toast('已删除', 'ok') : toast(r.err, 'err');
@@ -4106,10 +5322,10 @@ function renderAppearance() {
       <div class="theme-row fx-row" style="margin-top:12px;align-items:flex-start">
         <span class="theme-label" style="padding-top:5px">卡片背景</span>
         <div class="fx-chips">
-          ${CARD_EFFECTS.map(x => `<span class="fx-chip ${x.id === fx ? 'active' : ''}" data-fx="${x.id}" onclick="pickCardEffect('${x.id}')" title="机器人信息卡背景动效">${x.name}</span>`).join('')}
+          ${CARD_EFFECTS.map(x => `<span class="fx-chip ${x.id === fx ? 'active' : ''}" data-fx="${x.id}" onclick="pickCardEffect('${x.id}')" title="写手信息卡背景动效">${x.name}</span>`).join('')}
         </div>
       </div>
-      <p class="empty-hint" style="margin-top:10px">作用于每个机器人信息卡背景（编辑态卡片除外）。效果跟随主题色，深色模式下自动压暗。</p>
+      <p class="empty-hint" style="margin-top:10px">作用于每位写手信息卡背景（编辑态卡片除外）。效果跟随主题色，深色模式下自动压暗。</p>
     </div>`;
 }
 
@@ -4170,7 +5386,7 @@ function renderGeneral() {
             <input type="checkbox" id="g-web" ${state.webSearch === true ? 'checked' : ''}>
             <span class="slider"></span>
           </label>
-          <div style="margin-top:6px;font-size:11.5px;line-height:1.65;color:var(--on-surface-faint)">全局默认<strong>${state.webSearch === true ? '已开启' : '已关闭'}</strong>，各机器人可在「编辑」里单独覆盖。</div>
+          <div style="margin-top:6px;font-size:11.5px;line-height:1.65;color:var(--on-surface-faint)">全局默认<strong>${state.webSearch === true ? '已开启' : '已关闭'}</strong>，各写手可在「编辑」里单独覆盖。</div>
         </div>
         <div style="padding:14px 16px;border:1px solid var(--outline);border-radius:var(--r-m);background:var(--surface)">
           <div style="font-size:12.5px;font-weight:600;margin-bottom:10px">搜索方式</div>
@@ -4222,7 +5438,7 @@ function renderGeneration() {
           <label class="switch" title="${lrOn ? '点击关闭全局长文模式' : '点击开启全局长文模式'}">
             <input type="checkbox" id="g-long" ${lrOn ? 'checked' : ''}>
             <span class="slider"></span>
-          </label>` + hint(`全局默认<strong>${lrOn ? '已开启' : '已关闭'}</strong>，各机器人可在「编辑」里单独覆盖。开启后模型才会朝下面写的目标字数去写。`))}
+          </label>` + hint(`全局默认<strong>${lrOn ? '已开启' : '已关闭'}</strong>，各写手可在「编辑」里单独覆盖。开启后模型才会朝下面写的目标字数去写。`))}
 
         ${box(`${label('目标字数')}
           <div style="display:flex;align-items:center;gap:10px">${num('g-long-target', clampInt(state.longReplyTarget, 1200, 0, 100000), 0, 100000, 500, 130)}${unit('字')}</div>`
@@ -4270,9 +5486,20 @@ function renderGeneration() {
             ${num('g-len-max', clampInt(state.lengthMax, 6000, 100, 100000), 100, 100000, 500, 110)}${unit('字 · 最多')}
           </div>` + hint('模型申请的字数会被夹在这个区间内。选「全权」时此区间不生效（放开为 100–100000）。'))}
 
+        ${box(`${label('写完自检（输出后核对一遍）')}
+          <label class="switch" title="${state.selfCheck === false ? '点击开启写完自检' : '点击关闭写完自检'}">
+            <input type="checkbox" id="g-selfcheck" ${state.selfCheck === false ? '' : 'checked'}>
+            <span class="slider"></span>
+          </label>`
+          + hint('正文写完之后，模型再回看一遍整篇，核对三件事：'
+            + '<strong>计数器</strong>（有没有该加该减的）→ 出「待确认」，你点了才落盘；'
+            + '<strong>世界改变</strong>（世界层面有没有变化）→ 出「待确认」；'
+            + '<strong>剧情要点</strong>（值得长期记住的事）→ 直接写进剧情记录。<br>'
+            + '各写手可在「输出设置」里单独覆盖。关掉可省一次调用（每轮多花几秒）。'))}
+
         ${box(`${label('蒸馏 / 总结模型')}
           <select id="g-distill" class="gen-sel" style="width:100%">
-            <option value="">跟随各机器人绑定模型（默认）</option>
+            <option value="">跟随各写手绑定模型（默认）</option>
             ${(state.models || []).map(m => `<option value="${esc(m.id)}" ${state.distillModel === m.id ? 'selected' : ''}>${esc(m.name || m.id)}（${esc(m.id)}）</option>`).join('')}
           </select>`
           + hint('核心卡蒸馏、文件分段摘要、事件压缩、逐轮记忆提炼、精彩时刻、AI 归档等后台总结任务使用的模型。'))}
@@ -4323,6 +5550,8 @@ async function saveGeneration() {
     lengthPerm: _gPerm,
     lengthMin: clampInt($('#g-len-min') ? $('#g-len-min').value : undefined, 500, 100, 50000),
     lengthMax: clampInt($('#g-len-max') ? $('#g-len-max').value : undefined, 6000, 100, 100000),
+    // 输出后自检（全局默认开）
+    selfCheck: $('#g-selfcheck') ? !!$('#g-selfcheck').checked : undefined,
   });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   if (r.ok) loadState();
@@ -4710,6 +5939,8 @@ function hexA(hex, a) {
 
 // ---------- 事件绑定 ----------
 $('#btn-add-bot').addEventListener('click', () => { view = { type: 'bot-form' }; renderMain(); });
+// 侧栏「角色池」分组的新建按钮：直接开新建角色弹窗（不必先跳进角色池页）
+$('#btn-add-char').addEventListener('click', () => openCharacterEditModal());
 
 // ---------- 内联 onclick 依赖的角色工作区函数 ----------
 // 顶层 function 声明在当前（非模块）脚本里本就在全局作用域，内联 onclick 可以直接调到；
@@ -4722,6 +5953,16 @@ Object.assign(window, {
   switchBotTab, openBotSettings, closeBotSettings,
   // 输出设置弹层（发送按钮旁）
   openOutputSheet, closeOutputSheet, saveOutputSheet,
+  // 角色池 / 角色标签页（内联 onclick 引用；顶层 function 声明才会挂 window）
+  openCharacterPool, characterEdit, saveCharacter, characterDelete,
+  characterHistory, characterRollback, characterAttach, characterDetach,
+  characterSearch, loadCharacters, newCharForWriter,
+  // 设置页「角色卡」模板（内联 onclick 引用）
+  saveCharTemplate, resetCharTemplate,
+  // 对话页右侧胶囊（内联 onclick 引用）
+  switchWorld, pickWorld,
+  // 仅被模板字符串调用（eslint 认不出）→ 显式挂一次消除 no-unused-vars
+  snippet, characterAvatarInner,
   // 挂在 oncontextmenu 上：lint 的 no-unused-vars 只认 onclick 里的引用
   sideCtx,
 });

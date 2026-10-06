@@ -1255,6 +1255,11 @@ label.frm { display: block; font-size: 11.5px; color: var(--on-surface-variant);
 .admin-msg .admin-bubble.err { color: var(--error); background: var(--error-container); border: none; }
 .admin-model-tag { display: inline-block; font-family: var(--font); font-size: 9px; color: var(--on-surface-faint); border: 1px solid var(--outline); border-radius: var(--r-xs); padding: 0 5px; margin-right: 6px; vertical-align: 1px; }
 .admin-bubble.admin-action { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px dashed var(--primary); background: var(--primary-container); }
+/* ★ 文案长（如「建议修改角色「银」的 persona　原因：…」）时 flex-wrap 会把按钮挤到
+   上一行、排成参差的阶梯。给 label 一个「尽量独占一行」的基准宽度，按钮才能整齐地
+   落到第二行并右对齐 —— 用 flex-basis 而不是 width，短文案时仍能自然收窄。 */
+.admin-bubble.admin-action .admin-action-label { flex: 1 1 100%; min-width: 0; }
+.admin-bubble.admin-action > button:first-of-type { margin-left: auto; }
 .admin-action-label { font-size: 12.5px; color: var(--on-surface); font-weight: 600; line-height: 1.55; }
 .admin-action-sub { display: block; font-size: 11.5px; font-weight: 400; color: var(--on-surface-variant); margin-top: 2px; }
 .admin-action.ignored { opacity: .55; }

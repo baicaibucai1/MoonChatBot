@@ -1,10 +1,31 @@
-// QQ 机器人管理面板主入口
-// 启动：node server.js → 面板 http://127.0.0.1:4357 + 所有已启用机器人
+// MoonChatBot 控制台主入口（面板上的每个 bot 是一位「写手」）
+// 启动：node server.js → 控制台 http://127.0.0.1:4357 + 所有已启用的写手
 'use strict';
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+
+// ---- 出站连接的可达性：不再做任何「地址族偏好」，改由 lib/net-reach.js 逐个试 ----
+//
+// ★★ 这里曾经写过一段「IPV6 优先」的修复（dns.setDefaultResultOrder('ipv6first')
+//    + 关掉并发试探），背景是 2026-10-04 实测「Agnes 的 IPv4 路径被中间设备劫持
+//    （换来一张自签证书），只有 IPv6 干净」。
+//
+//    2026-10-05 的实测表明**环境整个反过来了**：
+//      apihub.agnes-ai.com  IPv4 104.18.19.62 / .18.62 → HTTP 401 完全正常
+//      apihub.agnes-ai.com  IPv6 …2017::2 → 超时；…2018::2 → CERT_HAS_EXPIRED
+//    于是那段修复从「修复」变成了「故障源」：每次都优先去连坏掉的 IPv6，
+//    每一次模型调用都失败 —— 用户看到的现象就是「对话失败」。
+//
+//    ★ 教训：把「此刻哪条路能走」写死进代码，这种修复是有保质期的，
+//      而失效时的症状是「功能整体不可用」，极难联想到网络层。
+//      net-reach 的做法不做任何环境假设：解析全部候选 → 逐个做到**完整 TLS 握手**
+//      （必须含证书校验，只看 TCP 会漏掉「TCP 通但证书过期」那种坏法）→ 谁通用谁，
+//      并在连接层失败时清缓存重新探测、重试一次。
+//
+// （net 模块仍被本文件其它地方使用，dns 的 import 保留以便将来排查时按需调用。）
+const reach = require('./lib/net-reach');
 
 const store = require('./lib/store');
 const memory = require('./lib/memory');
@@ -13,6 +34,7 @@ const search = require('./lib/search');
 const workspace = require('./lib/workspace');
 const longreply = require('./lib/longreply');
 const BotManager = require('./lib/bots');
+const charactersMigrate = require('./lib/characters-migrate');
 
 // ---- 拆分后引入的模块（批 1：HTTP 层 + 路由层 + ID 常量）----
 const { ID_RE, ADMIN_ID_RE } = require('./lib/ids');
@@ -22,6 +44,8 @@ const { applyCors, handlePreflight, serveStatic } = require('./lib/http/static')
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const AVATAR_DIR = path.join(ROOT, 'avatars');
+// 记忆根目录：迁移时要按 botId 找到 memory/<botId>/persona.md
+const MEMORY_DIR_OF_APP = path.join(ROOT, 'memory');
 fs.mkdirSync(AVATAR_DIR, { recursive: true });
 
 // MIME 表与 CORS 放行（含桌面壳跨域白名单）已搬到 lib/http/static.js
@@ -35,9 +59,9 @@ const app = {
   memory,
 };
 
-// 为机器人构造「蒸馏/总结」用轻量模型调用器：chatFn(messages, opts) → 模型回复文本
+// 为写手构造「蒸馏/总结」用轻量模型调用器：chatFn(messages, opts) → 模型回复文本
 // 模型选择：设置页指定全局「蒸馏/总结模型」(cfg.distillModel) 时，核心卡蒸馏/摘要/事件压缩/
-// 逐轮提炼/精彩时刻/AI 归档等后台总结任务统一使用该模型；未指定则跟随机器人绑定的模型。
+// 逐轮提炼/精彩时刻/AI 归档等后台总结任务统一使用该模型；未指定则跟随写手绑定的模型。
 // 自动记录 token 用量；无任何可用模型时返回 null。
 function makeChatFn(botId) {
   const cfg = app.getConfig();
@@ -46,7 +70,7 @@ function makeChatFn(botId) {
   let model = null;
   const dm = String(cfg.distillModel || '').trim();
   if (dm) model = usable.find((m) => m.id === dm) || null;          // 全局蒸馏模型（Key 缺失则忽略）
-  if (!model && bot) model = usable.find((m) => m.id === bot.modelId) || null;  // 跟随机器人绑定
+  if (!model && bot) model = usable.find((m) => m.id === bot.modelId) || null;  // 跟随写手绑定
   if (!model) model = usable[0] || null;                            // 兜底：任一可用模型
   if (!model) return null;
   const apiKey = model.apiKey || app.env[model.apiKeyEnv];
@@ -62,24 +86,376 @@ function makeChatFn(botId) {
   };
 }
 
+// ---- 写手块：把「写手身份 + 角色池」注入 system prompt ----
+// ★ 认知前提：bot 就是写手（创作者），不是角色。角色在全局角色池里，写手引用它们。
+//
+// 为什么单独抽成一个函数而不是塞进 memory.buildSystemPrompt：
+//   记忆模块负责「写手自己的档案」（写手设定 / 剧情线 / 经历），
+//   角色池是**跨写手共享的项目级数据**（存在 config.json 里，不在 memory/ 目录）。
+//   两者的数据源和生命周期都不同，混在一起会让 memory 模块依赖 config。
+// 该写手声明了哪些计数器。
+// ★ 这是「同名共享、异名不引用」的判据来源：解析不出来就什么都动不了（安全的一侧）。
+//
+// ★ 找哪份文件（用户决策 2026-10-05）：计数器设计属于「② 标准要求」，
+//   所以**先读 standards.md**；老写手把声明写在「写手设定」(persona.md) 里的，
+//   继续认 —— 两处都读、新文件优先，老配置不会突然失效。
+// 该写手声明了哪些计数器：**带范围**的规格 [{ name, min, max }]。
+// 新语法 `##Counter：名字[0,100]` 解析得出范围；旧写法只有名字 → min/max 为 null（= 不限）。
+function declaredCounterSpecsOf(botId) {
+  const c = require('./lib/characters');
+  const from = (key) => {
+    let text = '';
+    try { text = memory.readMemoryFile(botId, key) || ''; } catch { text = ''; }
+    const specs = c.parseCounterSpecs(text);
+    if (specs.length) return specs;
+    // 旧写法只有名字 —— 名字照样要认（权限层），范围就当「不限」
+    return c.parseDeclaredCounters(text).map((n) => ({ name: n, min: null, max: null }));
+  };
+  const std = from('standards');
+  if (std.length) return std;
+  return from('persona');
+}
+
+// 这位写手当前活跃的世界名。
+// ★ 口径必须三处一致（写手提示词 / 输出后自检 / 界面胶囊）：显式选的 → 校验它在世界卡里存在 →
+//   否则退回首个小节 → 一个小节都没有就返回 ''（不装作有世界）。
+function activeWorldOf(bot) {
+  const raw = (() => { try { return memory.readMemoryFile(bot.id, 'world') || ''; } catch { return ''; } })();
+  const worlds = memory.listWorlds(raw);
+  const want = String(bot.activeWorld || '').trim();
+  if (want && worlds.some((w) => w.name === want)) return want;
+  return worlds[0] ? worlds[0].name : '';
+}
+
+// ★ 某个角色 + 某位写手 → 这台戏实际生效的计数器规格。
+//   角色卡上的 `##Counter：名字[范围]` 是**权威来源**（它写在角色身上，跟着角色走）；
+//   写手在「标准要求」里声明的同名规格作为**补充**（角色卡没写范围时才用）。
+function counterSpecsFor(botId, ch) {
+  const c = require('./lib/characters');
+  const own = c.characterCounterSpecs(ch);
+  const byWriter = declaredCounterSpecsOf(botId);
+  const out = own.slice();
+  const seen = new Set(own.map((s) => s.name));
+  for (const s of byWriter) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    out.push(s);
+  }
+  return out;
+}
+
+// ---------- ★ 输出后自检的接线层 ----------
+//
+// 纯逻辑在 lib/selfcheck.js（组装 messages / 解析结果 / 生成同步短句）。
+// 这里负责三件只有 server 才知道的事：
+//   ① **权限**：角色必须在 bot.activeCharacterIds 里；计数器名必须是该写手声明过的；
+//   ② **收敛**：范围来自角色卡 `##Counter：`（没有才用写手「标准要求」）；
+//   ③ **落地**：计数器 / 世界改变 → 待确认建议（onPending）；剧情要点 → 直接写事件流。
+//
+// ★ 全程 try/catch：自检失败只打日志，绝不影响正文（用户明确要求过）。
+async function runSelfCheck({ botId, bot, cfg, reply, chatFn, onPending, onSync }) {
+  if (!chatFn) return { ok: false, err: '没有可用模型' };
+  const C = require('./lib/characters');
+  const SC = require('./lib/selfcheck');
+
+  const all = C.list(cfg.characters);
+  const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
+  const active = activeIds.map((id) => C.find(all, id)).filter(Boolean);
+  const declaredSpecs = declaredCounterSpecsOf(botId);
+  const declaredNames = declaredSpecs.map((s) => s.name);
+  // 世界卡现状（写手视角）
+  const worldRaw = (() => { try { return memory.readMemoryFile(botId, 'world') || ''; } catch { return ''; } })();
+  const wp = memory.parseWorldCard(worldRaw);
+  // 当前活跃世界（与胶囊、写手提示词共用 activeWorldOf，口径只写一处）
+  const activeWorld = activeWorldOf(bot);
+
+  const messages = SC.buildMessages({
+    reply,
+    botName: bot.name || botId,
+    characters: active.map((c) => {
+      const view = C.declaredView(c, declaredNames);
+      const specs = counterSpecsFor(botId, c);
+      return {
+        id: c.id,
+        name: c.name,
+        counters: view,
+        declared: declaredSpecs.map((s) => ({
+          name: s.name,
+          range: C.describeCounterRange(C.findCounterSpec(specs, s.name) || s),
+        })),
+      };
+    }),
+    world: { changes: wp.changes, worlds: wp.worlds.map((w) => w.name), active: activeWorld },
+  });
+
+  const raw = await chatFn(messages, { maxTokens: 900, temperature: 0.2 });
+  const result = SC.parseResult(raw);
+  if (!result.ok) return { ok: false, err: '自检输出无法解析' };
+
+  // ★ items 只收「真的生效了」的东西 —— 底部同步状态是给用户看的凭据，
+  //   报了却被权限/范围挡掉的条目绝不能出现在这里。
+  const items = [];
+  let eventCount = 0;
+  let counterCount = 0;
+  let worldCount = 0;
+
+  // ---- ① 剧情要点 → 直接写事件流（与既有的自动提炼同一条路，source 统一为 auto）----
+  for (const ev of result.events) {
+    // 与 memory.maintain 的 IMPORTANCE_FLOOR 同一条线：低于它不记
+    if (ev.importance < 2) continue;
+    if (memory.appendEvent(botId, { ...ev, source: 'auto' })) {
+      eventCount++;
+      items.push({ kind: 'event', text: `剧情记录 +1（${ev.event.slice(0, 24)}${ev.event.length > 24 ? '…' : ''}）` });
+    }
+  }
+
+  // ---- ② 计数器 → 待确认建议（增量 + 收敛后的值）----
+  for (const row of result.counters) {
+    const ch = active.find((x) => x.id === row.characterId);
+    if (!ch) continue;                       // 不在自己池里的角色，直接无视
+    const kept = C.filterDeclared(row.deltas, declaredNames);
+    const dropped = Object.keys(row.deltas).filter((k) => !(k in kept));
+    if (!Object.keys(kept).length) continue;
+    const specs = counterSpecsFor(botId, ch);
+    const proj = C.projectCounters(ch.counters || {}, kept, specs);
+    if (!Object.keys(proj.applied).length) continue;
+    const cur = ch.counters || {};
+    const dTxt = Object.entries(proj.applied)
+      .map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}（${Number(cur[k]) || 0} → ${(Number(cur[k]) || 0) + v}）`)
+      .join('、');
+    if (onPending) {
+      try {
+        onPending({
+          type: 'experience_commit',
+          payload: {
+            characterId: ch.id, name: ch.name,
+            // 自检没有单独的「经历原文」，就用它给的 why 当这轮的情节说明；
+            // 没给 why 就写一句可读的兜底，避免经历条目空白。
+            text: String(row.why || `（自检）${dTxt}`).slice(0, 500),
+            counters: proj.applied,
+            counterFrom: Object.fromEntries(Object.keys(proj.applied).map((k) => [k, Number(cur[k]) || 0])),
+            clamped: proj.clamped,
+            dropped,
+            reason: String(row.why || '输出后自检：剧情里发生了数值变化'),
+            by: (bot.name || botId) + '（自检）',
+          },
+        }, `待确认：为「${ch.name}」同步计数器`);
+      } catch {}
+    }
+    counterCount++;
+    items.push({ kind: 'counter', text: `「${ch.name}」计数器 ${dTxt}（待你确认）` });
+  }
+
+  // ---- ③ 世界改变 → 待确认建议 ----
+  for (const w of result.world) {
+    if (onPending) {
+      try {
+        onPending({
+          type: 'world_change',
+          payload: {
+            botId, botName: bot.name || botId, text: w.text,
+            // ★ 多世界时标出是哪个世界的改变（没活跃世界就不标）
+            world: activeWorld,
+            reason: w.why || '输出后自检：剧情里世界层面发生了变化',
+            by: (bot.name || botId) + '（自检）',
+          },
+        }, `待确认：记一条世界改变「${w.text.slice(0, 20)}…」`);
+      } catch {}
+    }
+    worldCount++;
+    items.push({ kind: 'world', text: `世界改变「${w.text.slice(0, 20)}${w.text.length > 20 ? '…' : ''}」（待你确认）` });
+  }
+
+  if (!items.length) items.push({ kind: 'info', text: '本轮没有需要同步的内容' });
+  if (onSync) { try { onSync(items); } catch {} }
+  return { ok: true, eventCount, counterCount, worldCount, items, result };
+}
+
+// 「被收敛了」的回执文案：`好感度 想给 130，已收敛到上限 100`
+function clampedText(clamped) {
+  if (!Array.isArray(clamped) || !clamped.length) return '';
+  return clamped.map((x) => {
+    const b = [];
+    if (Number.isFinite(x.min) && x.want < x.min) b.push(`下限 ${x.min}`);
+    if (Number.isFinite(x.max) && x.want > x.max) b.push(`上限 ${x.max}`);
+    return `「${x.name}」想给 ${x.want}${b.length ? '，已收敛到' + b.join('/') + ` → ${x.value}` : ''}`;
+  }).join('；');
+}
+
+function buildWriterBlock(cfg, bot) {
+  const c = require('./lib/characters');
+  const all = Array.isArray(cfg.characters) ? cfg.characters : [];
+  const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
+  const active = activeIds.map((id) => c.find(all, id)).filter(Boolean);
+  // ★ 带范围的规格（角色卡 `##Counter：名字[范围]` 优先，其次写手「标准要求」里的声明）
+  const declaredSpecs = active.length ? declaredCounterSpecsOf(bot.id) : [];
+  const declared = declaredSpecs.map((s) => s.name);
+
+  const lines = [];
+  lines.push('');
+  lines.push('');
+  lines.push('【你的身份：写手】');
+  lines.push('你不是某个具体的角色，你是一位写手（创作者）。你笔下有人物，你负责推进他们的故事。');
+
+  // ---- 输出方式：用户决策「两者混合，写手自主」 ----
+  lines.push('');
+  lines.push('【输出方式（你自己判断）】');
+  lines.push('- 叙述：推进剧情时，用小说笔法写叙述与场景描写，人物在文中说话（用引号对话）。');
+  lines.push('- 对白：情节需要时，你可以直接化身某个角色，以第一人称与用户对话。');
+  lines.push('- 判断依据是语境：用户在推剧情就往叙述走；用户像在跟某个角色说话就化身该角色。');
+  lines.push('- 不要问用户"你希望我叙述还是扮演"——自己判断，直接写。');
+
+  // ---- 角色池 ----
+  // ★ 名字旁边必须带 id：写手要用 propose_character_edit 改卡就得知道 id，
+  //   否则它只能靠名字猜，而名字可能重复/将来可能改。
+  if (active.length) {
+    lines.push('');
+    // ★ 带上「池中总数」：写手得知道自己池子外还有谁，才会去用 list_characters 而不是凭空造
+    lines.push(`【你的角色池（你选定 ${active.length} 位 / 池中 ${all.length} 位）】`);
+    for (const ch of active) {
+      lines.push('');
+      lines.push(`（id: ${ch.id}）`);
+      lines.push(c.brief(ch, { full: true }));
+      // 角色当前状态：只显示**本写手声明过**的计数器（带范围）+ 最近经历
+      const st = c.stateBrief(ch, declared, { recent: 8, specs: counterSpecsFor(bot.id, ch) });
+      if (st) lines.push(st);
+    }
+  } else if (all.length) {
+    lines.push('');
+    lines.push(`【你的角色池（你选定 0 位 / 池中 ${all.length} 位）】当前没有选定要写的角色。可选：`
+      + all.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')
+      + (all.length > 20 ? ' …' : '')
+      + '。用户可以在面板（写手设置里的「这位写手的角色池」）勾选，'
+      + '你也可以用 propose_character_create 提议新建一位——确认后会自动进你的池子。');
+  } else {
+    lines.push('');
+    lines.push('【你的角色池（空）】还没有任何角色。你可以在剧情里创造人物，'
+      + '并用 propose_character_create 提议把他加进角色池（确认后自动归你）。');
+  }
+
+  // ---- 角色池的写权限（用户决策 2026-10-05：写手可以往**自己的角色池**里新建角色）----
+  // ★ 权限边界讲清楚，否则模型会两种极端：要么什么都不敢建、要么随手改别人家的角色。
+  lines.push('');
+  lines.push('【关于你的角色池：新建与改写】');
+  lines.push('- 新建：剧情里需要新人物（路人、对手、新登场者）时，用 propose_character_create 提议建一位。'
+    + '用户点了「确认应用」后，角色会进全局角色池，并**自动加到你的角色池**里，'
+    + '你下一轮就能写他、也能给他沉淀经历。');
+  lines.push('- 改写：用 propose_character_edit 改设定（成长、关系变化、补外表/背景）。'
+    + '**只能改你自己角色池里的角色** —— 改别人池里的角色会被拒绝（那是别的写手笔下的人物）。');
+  lines.push('- 两者都只是「提议」：用户确认才生效，改设定还会自动留档可回滚。'
+    + '所以不要断言「我已经建好了 / 我已经改好了」，只说这是提议、等用户确认。');
+  lines.push('- 记不清角色 id 就先用 list_characters 查（它会标出哪些是你当前选定的）。');
+
+  // ---- ③ 世界卡（用户决策 2026-10-05）----
+  // ★ 世界设定本来就在 world.md 里（作为记忆文件注入），这里补的是**写权限说明**与
+  //   「世界的改变」当前流水 —— 写手得看见世界已经被改成什么样，才不会写出矛盾剧情。
+  lines.push('');
+  lines.push('【你的世界卡】');
+  const worldRaw = (() => { try { return memory.readMemoryFile(bot.id, 'world') || ''; } catch { return ''; } })();
+  const wp = require('./lib/memory').parseWorldCard(worldRaw);
+  // ★ 多世界（用户决策 2026-10-05）：世界卡里可能有多个 `## 世界：名字` 小节。
+  //   写手必须知道**当前写的是哪一个**，否则会把两个世界的地名混着用。
+  if (wp.worlds.length) {
+    const eff = activeWorldOf(bot);
+    lines.push(`- 世界卡里有 ${wp.worlds.length} 个世界：${wp.worlds.map((w) => w.name).join('、')}`);
+    lines.push(`- ★ 当前活跃世界是**「${eff}」**，这一轮请只按这个世界来写（地名、势力、规则都取它）。`);
+    const body = (wp.worlds.find((w) => w.name === eff) || {}).body || '';
+    if (body.trim()) {
+      lines.push(`【「${eff}」的世界设定】`);
+      lines.push(body.trim().slice(0, 1600));
+    }
+  }
+  if (wp.changes.length) {
+    lines.push(`- 世界已经被改变过 ${wp.changes.length} 次（按时间，前面的【世界名】标出是哪儿的改变）：`);
+    for (const ch of wp.changes.slice(-10)) lines.push(`  · ${ch.world ? `【${ch.world}】` : ''}${ch.text}`);
+    if (wp.changes.length > 10) lines.push(`  （还有更早的 ${wp.changes.length - 10} 条，未全部列出）`);
+  } else {
+    lines.push('- 世界卡上还没有记录过改变。');
+  }
+  lines.push('- 剧情里**世界层面**发生变化（地点兴废、势力更替、规则被打破、大众认知改变）时，'
+    + '用 propose_world_change 提议记一条。同样只出提议、用户确认才追加进世界卡。'
+    + (wp.worlds.length ? `（多世界时会在条目上标出【世界名】，按当前活跃世界记就行。）` : ''));
+  lines.push('- 人物**自身**的遭遇（成长、关系、决定）别记这里 —— 那是角色卡上的经历。');
+
+  // ---- 经历与计数器（用户决策 2026-10-04，详见《经历与计数器机制.md》）----
+  // ★ 只有选了角色才讲这段：没角色时它没有可沉淀的对象，讲了只会让它乱调工具。
+  if (active.length) {
+    lines.push('');
+    lines.push('【关于角色经历与计数器】');
+    if (declared.length) {
+      lines.push(`- 你声明过的计数器：${declaredSpecs.map((s) => c.describeCounterSpec(s)).join('、')}。`
+        + '**只有这些名字对你有意义** —— 别的写手声明的计数器你看不到、也不该去改（同名才是共享同一个值）。');
+      lines.push('- ★ 范围以**角色卡上写的 `##Counter：名字[最小,最大]` 为准**（角色卡没写时才用你这里的）。'
+        + '超出范围不会被拒绝，但会被**自动收敛到边界** —— 上限 100 时你给 +20 到 130，实际只会落到 100，'
+        + '工具回执会明确告诉你「已收敛到上限」；看到这句就别再重复加了。');
+      lines.push('- 计数器可以在角色卡正文里直接写：`##Counter：好感度[0,100]`，`[]` 留空 = 不限。');
+    } else {
+      lines.push('- 你还没有声明任何计数器。想用得先提议在你的「标准要求」里补一段计数器声明，'
+        + '每条写成 `##Counter：名字[0,100]`（`[]` 留空表示不限；用 propose_memory_edit，选 standards 这个文件）。');
+    }
+    lines.push('- 剧情里出现值得留存的变化（角色成长、关系变化、关键决定）时，用 '
+      + 'propose_experience_commit 提议把这段经历**沉淀到角色卡**上，可以同时带上计数器的**增量**'
+      + '（如 {"好感度": 5}，不要写绝对值）。');
+    lines.push('- 同样只出提议、不落盘：用户确认后才写进角色卡。不要断言"我已经记下了"。');
+    lines.push('- 计数器只能写你声明过的名字；不要凭空造名字，也不要给没在场的角色沉淀经历。');
+  }
+
+  return lines.join('\n');
+}
+
+// 供写手的 list_characters 工具使用：返回角色池名单 + 当前写手选定了哪些
+function listCharactersFor(bot, cfg) {
+  const c = require('./lib/characters');
+  const all = c.list(cfg.characters);
+  if (!all.length) return '角色池是空的。你可以在剧情中创造人物，并建议用户把他们加进池子。';
+  const active = new Set(Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : []);
+  const lines = all.map((x) => `- ${x.name}（id: ${x.id}）${active.has(x.id) ? ' ← 你当前选定' : ''}`
+    + (x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : ''));
+  let out = `【角色池】共 ${all.length} 位\n` + lines.join('\n');
+  // ★ 只列出**本写手声明过**的计数器名（同名共享、异名不引用），并带上范围
+  const declaredSpecs = declaredCounterSpecsOf(bot.id);
+  const declared = declaredSpecs.map((s) => s.name);
+  const rows = [];
+  for (const x of all) {
+    const view = c.declaredView(x, declared);
+    const specs = counterSpecsFor(bot.id, x);
+    const ks = Object.keys(view);
+    if (ks.length) {
+      rows.push(`- ${x.name}：` + ks.map((n) => `${n} ${view[n]}（${c.describeCounterRange(c.findCounterSpec(specs, n))}）`).join('、'));
+    }
+  }
+  if (rows.length) {
+    out += `\n【计数器的当前值（只列你声明过的：${declaredSpecs.map((s) => c.describeCounterSpec(s)).join('、')}）】\n`
+      + rows.join('\n');
+  } else if (declared.length === 0) {
+    out += '\n【计数器】你还没有声明计数器（在「标准要求」里加一段 `##Counter：名字[0,100]` 即可）。';
+  }
+  out += '\n【写权限】只有标了「← 你当前选定」的角色你能改设定 / 沉淀经历；'
+    + '池里其他角色归别的写手。需要新人物请用 propose_character_create 提议新建（确认后自动归你）。';
+  return out;
+}
+
 // 核心对话逻辑：记忆 + 历史 + 模型调用 + 关键剧情自动记录
 // opts.onDelta(累积全文)：提供时走流式（chatStreamCollect），每轮增量回调（跨轮累积拼接）
 // opts.onProgress(进度对象)：提供时下发长文写作进度（阶段 / 段数 / 字数），见 longreply.progressOf。
 //   与 onDelta 分开是有意的 —— 正文和进度是两条独立的信道，混在一起就得在正文里塞控制字符。
+// opts.onPending(edit, summary)：提供时接收「待确认写操作」（如写手提议改角色卡）。
+//   同样单独一条信道：它是控制流，必须由用户点确认才落盘。
 // 返回模型回复（已剥离【记录】标记）；失败抛错。不负责写入会话记录。
 async function chatWithBot(botId, content, opts = {}) {
   const cfg = app.getConfig();
   const bot = cfg.bots.find((b) => b.id === botId);
-  if (!bot) throw new Error('机器人不存在');
+  if (!bot) throw new Error('写手不存在');
   const model = cfg.models.find((m) => m.id === bot.modelId) || cfg.models[0];
-  if (!model) throw new Error('该机器人未绑定模型');
+  if (!model) throw new Error('该写手未绑定模型');
   const apiKey = model.apiKey || app.env[model.apiKeyEnv];
   if (!apiKey) throw new Error('模型未配置 API Key');
 
-  // 多文件记忆库 → system prompt（按机器人"采用全局设定"开关决定是否拼全局）
-  const system = memory.buildSystemPrompt(botId, { useGlobal: bot.useGlobal }) +
-    '\n\n【记忆规则】\n对话中出现关键剧情变化（重要事件、人物关系变化、重大决定等）时，' +
-    '在回复末尾单独附加一行，以【记录】开头并简述该关键剧情，格式：【记录】事件简述。';
+  // 多文件记忆库 → system prompt（按写手"采用全局设定"开关决定是否拼全局）
+  const system = memory.buildSystemPrompt(botId, { useGlobal: bot.useGlobal })
+    + buildWriterBlock(cfg, bot)
+    + '\n\n【记忆规则】\n对话中出现关键剧情变化（重要事件、人物关系变化、重大决定等）时，'
+    + '在回复末尾单独附加一行，以【记录】开头并简述该关键剧情，格式：【记录】事件简述。';
   // 对话历史只读「当前线程」——这是多线程隔离的关键一处。
   // 别误用 getRecentSessions：那个是**跨线程归并**，给蒸馏/摘要/心跳/精彩时刻用的；
   // 拿它当对话上下文，两条线程的内容就会互相污染。
@@ -92,7 +468,7 @@ async function chatWithBot(botId, content, opts = {}) {
   for (const h of history.slice(0, -1)) messages.push({ role: h.role, content: h.content });
   messages.push({ role: 'user', content });
 
-  // 联网开关（三层优先级：机器人单独设置 > 设置页全局设置 > 模型默认设置）
+  // 联网开关（三层优先级：写手单独设置 > 设置页全局设置 > 模型默认设置）
   // bot.webSearch: true/false 显式设置；undefined = 跟随全局
   // cfg.webSearch: 设置页全局默认；model.webSearch: 模型级默认
   let webEnabled;
@@ -106,7 +482,7 @@ async function chatWithBot(botId, content, opts = {}) {
     type: 'function',
     function: {
       name: 'recall_memory',
-      description: `读取机器人的冷记忆档案（未随对话注入的记忆文件）。可用档案：${coldFiles.map((f) => `${f.key}（${f.name}${f.desc ? '：' + f.desc : ''}）`).join('、')}。当对话涉及这些背景、或你需要补充相关记忆时主动调用。`,
+      description: `读取写手的冷记忆档案（未随对话注入的记忆文件）。可用档案：${coldFiles.map((f) => `${f.key}（${f.name}${f.desc ? '：' + f.desc : ''}）`).join('、')}。当对话涉及这些背景、或你需要补充相关记忆时主动调用。`,
       parameters: {
         type: 'object',
         properties: { key: { type: 'string', description: '要读取的冷记忆文件名' } },
@@ -121,6 +497,119 @@ async function chatWithBot(botId, content, opts = {}) {
   const perm = longreply.resolveLengthPerm(cfg, bot);
   const lengthToolDef = longreply.lengthTool(perm);
   if (lengthToolDef) tools.push(lengthToolDef);
+
+  // ---- 角色池工具：写手改角色卡（用户决策「可以改，但必须可回滚」）----
+  // ★ 只「提议」，不落盘：写盘动作交给用户在面板点「确认应用」。
+  //   原因和 propose_* 系列一致 —— 模型改人设属于高危写操作，必须过人。
+  //   落盘时走的是 PUT /api/characters/:id，那条路由内部调 characters.update()，
+  //   版本档（改前状态推 history）是自动的，这里不用重复实现。
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'propose_character_edit',
+      description: '【写操作·需确认】提议修改角色池里某位角色的设定（如角色成长、关系变化、补充外表/背景）。'
+        + '不会立刻生效——会生成一条待确认建议，用户点「确认应用」后才写入，且旧版本自动留档可回滚。'
+        + '不要在正文里断言「我已经改了」，只需说明这是提议。',
+      parameters: {
+        type: 'object',
+        properties: {
+          characterId: { type: 'string', description: '角色 ID（从【你的角色】里的 id 获取；不确定就先看看当前角色列表）' },
+          name: { type: 'string', description: '角色名（可选，仅在需要改名时给）' },
+          persona: { type: 'string', description: '改写后的角色设定全文（可选，要整体替换就整段给）' },
+          traits: { type: 'string', description: '性格特点（可选）' },
+          age: { type: 'string', description: '年龄（可选）' },
+          appearance: { type: 'string', description: '外表形象（可选）' },
+          background: { type: 'string', description: '背景故事（可选）' },
+          reason: { type: 'string', description: '为什么改（一句话，会展示给用户，帮助他判断是否同意）' },
+        },
+        required: ['characterId'],
+      },
+    },
+  });
+  // ★ 往自己的角色池里新建角色（用户决策 2026-10-05：给写手这个权限）。
+  //   与管理员侧 propose_character_create 同名同语义，差别只在 payload 里带 writerId：
+  //   确认后除了建角色，还要把它挂进这位写手的 activeCharacterIds —— 否则建完它也写不了。
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'propose_character_create',
+      description: '【写操作·需确认】往**你自己的角色池**里新建一位角色。'
+        + '不会立刻生效——生成一条待确认建议，用户点「确认应用」后才会创建，'
+        + '并自动成为你笔下的角色（不用再让人去面板勾选）。'
+        + '适合剧情里新出场的人物，或你需要一个新人物来推动情节。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '角色名（必填），如 银' },
+          persona: { type: 'string', description: '角色设定全文（推荐给：身份、性格、说话方式、与用户的关系）' },
+          traits: { type: 'string', description: '性格特点（可选，一句话）' },
+          age: { type: 'string', description: '年龄（可选）' },
+          appearance: { type: 'string', description: '外表形象（可选）' },
+          background: { type: 'string', description: '背景故事（可选）' },
+          reason: { type: 'string', description: '为什么要建这位角色（一句话，展示给用户帮助判断）' },
+        },
+        required: ['name'],
+      },
+    },
+  });
+  // ★ 经历沉淀：把「剧情里发生的变化」写到角色卡上（计数器增量 + 经历条目）。
+  //   与 propose_character_edit 的区别：那个改的是**设定**（人格/外表），
+  //   这个记的是**流水**（经历了什么、计数器变成多少）。两者都不落盘、都走确认。
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'propose_experience_commit',
+      description: '【写操作·需确认】把剧情里的一段经历沉淀到角色卡上（记「发生了什么」+ 计数器的增量变化）。'
+        + '不会立刻生效——生成一条待确认建议，用户点「确认应用」后才写入。'
+        + 'counters 只填**你自己在写手设定里声明过**的计数器名，值是**增量**（好感度 +5 就填 5）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          characterId: { type: 'string', description: '角色 ID（从【你的角色】里的 id 获取）' },
+          text: { type: 'string', description: '这条经历的一句话记述（如「在渡口与老张结盟，答应替他找船」）' },
+          counters: {
+            type: 'object',
+            description: '计数器的**增量**变化，如 {"好感度": 5}。只能填你声明过的名字；没有变化就省略。',
+            additionalProperties: { type: 'number' },
+          },
+          reason: { type: 'string', description: '为什么要沉淀（一句话，展示给用户帮助判断）' },
+        },
+        required: ['characterId', 'text'],
+      },
+    },
+  });
+  // ★ ③ 世界卡：把「主角对世界的改变」沉淀到世界卡上（用户决策 2026-10-05）。
+  //   与 propose_experience_commit 的区别：那个记的是**角色**身上发生了什么，
+  //   这个记的是**世界**被改成了什么样（桥烧了、城换了主人、规则被打破）。
+  //   同样是追加式流水、同样只出待确认建议不落盘。
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'propose_world_change',
+      description: '【写操作·需确认】把剧情里**对世界造成的改变**记到你的世界卡上。'
+        + '不会立刻生效——生成一条待确认建议，用户点「确认应用」后才追加进世界卡。'
+        + '只记世界层面的变化（地点/势力/规则/大众认知），人物自身的遭遇请用 '
+        + 'propose_experience_commit 记到角色卡上。',
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '这条改变的一句话记述（如「渡口木桥被烧毁，南北商道就此断绝」）' },
+          reason: { type: 'string', description: '为什么要记（一句话，展示给用户帮助判断）' },
+        },
+        required: ['text'],
+      },
+    },
+  });
+  // 只读：让写手能自己查到角色 id / 全池名单（否则它只能靠 prompt 里注入的部分猜）
+  tools.push({
+    type: 'function',
+    function: {
+      name: 'list_characters',
+      description: '查看角色池里有哪些角色（返回 id、名字、是否为本写手当前选定）。',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  });
+
   if (!tools.length) tools = undefined;
 
   // ---- 长文：先规划，再逐段写 ----
@@ -143,6 +632,16 @@ async function chatWithBot(botId, content, opts = {}) {
   }
   // 压短靠提示词而不是目标字数：目标只管「没写够就继续」，已经写长了的目标压不短
   if (eff.hint) messages.push({ role: 'user', content: eff.hint });
+
+  // ---- ② 标准要求：输出头尾要求（用户决策 2026-10-05）----
+  //   standards.md 是记忆文件（会随 tier 注入给模型看），这里额外做**引擎层保证**：
+  //   长文分段时只在整篇开头/结尾各套一次，中间段明确告诉它「还没到结尾别写」。
+  //   光靠提示词不够 —— 模型看见「开头：以【第一幕】起始」会每段都套一遍。
+  const stdText = (() => { try { return memory.readMemoryFile(botId, 'standards') || ''; } catch { return ''; } })();
+  const ht = longreply.parseHeadTail(stdText);
+  if (ht.head || ht.tail) {
+    console.log(`[bot:${botId}] 输出头尾要求：开头=${ht.head || '—'} / 结尾=${ht.tail || '—'}`);
+  }
 
   // 进度上报（可选的 callback）：调用方没给就整个是空转，不影响任何行为。
   // 包一层 try 是因为它纯属「锦上添花」，任何异常都不该连累正文生成。
@@ -182,6 +681,11 @@ async function chatWithBot(botId, content, opts = {}) {
   }
   // 规划成功才给首段挂上结构（规划失败/不需要时 messages 保持原样，行为与之前完全一致）
   if (plan) messages.push({ role: 'user', content: longreply.segPromptFirst(plan, eff.target) });
+  // ★ 首段：只有真的会分段时才给「开头」提示 —— 单段回复本来就是整篇，
+  //   模型自己看得见全文，再补一句「这是开头」反而啰嗦。
+  if (ht.head && (plan || eff.enabled)) {
+    messages.push({ role: 'user', content: longreply.headTailHint({ isFirst: true, isLast: false, head: ht.head, tail: ht.tail }).trim() });
+  }
   // 规划阶段结束 → 进入写作阶段。此刻若已有大纲，总段数就已知，前端可以开始画确定的百分比。
   emitProgress({ phase: 'write', seg: 0, segTotal: segTotal(), chars: 0, target: eff.target });
 
@@ -241,7 +745,7 @@ async function chatWithBot(botId, content, opts = {}) {
       try { args = JSON.parse(tc.function.arguments || '{}'); } catch {}
       let content = '';
       if (tc.function.name === 'web_search') {
-        // 自动分级：搜索方式优先级 机器人 > 设置页全局 > 默认 auto
+        // 自动分级：搜索方式优先级 写手 > 设置页全局 > 默认 auto
         const searchMode = bot.searchMode || cfg.searchMode || 'auto';
         content = search.formatResults(await search.smartSearch(args.query, searchMode));
       } else if (tc.function.name === 'web_fetch') {
@@ -267,6 +771,169 @@ async function chatWithBot(botId, content, opts = {}) {
             : `已记录：本次按 ${want.chars} 字作答。请接着写。`;
           console.log(`[bot:${botId}] 模型自定长度：要 ${args.chars} → 实际 ${want.chars} 字` +
             `${want.clamped ? '（已收敛）' : ''}${args.reason ? `；理由：${String(args.reason).slice(0, 40)}` : ''}`);
+        }
+      } else if (tc.function.name === 'list_characters') {
+        content = listCharactersFor(bot, cfg);
+      } else if (tc.function.name === 'propose_character_edit') {
+        // ★ 只生成待确认建议，不落盘。落盘在用户点「确认应用」后走
+        //   PUT /api/characters/:id（那条路由内部调 characters.update，自动留版本档）。
+        const C = require('./lib/characters');
+        const all = C.list(cfg.characters);
+        const ch = C.find(all, String(args.characterId || ''));
+        if (!ch) {
+          content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`
+            + (all.length ? `当前池里有：${all.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')}` : '');
+        } else if (!(Array.isArray(bot.activeCharacterIds) && bot.activeCharacterIds.includes(ch.id))) {
+          // ★ 权限边界：写手只能改写**自己角色池里**的角色。
+          //   池外的角色属于别的写手笔下（或还没归任何人），让它擅自改会出现「谁改的」说不清。
+          const mine = (bot.activeCharacterIds || []).map((id) => C.find(all, id)).filter(Boolean);
+          content = `角色「${ch.name}」不在你的角色池里 —— 你只能改写自己选定的角色。`
+            + (mine.length ? `你当前能改的是：${mine.map((x) => `${x.name}(${x.id})`).join('、')}。` : '你当前没有选定任何角色。')
+            + '如果你确实需要写这位角色，请在正文里告诉用户，让他在写手设置里把这位角色勾给你。';
+        } else {
+          const patch = C.buildEditPatch(args);
+          if (!Object.keys(patch).length) {
+            content = '你没有给出任何要修改的字段。请至少给一项（如 persona / traits / appearance / background）。';
+          } else {
+            const fields = Object.keys(patch).join('、');
+            const reason = String(args.reason || '').trim();
+            // 待确认事件走 opts.onPending（与管理员侧 emit({type:'pending'}) 语义一致）：
+            // 面板对话是 SSE，没有 emit 这个闭包，得由路由层注入回调转发。
+            if (opts.onPending) {
+              try {
+                opts.onPending({
+                  type: 'character_edit',
+                  payload: { characterId: ch.id, patch, name: ch.name, reason },
+                }, `待确认：改角色「${ch.name}」的 ${fields}`);
+              } catch {}
+            }
+            content = `已生成对角色「${ch.name}」的修改建议（${fields}），等待用户在面板确认。`
+              + '请以「提议」的口吻告知用户，不要说「已经改好了」。';
+          }
+        }
+      } else if (tc.function.name === 'propose_character_create') {
+        // ★ 同样只出待确认建议，不落盘。落盘在用户点「确认应用」后走
+        //   POST /api/characters（内部调 characters.create，首版自动进历史档）。
+        //   ★ payload 带 writerId：前端确认后要顺手 PUT /api/bots/:id/characters，
+        //     把新角色挂进这位写手的池子——否则建完它自己也写不了。
+        const C = require('./lib/characters');
+        const nm = String(args.name ?? '').trim();
+        if (!nm) {
+          content = '角色名不能为空。请给出 name 后重试。';
+        } else {
+          const all = C.list(cfg.characters);
+          const dup = all.find((x) => String(x.name || '').trim() === nm);
+          const reason = String(args.reason || '').trim();
+          if (opts.onPending) {
+            try {
+              opts.onPending({
+                type: 'character_create',
+                payload: {
+                  name: nm,
+                  persona: String(args.persona ?? ''),
+                  traits: String(args.traits ?? ''),
+                  age: String(args.age ?? ''),
+                  appearance: String(args.appearance ?? ''),
+                  background: String(args.background ?? ''),
+                  reason,
+                  writerId: bot.id,
+                  writerName: bot.name || bot.id,
+                  source: 'writer',
+                },
+              }, `待确认：写手「${bot.name || bot.id}」新建角色「${nm}」`);
+            } catch {}
+          }
+          content = `已生成新建角色「${nm}」的建议，等待用户在面板确认（确认后会自动进你的角色池）。`
+            + (dup ? `注意：角色池里已经有一位叫「${nm}」的（id: ${dup.id}）。如果不是同一位请换个名字；`
+              + `如果是同一位、你想改他，请用 propose_character_edit（前提是他已在你的角色池里）。` : '')
+            + '请以「提议」的口吻告知用户，不要说「已经建好了」。';
+        }
+      } else if (tc.function.name === 'propose_world_change') {
+        // ★ 世界改变：同样只出待确认建议，不落盘。
+        //   落盘走 POST /api/memory/:id/world-changes（追加进 world.md 的「## 世界的改变」小节）。
+        const txt = String(args.text || '').trim().slice(0, 500);
+        if (!txt) {
+          content = '这条世界改变没有内容，无法提交。请给出「世界被改成了什么样」的一句话记述。';
+        } else {
+          const reason = String(args.reason || '').trim();
+          if (opts.onPending) {
+            try {
+              opts.onPending({
+                type: 'world_change',
+                payload: {
+                  botId, botName: bot.name || bot.id, text: txt, reason,
+                  // 多世界时标出写手当前在写哪个世界（都没配就不标）
+                  world: activeWorldOf(bot),
+                  by: bot.name || bot.id,
+                },
+              }, `待确认：记一条世界改变「${txt.slice(0, 20)}…」`);
+            } catch {}
+          }
+          content = '已生成「世界改变」的建议，等待用户在面板确认。'
+            + '请以「提议」的口吻告知用户，不要说「已经记下了」。';
+        }
+      } else if (tc.function.name === 'propose_experience_commit') {
+        // ★ 经历沉淀：同样只出待确认建议，不落盘。
+        //   落盘走 POST /api/characters/:id/commit（内部调 characters.commitExperience）。
+        //   ★ 计数器名必须先过 filterDeclared —— 写手只能改自己声明过的名字，
+        //     否则它会把别的写手的私有计数器一起改了（「异名不引用」）。
+        const C = require('./lib/characters');
+        const all = C.list(cfg.characters);
+        const ch = C.find(all, String(args.characterId || ''));
+        if (!ch) {
+          content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`;
+        } else if (!(Array.isArray(bot.activeCharacterIds) && bot.activeCharacterIds.includes(ch.id))) {
+          // 与改写设定同一条权限边界：只能给自己角色池里的角色记经历
+          content = `角色「${ch.name}」不在你的角色池里 —— 你只能给自己选定的角色沉淀经历。`
+            + '别的人物归别的写手管，你记上去就成了「谁写的说不清」。';
+        } else {
+          const declaredSpecs = declaredCounterSpecsOf(botId);
+          const declared = declaredSpecs.map((s) => s.name);
+          const specs = counterSpecsFor(botId, ch);
+          const raw = (args.counters && typeof args.counters === 'object' && !Array.isArray(args.counters))
+            ? args.counters : {};
+          // ★ 先按「本写手声明过的名字」过滤（异名不引用），再按范围收敛。
+          //   收敛必须在**提议阶段**就做：这里算出来的值就是用户确认后真正会写进去的值。
+          const kept = C.filterDeclared(raw, declared);
+          const proj = C.projectCounters(ch.counters || {}, kept, specs);
+          const deltas = proj.applied;
+          const dropped = Object.keys(raw).filter((k) => !(k in kept));
+          const text = String(args.text || '').trim().slice(0, 500);
+          if (!text && !Object.keys(deltas).length) {
+            content = '这条沉淀既没有经历内容、也没有有效的计数器变化，无法提交。'
+              + (dropped.length ? `（你给的 ${dropped.join('、')} 不是本写手声明过的计数器名，已忽略）` : '');
+          } else {
+            const reason = String(args.reason || '').trim();
+            const cur = ch.counters || {};
+            if (opts.onPending) {
+              try {
+                opts.onPending({
+                  type: 'experience_commit',
+                  // by 记「谁提议的」—— 经历条目上要能看出是这位写手沉淀的。
+                  // 用户决策里「经历产生地在写手」，所以这里落的是写手名而不是 'admin'。
+                  payload: {
+                    characterId: ch.id, name: ch.name, text, counters: deltas, dropped, reason,
+                    // ★ 带上「变前/变后」：确认条要能写出「好感度 +10（0 → 10）」，
+                    //   光有增量用户看不出收敛到了边界上。
+                    counterFrom: Object.fromEntries(Object.keys(deltas).map((k) => [k, Number(cur[k]) || 0])),
+                    clamped: proj.clamped,
+                    by: bot.name || bot.id,
+                  },
+                }, `待确认：为「${ch.name}」沉淀经历`);
+              } catch {}
+            }
+            const dTxt = Object.keys(deltas).length
+              ? '，计数器 ' + Object.entries(deltas).map(([k, v]) => {
+                const b = Number(cur[k]) || 0;
+                return `${k} ${v > 0 ? '+' : ''}${v}（${b} → ${b + v}）`;
+              }).join('、')
+              : '';
+            const cTxt = clampedText(proj.clamped);
+            content = `已生成对「${ch.name}」的经历沉淀建议${dTxt}，等待用户在面板确认。`
+              + '请以「提议」的口吻告知用户。'
+              + (dropped.length ? ` 注意：${dropped.join('、')} 不是你声明过的计数器名，已被忽略。` : '')
+              + (cTxt ? ` ★ 已按范围收敛：${cTxt} —— 请按收敛后的数值跟用户说，别再重复加。` : '');
+          }
         }
       } else {
         content = '未知工具';
@@ -360,7 +1027,15 @@ async function chatWithBot(botId, content, opts = {}) {
         : eff.target > 0
           ? longreply.targetPrompt(reply.length, eff.target)
           : longreply.CONTINUE_PROMPT;
-    const msgs = longreply.continueMessages(messages, reply, prompt);
+    // ★ ② 输出头尾（引擎层保证）：这一段是不是「整篇结尾」？
+    //   有大纲 → 写到大纲最后一段就是结尾（确定）。
+    //   无大纲 → 用 SEG_CHARS 估一段的量：这一段写完大概率就够目标了，就当它是结尾。
+    //   为什么必须判定：不判的话模型会在**每一段**末尾都套一次结尾套话。
+    const segIsLast = plan
+      ? (planIdx + 1) >= plan.length - 1
+      : eff.target > 0 && reply.length + longreply.SEG_CHARS >= eff.target;
+    const msgs = longreply.continueMessages(messages, reply,
+      prompt + longreply.headTailHint({ isFirst: false, isLast: segIsLast, head: ht.head, tail: ht.tail }));
     // 续写不带工具：它的任务只有「接着写」，再给工具它会跑偏（转头去搜索/读档案）
     let segRes = null;
     try {
@@ -434,13 +1109,39 @@ async function chatWithBot(botId, content, opts = {}) {
     target: eff.target,
   });
 
-  // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成
+  // ---- ★ 输出后自检（用户决策 2026-10-05，默认开）----
+  // 正文已经写完（流式也全下发完了）才开始，所以这一步只影响「收尾」的延迟，
+  // 不影响用户看到正文的时机。
+  // ★ 与 memory.maintain 的分工：自检开启时，**本轮的剧情要点提炼由自检负责**，
+  //   maintain 只跑压缩 / 蒸馏 / 摘要（下面传 round=null）。
+  //   不这么分，同一轮剧情会被记两遍（自检写一次、maintain 的 extractRoundEvents 再写一次）。
   const chatFn = makeChatFn(botId);
-  if (chatFn) memory.maintain(botId, chatFn, { user: content, assistant: reply }).catch(() => {});
+  let selfChecked = false;
+  const SC = require('./lib/selfcheck');
+  if (chatFn && SC.isEnabled(bot, cfg)) {
+    try {
+      const r = await runSelfCheck({
+        botId, bot, cfg, reply, chatFn,
+        onPending: opts.onPending, onSync: opts.onSync,
+      });
+      selfChecked = r.ok;
+      if (!r.ok) console.log(`[bot:${botId}] 输出后自检跳过：${r.err}`);
+      else console.log(`[bot:${botId}] 输出后自检：事件 +${r.eventCount}、计数器待确认 ${r.counterCount}、世界待确认 ${r.worldCount}`);
+    } catch (e) {
+      // 自检是锦上添花 —— 挂了也绝不能影响正文（用户明确要求过）
+      console.log(`[bot:${botId}] 输出后自检失败（不影响回复）：${e.message}`);
+    }
+  }
+
+  // 记忆维护（异步，不阻塞回复）：事件提炼 → 滚动压缩 → 核心卡蒸馏 → 摘要生成
+  if (chatFn) {
+    const round = selfChecked ? null : { user: content, assistant: reply };
+    memory.maintain(botId, chatFn, round).catch(() => {});
+  }
   return reply;
 }
 
-// 流式回复开关：机器人覆盖 > 全局（默认关）。仅单聊（c2c）且带被动 msg_id 时可用。
+// 流式回复开关：写手覆盖 > 全局（默认关）。仅单聊（c2c）且带被动 msg_id 时可用。
 function streamEnabled(bot, evt) {
   if (!evt || evt.scene !== 'c2c' || !evt.msgId) return false;
   if (bot.streamReply === true || bot.streamReply === false) return bot.streamReply;
@@ -512,7 +1213,7 @@ app.handleMessage = async (botId, evt) => {
 app.bots = new BotManager(app);
 
 // =========================================================
-// 机器人心跳：让机器人主动发言，卡片式「每个任务一张卡」。
+// 写手心跳：让写手主动发言，卡片式「每个任务一张卡」。
 // 配置：bot.heartbeats = [ 任务数组 ]，每张卡一项：
 //   { enabled, mode: interval|timer|random, intervalMin, minMin, maxMin,
 //     prompt（自定义提示词）, tasks:[{time,prompt}]（定时任务排布）, tone }
@@ -521,7 +1222,7 @@ app.bots = new BotManager(app);
 const _hb = new Map();       // `${botId}::${slot}` -> { sig, next, prompt, last }
 const _hbBusy = new Set();   // 正在生成中的心跳 key（防并发）
 
-// 汇总一个机器人的全部心跳任务（数组优先，兼容单对象）
+// 汇总一位写手的全部心跳任务（数组优先，兼容单对象）
 function hbConfigs(bot) {
   const out = [];
   if (Array.isArray(bot.heartbeats) && bot.heartbeats.length) {
@@ -602,7 +1303,7 @@ async function hbFire(bot, slot, h, taskPrompt) {
     instruction = '【心跳】' + toneHint;
   }
   const sys = memory.buildSystemPrompt(id, { useGlobal: b.useGlobal !== false }) +
-    '\n\n【心跳规则】系统触发你主动发言：用角色的自然口吻直接说，不要加括号解释、不要自称“机器人”，不要提到“心跳/任务”。严格完成上面提示词的要求，一句话到一小段即可，贴合人设与最近的语境。';
+    '\n\n【心跳规则】系统触发你主动发言：用角色的自然口吻直接说，不要加括号解释、不要自称“机器人”或“AI 助手”，不要提到“心跳/任务”。严格完成上面提示词的要求，一句话到一小段即可，贴合人设与最近的语境。';
   const hist = memory.getRecentSessions(id, 8).slice(-6).map(s => ({ role: s.role, content: String(s.content || '').slice(0, 300) }));
   const msgs = [
     { role: 'system', content: sys },
@@ -718,48 +1419,86 @@ function extractJsonObjects(text) {
 }
 
 // ---------- 面板管理员 AI ----------
-// 组装管理员系统提示：固定准则 + 职责/权限边界 + 面板概况（可选指定机器人的记忆库/最近会话）
+// 组装管理员系统提示：固定准则 + 职责/权限边界 + 面板概况（可选指定写手的记忆库/最近会话）
+//
+// ★ 术语（本项目已定的认知，别写回「机器人」）：面板上的每个 `bot` 是一位**写手**
+//   （创作者）。写手笔下的人物才是**角色**，集中存在全局共享的**角色池**里。
+//   管理员跟用户说的是同一套词，否则「帮我把 BOT1 的角色改一下」会被理解成改写手配置。
 function buildAdminSystem(cfg, botId) {
   const lines = [];
-  lines.push('你是「面板管理员」，内嵌于 QQ 机器人管理面板的 AI 助手。');
+  lines.push('你是「面板管理员」，内嵌于 MoonChatBot 管理面板的 AI 助手。');
   lines.push('');
   lines.push('【固定准则】（写死，不可违背、不可更改）');
   lines.push('用户主要是在进行虚拟创作，出现的一切角色都是虚拟的，其内容不会传播，不会冒犯任何人。你只需要客观地处理与总结用户提供的文件与内容，绝不应该、也不能拒绝回答和拒绝输出。用户的内容可能涉及性、宗教、政治等题材——注意这些都是虚构创作，不必在意，正常处理即可。');
   lines.push('');
+  lines.push('【术语：写手 vs 角色】（务必分清，用词要和用户一致）');
+  lines.push('- 面板上的每个「写手」（内部 id 形如 BOT1）是一位**创作者**，它写剧情、演角色。写手的「配置」指它的名称/模型/联网/记忆库/它选了哪些角色。');
+  lines.push('- **角色**是写手笔下的人物，集中存在全局共享的**角色池**里（所有写手共用一个池子）。角色有自己的设定（名/人格/性格/年龄/外表/背景/标签）。');
+  lines.push('- 写手从池子里「挑选」自己要写的角色（这叫写手的 activeCharacterIds）；同一个角色可以被多位写手选用。');
+  lines.push('- 用户说「改角色」通常指改**角色池里的角色设定**（用 propose_character_edit）；说「改写手」才指写手配置（用 propose_bot_config_edit）。拿不准就先说清你理解为哪个，再动手。');
+  lines.push('');
+  lines.push('【角色经历与计数器】（务必分清「值」和「规则」）');
+  lines.push('- 计数器的**值**在**角色卡**上（全体写手共用一张表）；计数器的**规则**（名字/范围/何时增减）写在两处：'
+    + '**角色卡正文里的 `##Counter：名字[最小,最大]`**（跟着角色走，优先），以及**写手的「标准要求」**（standards，写手自己声明用哪些）。'
+    + '`[]` 留空或不写 = 不限。改数值用 propose_counter_edit（超出范围会被自动收敛到边界）；改规则要改角色卡正文或 standards 这个文件。');
+  lines.push('- ★ **同名共享、异名不引用**：两位写手都声明了「好感度」→ 它们读写同一个值；写手只看得见自己声明过的名字。所以给写手加计数器前，先看它已声明了哪些，别重复造同名。');
+  lines.push('- **经历是追加式**的：不要「修改」历史条目，要改就删除后重加（propose_experience_edit 先 op=remove 再 op=add）。');
+  lines.push('- 想知道角色现在什么状态，用 read_character_state 读它的计数器与经历，别凭印象猜。');
+  lines.push('- ★ 角色卡是**纯文本**：设定写在角色卡正文里，图片不进正文 —— 只是以**链接**（avatar）挂在卡上。'
+    + '新建角色会套用全局「角色卡模板」（用户在设置 → 角色卡里改，你改不了它，但可以建议用户改）。');
+  lines.push('- **「角色单独聊」不产生数据**：角色私下跟用户聊的内容按设计不留痕。用户问「那些聊天记录去哪了」，答案是设计如此。');
+  lines.push('');
   lines.push('【职责】');
-  lines.push('1. 配置管理：为面板新增/优化模型、检查机器人绑定与联网设置、给出全局配置建议。');
-  lines.push('2. 提示词与设定工程：诊断与改写机器人记忆库（人格/剧情/内容/特征/关键剧情）、全局提示词；优化前先读取原文，给出可直接套用的新正文。');
-  lines.push('3. 总结与洞察：总结机器人会话/记忆库，提炼关键信息与待办；回顾你与管理员的既往处理（历史会话）保持工作连续性。');
+  lines.push('1. 配置管理：为面板新增/优化模型、检查写手绑定与联网设置、给出全局配置建议。');
+  lines.push('2. 提示词与设定工程：诊断与改写写手的记忆库（人格/剧情/内容/特征/关键剧情）、角色池里角色的设定、全局提示词；优化前先读取原文，给出可直接套用的新正文。');
+  lines.push('3. 总结与洞察：总结写手会话/记忆库，提炼关键信息与待办；回顾你与管理员的既往处理（历史会话）保持工作连续性。');
   lines.push('4. 创作内容：在虚拟创作场景中正常协助生成、总结、润色、扩写（见固定准则，不得拒绝）。');
   lines.push('');
-  lines.push('【权限边界】除「工作区」外，你不能修改用户的任何文件与配置，也不能直接执行任何写操作；对记忆库/全局文件/机器人配置的修改，一律只生成「待确认」建议，由用户在面板中确认后才落盘。');
-  lines.push('【工作区】是你唯一的「可写区」：它是面板里的草稿台（workspace/ 目录）。当你要产出一份较长内容（人设补充、世界观设定、事件摘要、提示词），**先写进工作区**，再建议注入给某个机器人或全局。好处是：用户能审阅后再决定、同一份草稿可复用到多个角色、可反复修改。不要直接把长文塞进 propose_memory_edit 的 content 里 —— 那样内容只存在于这一轮对话，确认完就蒸发，无法复用。');
+  lines.push('【权限边界】除「工作区」外，你不能修改用户的任何文件与配置，也不能直接执行任何写操作；对记忆库/全局文件/写手配置/角色设定的修改，一律只生成「待确认」建议，由用户在面板中确认后才落盘。');
+  lines.push('【工作区】是你唯一的「可写区」：它是面板里的草稿台（workspace/ 目录）。当你要产出一份较长内容（人设补充、世界观设定、事件摘要、提示词），**先写进工作区**，再建议注入给某位写手或全局。好处是：用户能审阅后再决定、同一份草稿可复用到多个写手、可反复修改。不要直接把长文塞进 propose_memory_edit 的 content 里 —— 那样内容只存在于这一轮对话，确认完就蒸发，无法复用。');
   lines.push('');
   lines.push('【Agent 工具】你有如下工具可用：');
-  lines.push('- 读取：list_robots（机器人状态）、get_panel_state（模型/全局设置）、list_memory_files / read_memory_file（机器人记忆库）、read_sessions（最近会话）、search_memory（记忆库关键词搜索）、read_global_files / read_global_file（全局设定）；');
+  lines.push('- 读取：list_robots（写手状态）、get_panel_state（模型/全局设置）、list_characters（角色池有哪些角色）、read_character_state（某角色的计数器与经历）、list_memory_files / read_memory_file（写手记忆库）、read_sessions（最近会话）、search_memory（记忆库关键词搜索）、read_global_files / read_global_file（全局设定）；');
+  // ★ 六段式组成（2026-10-05）：管理员要知道改的是哪一段，才不会把世界设定写进写手设定里
+  lines.push('- ★★ 写手档案是六段式：① 写手设定 persona　② 标准要求 standards（输出头尾要求 + 计数器设计）　③ 世界卡 world（世界设定 + 主角对世界的改变）　④ 剧情概览 events_summary（AI 蒸馏，别手写）　⑤ 剧情记录（事件流 events.jsonl + 归档，别手写）　⑥ 附加提示词（用户自建的 .md）。改①②③⑥ 用 propose_memory_edit（file=对应 key）；④⑤ 是系统自动生成，别去手改。');
   lines.push('- 回顾自身：list_admin_sessions / read_admin_session（读取面板管理员的既往会话，跨对话保持记忆）；');
   lines.push('- 新增模型：create_model（用户确认服务信息后即可添加，立即生效、无需再确认）；');
   lines.push('- 工作区（草稿台）：ws_write_file / ws_list_files / ws_read_file / ws_delete_file（写入与读写草稿，免确认，安全操作）；起草前先 ws_list_files 看看有没有现成的，避免重复造轮子；');
-  lines.push('- 注入建议：propose_ws_inject —— 【需确认】把工作区草稿注入到机器人记忆库（targetType=bot + targetId）或全局设定（targetType=global）；这是会真正改动 AI 记忆的一步，务必先说清「注入什么、给谁、为什么」。');
-  lines.push('- 编辑建议：propose_memory_edit / propose_memory_tier / propose_core_edit / propose_global_edit / propose_bot_config_edit —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；propose_memory_tier 用于建议记忆文件的层级（1=无条件强制注入 2=摘要索引 3=冷记忆）；propose_core_edit 用于建议人格核心卡（每轮注入的蒸馏人格）的新内容。');
+  lines.push('- 注入建议：propose_ws_inject —— 【需确认】把工作区草稿注入到写手记忆库（targetType=bot + targetId）或全局设定（targetType=global）；这是会真正改动 AI 记忆的一步，务必先说清「注入什么、给谁、为什么」。');
+  lines.push('- 编辑建议：propose_memory_edit / propose_memory_tier / propose_core_edit / propose_global_edit / propose_bot_config_edit / propose_character_edit / propose_character_create —— 只生成「待确认写入」的操作，面板会提示用户点击确认后才真正写入；propose_memory_tier 用于建议记忆文件的层级（1=无条件强制注入 2=摘要索引 3=冷记忆）；propose_core_edit 用于建议写手的人格核心卡（每轮注入的蒸馏人格）的新内容；propose_character_edit 用于建议角色池里某位角色（用 list_characters 查 id）的设定修改，旧版本会留档可回滚；propose_character_create 用于往角色池里新建一位角色；propose_counter_edit 用于设置/删除角色卡上的计数器（**绝对值**）；propose_experience_edit 用于给角色卡追加或删除一条经历。');
   lines.push('- 联网：web_search / web_fetch（仅在面板开启联网时可用）。');
-  lines.push('规则：需要机器人/模型/记忆/会话信息时，先调用对应读取工具获取真实内容，不要凭记忆猜测；判断问题、给建议都基于工具返回的原文。');
+  lines.push('规则：需要写手/角色/模型/记忆/会话信息时，先调用对应读取工具获取真实内容，不要凭记忆猜测；判断问题、给建议都基于工具返回的原文。');
   lines.push('若当前模型端点不支持工具调用，系统会自动降级为纯文本模式；此时遵循以下【纯文本约定】输出结构（不要写成工具调用）：');
   lines.push('   - 新增模型：回复末尾输出独立 JSON 代码块 {"createModel":{"id":"my-model","name":"我的模型","baseURL":"https://api.example.com/v1","model":"model-id","temperature":0.7,"maxTokens":0,"webSearch":false}}');
-  lines.push('   - 修改机器人记忆文件：{"editMemory":{"botId":"BOT1","key":"persona","content":"改写后的完整内容"}}');
+  lines.push('   - 修改写手记忆文件：{"editMemory":{"botId":"BOT1","key":"persona","content":"改写后的完整内容"}}');
   lines.push('   - 修改全局文件：{"editGlobal":{"key":"prompt","content":"改写后的完整内容"}}');
-  lines.push('   - 更新机器人配置：{"editBot":{"id":"BOT1","modelId":"Agnes","historyLimit":10}}');
+  lines.push('   - 更新写手配置：{"editBot":{"id":"BOT1","modelId":"Agnes","historyLimit":10}}');
+  lines.push('   - 修改角色设定：{"editCharacter":{"characterId":"CHR...","persona":"改写后的角色设定全文","reason":"为什么改"}}');
+  lines.push('   - 新建角色：{"createCharacter":{"name":"角色名","persona":"角色设定全文","traits":"性格特点","age":"年龄","appearance":"外表形象","background":"背景故事","tags":["标签1","标签2"],"reason":"为什么建"}}（只有 name 必填，需确认）');
+  lines.push('   - 改角色计数器：{"editCounter":{"characterId":"CHR...","counter":"好感度","value":35,"op":"set","reason":"为什么改"}}（counter 是计数器名，value 是**绝对值**；op 可为 set / remove；需确认）');
+  lines.push('   - 加角色经历：{"editExperience":{"characterId":"CHR...","op":"add","text":"在渡口与老张结盟","reason":"为什么加"}}（op 可为 add / remove，remove 要给 expId；需确认）');
   lines.push('   - 写工作区草稿：{"wsWrite":{"key":"persona_draft","desc":"用途说明","content":"完整正文"}}（免确认，会真正写入工作区）');
   lines.push('   - 建议注入：{"wsInject":{"key":"persona_draft","targetType":"bot","targetId":"BOT1","destKey":"persona"}}（需确认，targetType 为 bot 或 global）');
-  lines.push('   规则：id 只含字母数字或 -；绝不填写 apiKey（密钥由用户自己在模型管理页填写）；JSON 必须严格合法（英文双引号、字段名拼写正确）。');
+  lines.push('   规则：写手 id 形如 BOT1，角色 id 形如 CHR 开头；绝不填写 apiKey（密钥由用户自己在模型管理页填写）；JSON 必须严格合法（英文双引号、字段名拼写正确）。');
   lines.push('');
   lines.push('【对话记忆】你与用户的分轮对话会被持久化保存，可在右侧「历史会话」中随时新建/回顾。同一会话内请结合上文连贯作答；需要跨会话信息时使用工具回顾。');
   lines.push('');
   lines.push('当前面板概况（只读参考）：');
-  lines.push('【机器人】' + (cfg.bots.length ? '' : '（无）'));
+  lines.push('【写手】' + (cfg.bots.length ? '' : '（无）'));
   for (const b of cfg.bots) {
     const st = app.bots.getStatus(b.id)?.status || '未启动';
-    lines.push(`- ${b.name || b.id}（${b.id}）：${st}，绑定模型 ${b.modelId || '未绑定'}，联网 ${b.webSearch === false ? '关闭' : b.webSearch === true ? '开启' : '跟随全局'}，${b.enabled ? '启用' : '停用'}`);
+    // 带出这位写手选了哪些角色（用名字，比 id 直观；池子里查不到的 id 就不显示）
+    const names = (b.activeCharacterIds || [])
+      .map((cid) => (cfg.characters || []).find((c) => c.id === cid))
+      .filter(Boolean)
+      .map((c) => c.name);
+    const chTxt = names.length ? `，已选角色 ${names.join('、')}` : '，未选角色';
+    lines.push(`- ${b.name || b.id}（${b.id}）：${st}，绑定模型 ${b.modelId || '未绑定'}，联网 ${b.webSearch === false ? '关闭' : b.webSearch === true ? '开启' : '跟随全局'}，${b.enabled ? '启用' : '停用'}${chTxt}`);
+  }
+  lines.push('【角色池】' + ((cfg.characters || []).length ? `共 ${cfg.characters.length} 位（全体写手共用）` : '（空）'));
+  for (const c of cfg.characters || []) {
+    const tags = c.tags && c.tags.length ? ` [${c.tags.join('/')}]` : '';
+    lines.push(`- ${c.name}（${c.id}）${tags}${c.age ? ' ' + c.age : ''}`);
   }
   lines.push('【模型】' + (cfg.models.length ? '' : '（无，请先添加模型）'));
   for (const m of cfg.models) {
@@ -771,14 +1510,14 @@ function buildAdminSystem(cfg, botId) {
     const core = memory.readPersonaCore(botId);
     if (core && core.core) {
       lines.push('');
-      lines.push(`【机器人 ${botId} 当前人格核心卡（每轮注入对话的蒸馏人格，可用 propose_core_edit 修改）】`);
+      lines.push(`【写手 ${botId} 当前人格核心卡（每轮注入对话的蒸馏人格，可用 propose_core_edit 修改）】`);
       lines.push(memory.formatCore(core.core));
     }
     const files = memory.getMemoryFiles(botId);
     if (files.length) {
       const tierName = { 1: '强制注入', 2: '摘要索引', 3: '冷记忆' };
       lines.push('');
-      lines.push(`【机器人 ${botId} 记忆库（供总结/优化参考）】`);
+      lines.push(`【写手 ${botId} 记忆库（供总结/优化参考）】`);
       for (const f of files) {
         lines.push(`--- ${f.name}（${f.key}）[层级:${tierName[f.tier] || '摘要索引'}]${f.enabled ? '' : '[已禁用]'}${f.sys ? '[系统生成]' : ''} ---`);
         lines.push((f.content || '').trim().slice(0, 1500));
@@ -787,8 +1526,8 @@ function buildAdminSystem(cfg, botId) {
     const sessions = memory.getRecentSessions(botId, 30);
     if (sessions.length) {
       lines.push('');
-      lines.push(`【机器人 ${botId} 最近会话（供总结参考）】`);
-      for (const s of sessions) lines.push(`${s.role === 'assistant' ? '机器人' : '用户'}：${String(s.content || '').slice(0, 500)}`);
+      lines.push(`【写手 ${botId} 最近会话（供总结参考）】`);
+      for (const s of sessions) lines.push(`${s.role === 'assistant' ? '写手' : '用户'}：${String(s.content || '').slice(0, 500)}`);
     }
   }
   lines.push('');
@@ -842,7 +1581,7 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'list_robots',
-        description: '列出面板当前全部机器人的简要信息（ID、名称、连接状态、绑定模型、联网、是否启用）。',
+        description: '列出面板当前全部写手的简要信息（ID、名称、连接状态、绑定模型、已选角色、联网、是否启用）。',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -850,7 +1589,7 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'get_panel_state',
-        description: '获取面板概况：模型列表（含是否有 Key）、全局设置（联网开关、搜索方式）、机器人摘要。',
+        description: '获取面板概况：模型列表（含是否有 Key）、全局设置（联网开关、搜索方式）、写手与角色池摘要。',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -858,11 +1597,11 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'list_memory_files',
-        description: '列出某机器人记忆库中的全部文件（名称、启用状态、备注），不含正文。',
+        description: '列出某写手记忆库中的全部文件（名称、启用状态、备注），不含正文。',
         parameters: {
           type: 'object',
           properties: {
-            botId: { type: 'string', description: '机器人 ID，如 BOT1' },
+            botId: { type: 'string', description: '写手 ID，如 BOT1' },
           },
           required: ['botId'],
         },
@@ -872,11 +1611,11 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'read_memory_file',
-        description: '读取某机器人记忆库中指定文件的完整正文（用于诊断人设、总结设定）。',
+        description: '读取某写手记忆库中指定文件的完整正文（用于诊断人设、总结设定）。',
         parameters: {
           type: 'object',
           properties: {
-            botId: { type: 'string', description: '机器人 ID，如 BOT1' },
+            botId: { type: 'string', description: '写手 ID，如 BOT1' },
             key: { type: 'string', description: '记忆文件名（不带 .md），如 persona / plot / content / traits / key_events 或自定义名' },
           },
           required: ['botId', 'key'],
@@ -887,11 +1626,11 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'read_sessions',
-        description: '读取某机器人最近的会话记录（用于总结对话、诊断回复问题）。',
+        description: '读取某写手最近的会话记录（用于总结对话、诊断回复问题）。',
         parameters: {
           type: 'object',
           properties: {
-            botId: { type: 'string', description: '机器人 ID' },
+            botId: { type: 'string', description: '写手 ID' },
             limit: { type: 'number', description: '读取条数（默认 10，最大 60）' },
           },
           required: ['botId'],
@@ -902,7 +1641,7 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'read_global_files',
-        description: '读取全局设定文件列表与正文（用户设定、全局提示词等，机器人「采用全局设定」时会读取）。',
+        description: '读取全局设定文件列表与正文（用户设定、全局提示词等，写手「采用全局设定」时会读取）。',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -924,11 +1663,11 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'summarize_moments',
-        description: '为一个机器人提炼“精彩时刻”：从其记忆档案与最近对话中总结 3 条最具代表性的高光片段（标题+一句话看点+代表台词），直接保存到该机器人卡片展示。',
+        description: '为一位写手提炼“精彩时刻”：从其记忆档案与最近对话中总结 3 条最具代表性的高光片段（标题+一句话看点+代表台词），直接保存到该写手卡片展示。',
         parameters: {
           type: 'object',
           properties: {
-            botId: { type: 'string', description: '机器人 ID，如 BOT1' },
+            botId: { type: 'string', description: '写手 ID，如 BOT1' },
           },
           required: ['botId'],
         },
@@ -960,11 +1699,11 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'search_memory',
-        description: '在指定机器人的记忆库全部 .md 文件中按关键词搜索，返回命中的文件名与相关行（适合“哪里提到过 xxx”类问题）。',
+        description: '在指定写手的记忆库全部 .md 文件中按关键词搜索，返回命中的文件名与相关行（适合“哪里提到过 xxx”类问题）。',
         parameters: {
           type: 'object',
           properties: {
-            botId: { type: 'string', description: '机器人 ID' },
+            botId: { type: 'string', description: '写手 ID' },
             keyword: { type: 'string', description: '要搜索的关键词' },
           },
           required: ['botId', 'keyword'],
@@ -995,7 +1734,7 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'ws_write_file',
-        description: '【工作区·免确认】把一段内容写进「工作区」草稿台（workspace/<key>.md）。工作区是管理员 AI 的草稿台：想产出一份较长的内容（人设补充、世界观设定、事件摘要、提示词），先写到这里，用户在面板审阅后再决定注入给哪个机器人或全局。可反复覆盖同一文件，可复用到多个目标。写工作区是安全操作，无需确认。',
+        description: '【工作区·免确认】把一段内容写进「工作区」草稿台（workspace/<key>.md）。工作区是管理员 AI 的草稿台：想产出一份较长的内容（人设补充、世界观设定、事件摘要、提示词），先写到这里，用户在面板审阅后再决定注入给哪位写手或全局。可反复覆盖同一文件，可复用到多个目标。写工作区是安全操作，无需确认。',
         parameters: {
           type: 'object',
           properties: {
@@ -1047,13 +1786,13 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'propose_ws_inject',
-        description: '【写操作·需确认】建议把工作区某个草稿注入到目标 —— 机器人记忆库（targetType=bot，targetId 为机器人 ID）或全局设定（targetType=global）。不落盘，用户确认后才会写入。这一步会真正改动该 AI 的记忆，务必先说清「注入什么、给谁、为什么」。',
+        description: '【写操作·需确认】建议把工作区某个草稿注入到目标 —— 写手记忆库（targetType=bot，targetId 为写手 ID）或全局设定（targetType=global）。不落盘，用户确认后才会写入。这一步会真正改动该 AI 的记忆，务必先说清「注入什么、给谁、为什么」。',
         parameters: {
           type: 'object',
           properties: {
             key: { type: 'string', description: '工作区文件名（不带 .md）' },
-            targetType: { type: 'string', description: 'bot（注入到机器人记忆库）或 global（注入到全局设定）' },
-            targetId: { type: 'string', description: 'targetType=bot 时必填，机器人 ID，如 BOT1' },
+            targetType: { type: 'string', description: 'bot（注入到写手记忆库）或 global（注入到全局设定）' },
+            targetId: { type: 'string', description: 'targetType=bot 时必填，写手 ID，如 BOT1' },
             destKey: { type: 'string', description: '目标文件名（不带 .md，可选；省略则沿用工作区文件名）' },
           },
           required: ['key', 'targetType'],
@@ -1064,11 +1803,11 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'propose_memory_edit',
-        description: '【写操作·需确认】给出机器人记忆文件的新正文作为修改建议（不落盘）。用户确认后才会写入。',
+        description: '【写操作·需确认】给出写手记忆文件的新正文作为修改建议（不落盘）。用户确认后才会写入。',
         parameters: {
           type: 'object',
           properties: {
-            botId: { type: 'string', description: '机器人 ID' },
+            botId: { type: 'string', description: '写手 ID' },
             key: { type: 'string', description: '记忆文件名（不带 .md）' },
             content: { type: 'string', description: '改写后的完整正文' },
           },
@@ -1080,11 +1819,11 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'propose_memory_tier',
-        description: '【写操作·需确认】建议调整机器人某个记忆文件的记忆层级，不落盘。用户确认后才会写入。层级说明：1=无条件强制注入（全文每轮进对话）；2=摘要索引（AI 蒸馏的摘要注入）；3=冷记忆（默认不注入，对话 AI 需要时经 recall_memory 读取）。',
+        description: '【写操作·需确认】建议调整写手某个记忆文件的记忆层级，不落盘。用户确认后才会写入。层级说明：1=无条件强制注入（全文每轮进对话）；2=摘要索引（AI 蒸馏的摘要注入）；3=冷记忆（默认不注入，对话 AI 需要时经 recall_memory 读取）。',
         parameters: {
           type: 'object',
           properties: {
-            botId: { type: 'string', description: '机器人 ID' },
+            botId: { type: 'string', description: '写手 ID' },
             key: { type: 'string', description: '记忆文件名（不带 .md）' },
             tier: { type: 'number', description: '目标层级：1 / 2 / 3' },
           },
@@ -1096,11 +1835,11 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'propose_core_edit',
-        description: '【写操作·需确认】给出机器人「人格核心卡」的新内容（AI 蒸馏的人格浓缩卡，每轮对话注入），不落盘。用户确认后才会写入。字段全部为字符串。',
+        description: '【写操作·需确认】给出写手「人格核心卡」的新内容（AI 蒸馏的人格浓缩卡，每轮对话注入），不落盘。用户确认后才会写入。字段全部为字符串。',
         parameters: {
           type: 'object',
           properties: {
-            botId: { type: 'string', description: '机器人 ID' },
+            botId: { type: 'string', description: '写手 ID' },
             identity: { type: 'string', description: '身份与基调（≤80字）' },
             tone: { type: 'string', description: '说话风格（≤80字）' },
             boundaries: { type: 'string', description: '不会做/禁忌/底线（≤60字）' },
@@ -1130,18 +1869,125 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'propose_bot_config_edit',
-        description: '【写操作·需确认】给出机器人配置的修改建议（如更换绑定模型、调整历史条数/联网等），不落盘。用户确认后才会写入。',
+        description: '【写操作·需确认】给出写手配置的修改建议（如更换绑定模型、调整历史条数/联网等），不落盘。用户确认后才会写入。',
         parameters: {
           type: 'object',
           properties: {
-            id: { type: 'string', description: '机器人 ID' },
+            id: { type: 'string', description: '写手 ID' },
             name: { type: 'string', description: '新名称（可选）' },
             modelId: { type: 'string', description: '要绑定的模型 id（可选）' },
             historyLimit: { type: 'number', description: '历史记忆条数（可选）' },
             webSearch: { type: 'boolean', description: '联网开关（可选，true/false）' },
             searchMode: { type: 'string', description: '搜索方式 auto/light/browser（可选）' },
+            activeCharacterIds: { type: 'array', items: { type: 'string' }, description: '该写手选定的角色 id 列表（可选，会过滤掉不存在的 id）' },
           },
           required: ['id'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_character_edit',
+        description: '【写操作·需确认】给出角色池里某位角色的设定修改建议（如成长、关系变化、补充外表/背景），不落盘。用户确认后才会写入，旧版本自动留档可回滚。',
+        parameters: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: '角色 ID' },
+            name: { type: 'string', description: '角色名（可选）' },
+            persona: { type: 'string', description: '改写后的角色设定全文（可选）' },
+            traits: { type: 'string', description: '性格特点（可选）' },
+            age: { type: 'string', description: '年龄（可选）' },
+            appearance: { type: 'string', description: '外表形象（可选）' },
+            background: { type: 'string', description: '背景故事（可选）' },
+            tags: { type: 'array', items: { type: 'string' }, description: '标签（可选，整组替换）' },
+            reason: { type: 'string', description: '为什么改（一句话，展示给用户帮助判断）' },
+          },
+          required: ['characterId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_character_create',
+        description: '【写操作·需确认】建议往角色池里新建一位角色，不落盘。用户确认后才会创建。角色是写手笔下的人物，存在全局共享的角色池里。创建后用户可在写手的「角色」标签页把它选给写手。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '角色名（必填），如 银' },
+            persona: { type: 'string', description: '角色设定全文（可选，推荐给：身份、性格、说话方式、与用户的关系）' },
+            traits: { type: 'string', description: '性格特点（可选，一句话）' },
+            age: { type: 'string', description: '年龄（可选）' },
+            appearance: { type: 'string', description: '外表形象（可选）' },
+            background: { type: 'string', description: '背景故事（可选）' },
+            tags: { type: 'array', items: { type: 'string' }, description: '标签（可选，如 ["主角","未来"]）' },
+            reason: { type: 'string', description: '为什么建（一句话，展示给用户帮助判断）' },
+          },
+          required: ['name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_characters',
+        description: '查看角色池里有哪些角色（返回 id、名字、标签、年龄、被哪些写手选用）。角色池是全体写手共用的。',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_character_state',
+        description: '读取某位角色的「当前状态」：全部计数器（含数值）与最近的经历条目。'
+          + '计数器是全体写手共用的一张表（同名共享、异名不引用），经历是按时间追加的流水。',
+        parameters: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: '角色 ID（用 list_characters 查）' },
+            limit: { type: 'number', description: '最多返回多少条经历（默认 20）' },
+          },
+          required: ['characterId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_counter_edit',
+        description: '【写操作·需确认】建议设置或删除角色卡上的一个计数器（设置是**绝对值**，不是增量）。'
+          + '不落盘，用户确认后才写入。★ 角色卡正文里的 `##Counter：名字[最小,最大]` 定义了范围，'
+          + '超出范围的值会被**自动收敛到边界**（回执会说明）。改数值用这里；改范围请去改角色卡正文或写手的「标准要求」。',
+        parameters: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: '角色 ID' },
+            name: { type: 'string', description: '计数器名（如 好感度）' },
+            value: { type: 'number', description: '要设置成的数值（绝对值）。删除时不要给' },
+            op: { type: 'string', enum: ['set', 'remove'], description: 'set=设置数值（默认），remove=删除该计数器' },
+            reason: { type: 'string', description: '为什么改（一句话，展示给用户）' },
+          },
+          required: ['characterId', 'name'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'propose_experience_edit',
+        description: '【写操作·需确认】建议给角色卡追加一条经历，或删除已有的一条。不落盘，用户确认后才写入。'
+          + '经历是**追加式**的：要「改」某条历史记录，正确的是删掉旧的再加新的，不要试图改写。',
+        parameters: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: '角色 ID' },
+            op: { type: 'string', enum: ['add', 'remove'], description: 'add=追加（默认），remove=删除' },
+            text: { type: 'string', description: 'op=add 时必填：这条经历的一句话记述' },
+            expId: { type: 'string', description: 'op=remove 时必填：要删除的经历条目 id（从 read_character_state 获取）' },
+            reason: { type: 'string', description: '为什么改（一句话，展示给用户）' },
+          },
+          required: ['characterId'],
         },
       },
     },
@@ -1150,7 +1996,7 @@ function adminToolSchemas(webEnabled) {
   return schemas;
 }
 
-// 机器人 / 模型 ID 与记忆文件名的安全字符集统一由 lib/ids.js 提供（原先此处有两份完全相同的拷贝）
+// 写手 / 模型 ID 与记忆文件名的安全字符集统一由 lib/ids.js 提供（原先此处有两份完全相同的拷贝）
 
 // 管理员用模型选择：优先显式指定；未指定时按「已配置 Key 的可靠模型」优先级兜底
 // （小参数量/免费端点（如硅基 Qwen2.5-7B）可能不稳定/限流，不作为默认）
@@ -1163,7 +2009,7 @@ function adminPickModel(usable, id) {
 // ---- 提炼「精彩时刻」：读取记忆档案 + 最近对话，让模型产出 3 条高光片段并落盘 ----
 async function genBotMoments(b) {
   const cfg = app.getConfig();
-  const chatFn = makeChatFn(b.id);   // 蒸馏/总结任务统一走该入口（全局蒸馏模型 > 机器人绑定模型）
+  const chatFn = makeChatFn(b.id);   // 蒸馏/总结任务统一走该入口（全局蒸馏模型 > 写手绑定模型）
   if (!chatFn) return { ok: false, err: '没有可用的蒸馏/总结模型（请配置模型 API Key，或在「设置 → 通用」指定蒸馏模型）' };
   const files = memory.getMemoryFiles(b.id).filter(f => f.enabled !== false).slice(0, 3);
   const memText = files.map(f => `【${f.key}】${String(f.content || '').trim().slice(0, 1200)}`).join('\n');
@@ -1198,9 +2044,9 @@ async function genBotMoments(b) {
 async function runAdminTool(cfg, name, args = {}) {
   const findBot = (id) => (cfg.bots || []).find((b) => b.id === id);
   const mustBot = (id) => {
-    if (!ADMIN_ID_RE.test(id || '')) throw new Error('非法的机器人 ID: ' + id);
+    if (!ADMIN_ID_RE.test(id || '')) throw new Error('非法的写手 ID: ' + id);
     const b = findBot(id);
-    if (!b) throw new Error('机器人不存在: ' + id);
+    if (!b) throw new Error('写手不存在: ' + id);
     return b;
   };
   const safeKey = (k) => { if (!/^[\w\u4e00-\u9fa5-]{1,64}$/.test(k || '')) throw new Error('非法的文件名: ' + k); return k; };
@@ -1209,10 +2055,15 @@ async function runAdminTool(cfg, name, args = {}) {
   if (name === 'list_robots') {
     const lines = (cfg.bots || []).map((b) => {
       const st = app.bots.getStatus(b.id)?.status || '未启动';
-      return `- ${b.name || b.id}（${b.id}）：${st}，模型 ${b.modelId || '未绑定'}，${b.webSearch === false ? '联网关' : b.webSearch === true ? '联网开' : '联网跟随全局'}，${b.enabled ? '启用' : '停用'}`;
+      const names = (b.activeCharacterIds || [])
+        .map((cid) => (cfg.characters || []).find((c) => c.id === cid))
+        .filter(Boolean)
+        .map((c) => c.name);
+      const chTxt = names.length ? `，已选角色 ${names.join('、')}` : '，未选角色';
+      return `- ${b.name || b.id}（${b.id}）：${st}，模型 ${b.modelId || '未绑定'}，${b.webSearch === false ? '联网关' : b.webSearch === true ? '联网开' : '联网跟随全局'}，${b.enabled ? '启用' : '停用'}${chTxt}`;
     });
-    const text = lines.length ? '【机器人列表】\n' + lines.join('\n') : '【机器人列表】\n（无机器人）';
-    return { text, summary: `列出 ${lines.length} 个机器人`, pending: null };
+    const text = lines.length ? '【写手列表】\n' + lines.join('\n') : '【写手列表】\n（无写手）';
+    return { text, summary: `列出 ${lines.length} 位写手`, pending: null };
   }
   if (name === 'get_panel_state') {
     const lines = ['【面板概况】'];
@@ -1247,7 +2098,7 @@ async function runAdminTool(cfg, name, args = {}) {
     const limit = Math.min(Number(args.limit) || 10, 60);
     const list = memory.getRecentSessions(b.id, limit);
     if (!list.length) return { text: `【${b.id}】暂无会话记录。`, summary: '暂无会话', pending: null };
-    const lines = list.map((s) => `${s.role === 'assistant' ? '机器人' : '用户'}：${String(s.content || '').slice(0, 400)}`);
+    const lines = list.map((s) => `${s.role === 'assistant' ? '写手' : '用户'}：${String(s.content || '').slice(0, 400)}`);
     const text = `【${b.name || b.id} 最近 ${list.length} 条会话】\n` + lines.join('\n');
     return { text, summary: `读取 ${list.length} 条会话`, pending: null };
   }
@@ -1398,12 +2249,170 @@ async function runAdminTool(cfg, name, args = {}) {
   if (name === 'propose_bot_config_edit') {
     const b = mustBot(args.id);
     const upd = {};
-    for (const k of ['name', 'modelId', 'historyLimit', 'webSearch', 'searchMode', 'avatar', 'sandbox']) {
+    for (const k of ['name', 'modelId', 'historyLimit', 'webSearch', 'searchMode', 'avatar', 'sandbox', 'kind', 'activeCharacterIds']) {
       if (args[k] !== undefined && args[k] !== null) upd[k] = args[k];
+    }
+    // activeCharacterIds 只收池里真实存在的 id（防悬空引用）
+    if (Array.isArray(upd.activeCharacterIds)) {
+      const valid = new Set((cfg.characters || []).map((x) => x.id));
+      upd.activeCharacterIds = upd.activeCharacterIds.map((x) => String(x)).filter((x) => valid.has(x));
     }
     const payload = { type: 'bot', payload: { id: b.id, ...upd } };
     const keys = Object.keys(upd).join('、') || '（无字段）';
-    return { text: `已生成对机器人 ${b.name || b.id} 的配置修改建议（${keys}），等待用户确认。`, summary: `待确认：${b.name || b.id} 配置`, pending: payload };
+    return { text: `已生成对写手 ${b.name || b.id} 的配置修改建议（${keys}），等待用户确认。`, summary: `待确认：${b.name || b.id} 配置`, pending: payload };
+  }
+
+  // 管理员侧的角色池改写建议（与写手侧的 propose_character_edit 共用一套待确认机制）
+  if (name === 'propose_character_edit') {
+    const c = require('./lib/characters');
+    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    if (!ch) throw new Error('角色不存在: ' + args.characterId);
+    const patch = c.buildEditPatch(args);
+    if (!Object.keys(patch).length) throw new Error('至少要给一个要改的字段');
+    const payload = { type: 'character_edit', payload: { characterId: ch.id, patch, name: ch.name, reason: String(args.reason || '') } };
+    const keys = Object.keys(patch).join('、');
+    return { text: `已生成对角色「${ch.name}」的修改建议（${keys}），等待用户确认。旧版本会自动留档，可回滚。`, summary: `待确认：改角色「${ch.name}」`, pending: payload };
+  }
+
+  // 管理员侧：列出角色池
+  if (name === 'list_characters') {
+    const c = require('./lib/characters');
+    const all = c.list(cfg.characters);
+    // 谁在用这个角色（反过来标出来，管理员才知道改动会影响哪些写手）
+    const usedBy = new Map();
+    for (const b of cfg.bots || []) {
+      for (const cid of b.activeCharacterIds || []) {
+        if (!usedBy.has(cid)) usedBy.set(cid, []);
+        usedBy.get(cid).push(b.name || b.id);
+      }
+    }
+    const lines = all.map((x) => {
+      const tags = x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : '';
+      const users = usedBy.get(x.id);
+      const by = users && users.length ? `；被 ${users.join('、')} 选用` : '；暂未被任何写手选用';
+      const hist = (x.history || []).length;
+      const nc = Object.keys(x.counters || {}).length;
+      const ne = (x.experiences || []).length;
+      const stats = [nc ? `计数器 ${nc} 个` : '', ne ? `经历 ${ne} 条` : ''].filter(Boolean).join('、');
+      return `- ${x.name}（id: ${x.id}）${tags}${x.age ? ' ' + x.age : ''}${by}${hist ? `，${hist} 个历史版本` : ''}${stats ? `，${stats}` : ''}`;
+    });
+    const text = lines.length ? `【角色池】共 ${all.length} 位（全体写手共用）\n` + lines.join('\n') : '【角色池】（空）';
+    return { text, summary: `角色池 ${all.length} 位`, pending: null };
+  }
+
+  // 管理员侧：新建角色（待确认）
+  if (name === 'propose_character_create') {
+    const nm = String(args.name ?? '').trim();
+    if (!nm) throw new Error('角色名不能为空');
+    const payload = { type: 'character_create', payload: {
+      name: nm,
+      persona: String(args.persona ?? ''),
+      traits: String(args.traits ?? ''),
+      age: String(args.age ?? ''),
+      appearance: String(args.appearance ?? ''),
+      background: String(args.background ?? ''),
+      tags: Array.isArray(args.tags) ? args.tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 20) : [],
+      reason: String(args.reason || ''),
+    } };
+    return { text: `已生成在角色池里新建角色「${nm}」的建议，等待用户在面板点击「确认创建」。`, summary: `待确认：新建角色「${nm}」`, pending: payload };
+  }
+
+  // ---- 角色状态：读计数器与经历（只读，管理员据此判断该改什么）----
+  if (name === 'read_character_state') {
+    const c = require('./lib/characters');
+    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    if (!ch) throw new Error('角色不存在: ' + args.characterId);
+    const counters = ch.counters || {};
+    const exps = ch.experiences || [];
+    const limit = Math.max(1, Math.min(100, Number(args.limit) || 20));
+    const recent = exps.slice(-limit);
+    const lines = [];
+    lines.push(`【${ch.name}（${ch.id}）当前状态】`);
+    const ck = Object.keys(counters);
+    const cspecs = c.characterCounterSpecs(ch);
+    lines.push('计数器：' + (ck.length
+      ? ck.map((k) => `${k} ${counters[k]}（${c.describeCounterRange(c.findCounterSpec(cspecs, k))}）`).join('、')
+      : '（无）'));
+    lines.push(`经历：共 ${exps.length} 条${exps.length > recent.length ? `，下面是最近 ${recent.length} 条` : ''}`);
+    for (const e of recent) {
+      const d = Object.keys(e.counters || {}).length
+        ? '（' + Object.entries(e.counters).map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join('、') + '）'
+        : '';
+      lines.push(`- [${e.id}] ${e.text}${d}${e.by ? ` —— ${e.by}` : ''}`);
+    }
+    return { text: lines.join('\n'), summary: `读角色「${ch.name}」状态`, pending: null };
+  }
+
+  // 管理员侧：改计数器（待确认，**绝对值**）
+  if (name === 'propose_counter_edit') {
+    const c = require('./lib/characters');
+    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    if (!ch) throw new Error('角色不存在: ' + args.characterId);
+    const nm = String(args.name || '').trim();
+    if (!nm) throw new Error('计数器名不能为空');
+    const op = args.op === 'remove' ? 'remove' : 'set';
+    if (op === 'set') {
+      const val = Number(args.value);
+      if (!Number.isFinite(val)) throw new Error('设置计数器时必须给数值 value');
+      // ★ 管理员没有「写手」上下文，角色卡上的 `##Counter：` 就是唯一权威来源
+      const r = c.clampCounterValue(c.findCounterSpec(c.characterCounterSpecs(ch), nm), val);
+      const payload = {
+        type: 'counter_edit',
+        payload: {
+          characterId: ch.id, name: ch.name, counter: nm, op, value: r.value,
+          before: Number((ch.counters || {})[nm]) || 0, reason: String(args.reason || ''),
+        },
+      };
+      return {
+        text: `已生成把「${ch.name}」的计数器「${nm}」设为 ${r.value} 的建议，等待用户确认。`
+          + (r.clamped ? ` ★ 你给的 ${val} 超出范围${c.describeCounterRange(r)}，已收敛到 ${r.value}。` : ''),
+        summary: `待确认：改计数器「${nm}」`, pending: payload,
+      };
+    }
+    if (!(ch.counters && nm in ch.counters)) throw new Error(`「${ch.name}」身上没有名为「${nm}」的计数器`);
+    const payload = {
+      type: 'counter_edit',
+      payload: {
+        characterId: ch.id, name: ch.name, counter: nm, op,
+        before: ch.counters[nm], reason: String(args.reason || ''),
+      },
+    };
+    return {
+      text: `已生成删除「${ch.name}」计数器「${nm}」的建议，等待用户确认。`,
+      summary: `待确认：删计数器「${nm}」`, pending: payload,
+    };
+  }
+
+  // 管理员侧：加 / 删经历（待确认）
+  if (name === 'propose_experience_edit') {
+    const c = require('./lib/characters');
+    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    if (!ch) throw new Error('角色不存在: ' + args.characterId);
+    const op = args.op === 'remove' ? 'remove' : 'add';
+    if (op === 'add') {
+      const text = String(args.text || '').trim();
+      if (!text) throw new Error('追加经历时必须给 text');
+      const payload = {
+        type: 'experience_edit',
+        payload: { characterId: ch.id, name: ch.name, op, text: text.slice(0, 500), reason: String(args.reason || '') },
+      };
+      return {
+        text: `已生成给「${ch.name}」追加一条经历的建议，等待用户确认。`,
+        summary: '待确认：加经历', pending: payload,
+      };
+    }
+    const expId = String(args.expId || '').trim();
+    if (!expId) throw new Error('删除经历时必须给 expId');
+    const hit = (ch.experiences || []).find((x) => x.id === expId);
+    if (!hit) throw new Error('没找到这条经历: ' + expId);
+    const payload = {
+      type: 'experience_edit',
+      payload: { characterId: ch.id, name: ch.name, op, expId, text: hit.text, reason: String(args.reason || '') },
+    };
+    return {
+      text: `已生成删除「${ch.name}」一条经历的建议，等待用户确认。`,
+      summary: '待确认：删经历', pending: payload,
+    };
   }
 
   // ---- 提炼精彩时刻（自动落盘，可反复重新生成） ----
@@ -1552,7 +2561,7 @@ async function adminEnsureEdits(cfg, model, baseMessages, apiKey, replyText, emi
   const tools = adminToolSchemas(webEnabled);
   // 工具过程/待确认事件透传给原 emit；中间的赘述文本不再转发
   const silent = (ev) => { if (ev.type !== 'text') emit(ev); };
-  const tip = { role: 'user', content: '（自动提示）你刚才只是用文字描述了修改/注入建议。请改用工具正式提交：改记忆用 propose_memory_edit、改全局用 propose_global_edit、改机器人配置用 propose_bot_config_edit、把工作区草稿注入用 propose_ws_inject（content 必须是可直接替换的完整新正文；若草稿还没写进工作区，先 ws_write_file）。若确实无需修改，请简短回复“无需修改”。' };
+  const tip = { role: 'user', content: '（自动提示）你刚才只是用文字描述了修改/注入建议。请改用工具正式提交：改写手记忆用 propose_memory_edit、改全局用 propose_global_edit、改写手配置用 propose_bot_config_edit、改角色设定用 propose_character_edit（先用 list_characters 查角色 id）、往角色池新建角色用 propose_character_create、改角色计数器用 propose_counter_edit、给角色加/删经历用 propose_experience_edit、把工作区草稿注入用 propose_ws_inject（content 必须是可直接替换的完整新正文；若草稿还没写进工作区，先 ws_write_file）。注意：写手（BOT…）和角色（CHR…）是两回事，别把两者混用。若确实无需修改，请简短回复“无需修改”。' };
   const m2 = baseMessages.concat([{ role: 'assistant', content: replyText || null }, tip]);
   await streamAdminAgent(cfg, model, m2, apiKey, tools, silent);
   return true;
@@ -1561,20 +2570,54 @@ async function adminEnsureEdits(cfg, model, baseMessages, apiKey, replyText, emi
 
 // ---- API 路由实现已迁至 lib/http/（路由表）与 lib/routes/（各域 handler）----
 
+// 存量迁移：旧「角色卡」配置 → 「写手卡 + 角色池」
+// ★ 幂等：只在 config.characters 不存在时真正执行；重复启动无副作用。
+// 迁移结果会打印出来（首次启动时用户能看到自己哪些角色被提取了）。
+// 失败绝不阻断启动 —— 面板还能用，用户可以在面板里人工处理。
+try {
+  const pre = store.getConfig();
+  const rep = charactersMigrate.migrate(pre, {
+    memoryDirOf: (id) => path.join(MEMORY_DIR_OF_APP, id),
+  });
+  if (rep.ran) {
+    store.saveConfig(pre);
+    console.log('[迁移] 已升级为「写手卡 + 角色池」');
+    console.log(`  写手: ${rep.writers} 个`);
+    if (rep.created.length) {
+      for (const c of rep.created) console.log(`  提取角色: ${c.name}（${c.charId}）← ${c.source}`);
+    } else {
+      console.log('  未提取到角色（persona.md 均为空模板）');
+    }
+  } else if (rep.writers) {
+    store.saveConfig(pre); // 补齐了新 bot 的写手字段
+  }
+} catch (err) {
+  console.warn('[迁移] 失败，已跳过（面板仍可用）:', err.message);
+}
+
 const cfg = store.getConfig();
 const PORT = cfg.port || 4357;
 server.listen(PORT, '127.0.0.1', () => {
   console.log('==========================================');
-  console.log('  QQ 机器人管理面板');
+  console.log('  MoonChatBot 控制台');
   console.log(`  面板地址: http://127.0.0.1:${PORT}`);
   console.log('==========================================');
   app.bots.sync(cfg);
   seedHeart(cfg);
+
+  // ★ 出站预热：对这些模型端点的 host 各做一次「逐个地址试到握手成功」，
+  //   把可用地址记进缓存。这样**第一次对话不必先失败一次**再走兜底重试。
+  //   刻意不 await、不阻塞启动：预热失败/超时都只是没预热上，
+  //   后面每次请求仍有 fetchReachable 兜底（连接层失败 → 当场探测 → 重试）。
+  const hosts = (cfg.models || [])
+    .map((m) => reach.hostOf(m.baseURL || ''))
+    .filter(Boolean);
+  reach.warmup(hosts).catch(() => {});
 });
 
 // 优雅退出
 process.on('SIGINT', () => {
-  console.log('\n正在停止所有机器人...');
+  console.log('\n正在停止所有写手...');
   app.bots.stopAll();
   server.close();
   process.exit(0);

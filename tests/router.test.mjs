@@ -55,8 +55,65 @@ let router;
 before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
-  test('条目总数稳定在 59（... + 工作区的 6 条：列表/注入/读/写/删/改名）', () => {
-    assert.equal(router.routes.length, 59);
+  // ★ 这个数字随路由增删而变，改动时也要改它 —— 断言的意义是「别有人悄悄加了路由却没想清楚顺序」
+  test('条目总数稳定在 77（... + 角色池 13 条 + 世界卡 5 条：改变列表/追加/删除 + 多世界列表/切换活跃）', () => {
+    assert.equal(router.routes.length, 77);
+  });
+
+  test('★ characters 域守「先具体后通配」：/history /rollback /commit /counters /experiences 必须排在 /:id 之前', () => {
+    // 为什么这条必须钉死：/:id 是通配，如果排在 /:id/history 前面，
+    // 请求 /api/characters/CHR1/history 会先命中 /:id 那条，
+    // 而它的正则末尾有 $ 锚定 → 匹配失败 → 路由继续下探 → 报「接口不存在」。
+    // 症状是「接口明明写了却说不存在」，极难定位。
+    const idx = (pred) => router.routes.findIndex(pred);
+    const iHistory = idx((r) => r.re && r.re.source.includes('/history$'));
+    const iRollback = idx((r) => r.re && r.re.source.includes('/rollback$'));
+    const iCommit = idx((r) => r.re && r.re.source.includes('/commit$'));
+    const iCounters = idx((r) => r.re && r.re.source.includes('/counters$'));
+    const iExps = idx((r) => r.re && r.re.source.includes('/experiences$'));
+    // /:id 通配：以 characters/ 开头、以 $ 结尾、且不含任何具体后缀
+    const iDetail = idx((r) => r.re
+      && r.re.source.includes('characters')
+      && r.re.source.endsWith(')$')
+      && !/\/history|\/rollback|\/commit|\/counters|\/experiences/.test(r.re.source));
+    for (const [name, i] of [['history', iHistory], ['rollback', iRollback], ['commit', iCommit],
+      ['counters', iCounters], ['experiences', iExps]]) {
+      assert.ok(i >= 0, `应存在 /api/characters/:id/${name} 条目`);
+      assert.ok(i < iDetail, `${name} 必须排在 :id 之前（当前 ${i} vs ${iDetail}）`);
+    }
+  });
+
+  test('★ characters 域能正确提取捕获组（不因多包方括号而永不匹配）', () => {
+    // 曾经的坑：ID_CLASS 本身已含方括号，再包一层会拼出 [[\w...]] 永远不匹配。
+    const e = router.matchEntry('GET', '/api/characters/CHRabc123');
+    assert.ok(e && e.re, '应命中角色详情条目');
+    const m = e.re.exec('/api/characters/CHRabc123');
+    assert.equal(m[1], 'CHRabc123');
+
+    const eh = router.matchEntry('GET', '/api/characters/CHRabc123/history');
+    assert.ok(eh && eh.re, '应命中历史档条目');
+    assert.equal(eh.re.exec('/api/characters/CHRabc123/history')[1], 'CHRabc123');
+
+    const er = router.matchEntry('POST', '/api/characters/CHRabc123/rollback');
+    assert.ok(er && er.re, '应命中回滚条目');
+    assert.equal(er.re.exec('/api/characters/CHRabc123/rollback')[1], 'CHRabc123');
+
+    // 经历/计数器（新增）：中文计数器名也要能提取
+    const ec = router.matchEntry('POST', '/api/characters/CHRabc123/commit');
+    assert.ok(ec && ec.re, '应命中沉淀条目');
+    assert.equal(ec.re.exec('/api/characters/CHRabc123/commit')[1], 'CHRabc123');
+    const ecn = router.matchEntry('DELETE', '/api/characters/CHRabc123/counters/好感度');
+    assert.ok(ecn && ecn.re, '应命中计数器删除条目');
+    assert.equal(ecn.re.exec('/api/characters/CHRabc123/counters/好感度')[2], '好感度');
+
+    const eb = router.matchEntry('PUT', '/api/bots/BOT1/characters');
+    assert.ok(eb && eb.re, '应命中写手角色引用条目');
+    assert.equal(eb.re.exec('/api/bots/BOT1/characters')[1], 'BOT1');
+  });
+
+  test('characters 域的非法 id 不命中（路径穿越防护）', () => {
+    assert.equal(router.matchEntry('GET', '/api/characters/a/b'), null);
+    assert.equal(router.matchEntry('GET', '/api/characters/'), null);
   });
 
   test('workspace 域守「先具体后通配」：/inject 与 /:key/rename 必须排在 /:key 之前', () => {
