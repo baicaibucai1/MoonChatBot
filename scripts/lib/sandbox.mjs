@@ -22,9 +22,13 @@ import net from 'node:net';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '..', '..');
+
+// 直接引用 lib 里的常量，避免夹具自己抄一份 id 之后两处漂移
+const { DEFAULT_POOL_ID } = createRequire(import.meta.url)('../../lib/characters.js');
 
 // 只复制运行必需的部分；node_modules 靠 NODE_PATH 指回真身，.env 绝不复制。
 // avatars/ 必须带上：config.json 里机器人的头像指向 /avatars/<file>，
@@ -103,18 +107,35 @@ export async function patchSandboxConfig(dir, opts = {}) {
       }],
     }];
   }
+  // ★ 角色池 fixture 必须用**多池形态**（characterPools），不能再用旧的单一 characters。
+  //   为什么：副本是从真实 config.json 复制来的，而真实项目早就是多池了
+  //   （characterPools 已存在）。若这里仍写 cfg.characters，副本里会**两个字段并存**，
+  //   而 ensurePools 只要看到 characterPools 是数组就跳过「单池→多池」迁移，
+  //   于是：探针角色永远进不了池（/api/pools 里是真实项目那几个人）、
+  //   旧 characters 字段残留 —— 探针会在完全错误的角色上跑，且看起来像功能坏了。
+  //   恒用固定 fixture 是沙箱的本意，所以这里**整段替换** characterPools。
   {
-    cfg.characters = [{
-      id: 'CHRprobe0001', ts: 1700000000000, name: '探针角色',
-      persona: '沙箱探针用的角色设定。', traits: '沉稳', age: '18',
-      appearance: '黑发', background: '来历不明', tags: ['探针'], avatar: '',
-      source: 'probe',
-      // history 也要有元素（含 by/ts + 全字段快照），否则内层字段整批消失
-      history: [{
-        by: 'user', ts: 1700000000000, name: '探针角色', persona: '沙箱探针用的角色设定。',
-        traits: '沉稳', age: '18', appearance: '黑发', background: '来历不明', tags: ['探针'], avatar: '',
+    cfg.characterPools = [{
+      id: DEFAULT_POOL_ID,            // 与真实迁移造出来的默认池同 id，避免两套写法漂移
+      name: '默认池',
+      desc: '',
+      ts: 1700000000000,
+      characters: [{
+        id: 'CHRprobe0001', ts: 1700000000000, name: '探针角色',
+        persona: '沙箱探针用的角色设定。', traits: '沉稳', age: '18',
+        appearance: '黑发', background: '来历不明', tags: ['探针'], avatar: '',
+        source: 'probe',
+        // counters / experiences 是角色卡契约的一部分（写手卡架构新增的字段）。
+        // 缺了它们基线会报「消失 2 项」的假偏差 —— 空对象 / 空数组已足以撑住 shape。
+        counters: {}, experiences: [],
+        // history 也要有元素（含 by/ts + 全字段快照），否则内层字段整批消失
+        history: [{
+          by: 'user', ts: 1700000000000, name: '探针角色', persona: '沙箱探针用的角色设定。',
+          traits: '沉稳', age: '18', appearance: '黑发', background: '来历不明', tags: ['探针'], avatar: '',
+        }],
       }],
     }];
+    delete cfg.characters;            // 旧字段退役，别和池里的角色重复
   }
 
   for (const bot of cfg.bots || []) {
