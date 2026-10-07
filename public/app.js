@@ -447,21 +447,51 @@ function renderSidebar() {
       || (fn.includes('openWorkspace') && view.type === 'workspace');
     btn.classList.toggle('active', active);
   });
-  // 「角色池」是列表区的一个条目（不是底部按钮），单独维护高亮 + 角色数
-  const charsItem = document.getElementById('side-chars');
-  if (charsItem) {
-    charsItem.classList.toggle('active', view.type === 'chars');
-    const meta = document.getElementById('side-chars-meta');
-    const n = (state.characters || []).length;
-    const np = (state.pools || []).length;
-    // 多池之后「N 位角色」不够了 —— 用户是靠「池」来分组并整池绑给写手的，
-    // 所以池数才是这里最该露出来的信息（角色数退到后面）。
-    if (meta) {
-      meta.textContent = np > 1
-        ? `${np} 个池 · ${n} 位角色`
-        : (n ? `${n} 位角色 · 全体写手共用` : '还没有角色');
-    }
+  // 「角色池」列表：每个池一条（多池之后用户是按池认人的，要能从侧栏直接跳过去）
+  renderPoolList();
+}
+
+// 侧栏的池列表：首条是「全部角色」（跨池总览），之后每个池一条。
+// 高亮跟着 _curPoolId 走 —— 和角色池页顶部的切换条是同一份状态，两边不会各说各话。
+function renderPoolList() {
+  const box = document.getElementById('pool-list');
+  if (!box) return;
+  const list = (state && state.pools) || [];
+  const chars = (state && state.characters) || [];
+  const icoLayers = '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 2.4 5.4 8 8.6l5.6-3.2z"/><path d="M2.4 8.2 8 11.4l5.6-3.2"/><path d="M2.4 11 8 14.2 13.6 11"/></svg>';
+  const item = (poolId, name, meta, ico, title) => {
+    // 只有一个池时不显示「全部角色」那条，此时「全部」和「这个池」是同一件事 ——
+    // 所以把 _curPoolId==='' 视作选中了唯一的池，否则侧栏会一条都不高亮。
+    const effCur = _curPoolId || (list.length === 1 ? list[0].id : '');
+    const on = view.type === 'chars' && String(effCur) === String(poolId);
+    return `<div class="side-item${on ? ' active' : ''}" onclick="openPoolFromSide('${esc(poolId)}')" title="${esc(title)}">
+        <span class="side-avatar side-avatar-ic">${ico}</span>
+        <span class="side-main">
+          <span class="side-name">${esc(name)}</span>
+          <span class="side-meta">${esc(meta)}</span>
+        </span>
+      </div>`;
+  };
+  const rows = [];
+  if (list.length > 1) {
+    rows.push(item('', '全部角色', `${chars.length} 位 · 跨所有池`, icoLayers, '所有池里的角色，一起看'));
   }
+  for (const p of list) {
+    rows.push(item(p.id, p.name, `${p.count || 0} 位角色`, icoLayers, `角色池「${p.name}」`));
+  }
+  box.innerHTML = rows.join('') || '<div class="side-empty">还没有角色池</div>';
+}
+
+// 侧栏点池：跳进角色池页并切到那个池（'' = 全部）
+function openPoolFromSide(poolId) {
+  _curPoolId = poolId || '';
+  // 已经在这一页时不要重新 loadPools —— 保持「点一下立刻高亮」的手感
+  if (view.type === 'chars') {
+    renderSidebar();
+    renderCharacterPool();
+    return;
+  }
+  openCharacterPool();
 }
 
 // 新建线程（返回新线程 id；失败返回 null）
@@ -959,6 +989,8 @@ async function loadCharacters() {
     } else if (view.type === 'chars') {
       renderMain();
     }
+    // 侧栏「全部角色」那条的计数读的是 state.characters —— 一起兜住
+    renderPoolList();
   }
   return state.characters || [];
 }
@@ -1297,11 +1329,15 @@ function renderCharacterPool() {
 async function loadPools() {
   const r = await api('/api/pools');
   if (r && r.ok) state.pools = r.pools || [];
+  // 侧栏的池列表读的就是 state.pools —— 在这里统一兜住，
+  // 免得每个改池的入口都记得手动重画侧栏（漏一个就出现「侧栏还是旧的」）。
+  renderPoolList();
   return state.pools || [];
 }
 
 function switchPool(id) {
   _curPoolId = id || '';
+  renderSidebar();       // 侧栏高亮跟着切（和顶部切换条读同一份 _curPoolId）
   renderCharacterPool();
 }
 
@@ -1413,6 +1449,8 @@ function characterSearch(v) {
 async function refreshAfterPoolChange() {
   await loadPools();
   await loadCharacters();
+  // 侧栏也要重画：池的增删改 / 计数都反映在那份列表上
+  renderSidebar();
   if (view.type === 'chars') renderMain();
 }
 
@@ -1430,6 +1468,9 @@ async function poolCreate() {
   if (!r.ok) return toast(r.err || '创建失败', 'err');
   _curPoolId = r.pool ? r.pool.id : _curPoolId;
   toast(`已创建角色池「${nm}」，先往里面放角色吧`, 'ok');
+  // 从侧栏的「新建池」进来时视图还停在别处 —— 顺手跳到刚建的这个池：
+  // 新池必然空着，下一步一定是往里放角色（不然点了个寂寞）。
+  if (view.type !== 'chars') view = { type: 'chars' };
   await refreshAfterPoolChange();
 }
 
@@ -6203,6 +6244,8 @@ function hexA(hex, a) {
 $('#btn-add-bot').addEventListener('click', () => { view = { type: 'bot-form' }; renderMain(); });
 // 侧栏「角色池」分组的新建按钮：直接开新建角色弹窗（不必先跳进角色池页）
 $('#btn-add-char').addEventListener('click', () => openCharacterEditModal());
+// 侧栏「角色池」分组的新建池按钮
+$('#btn-add-pool').addEventListener('click', () => poolCreate());
 
 // ---------- 内联 onclick 依赖的角色工作区函数 ----------
 // 顶层 function 声明在当前（非模块）脚本里本就在全局作用域，内联 onclick 可以直接调到；
@@ -6222,6 +6265,8 @@ Object.assign(window, {
   // 多角色池（顶部池切换条 / 写手绑池；内联 onclick 引用）
   switchPool, poolCreate, poolRename, poolDelete, poolMoveChar,
   toggleWriterPool, loadPools, refreshBotPool,
+  // 侧栏池列表（内联 onclick 引用）
+  openPoolFromSide,
   // 设置页「角色卡」模板（内联 onclick 引用）
   saveCharTemplate, resetCharTemplate,
   // 对话页右侧胶囊（内联 onclick 引用）

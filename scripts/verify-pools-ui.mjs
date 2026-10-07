@@ -67,6 +67,10 @@ async function main() {
 
     const st0 = await getState();
     const botId = (st0.bots || [])[0].id;
+    // 取文本的「可能不存在」版本：断言失败时要报 ✗，不能因为选择器等不到而直接抛异常
+    const txtOf = async (sel) => { const el = await page.$(sel); return el ? (await el.textContent()) : ''; };
+    const activePoolChip = () => txtOf('.pool-chip.active');
+    const activeSideItem = () => txtOf('#pool-list .side-item.active');
 
     // ───────────────────── ① 池切换条 ─────────────────────
     console.log('[1] 角色栏顶部池切换条');
@@ -83,6 +87,24 @@ async function main() {
     check('「全部」视图下能看到探针角色', /探针角色/.test(await page.textContent('#main')));
     await page.screenshot({ path: path.join(SHOT, 'verify-pools-1-bar.png') });
 
+    // ───────────────────── ①b 侧栏池列表 ─────────────────────
+    // 侧栏原本只有一条写死的「角色池」，多池之后必须按池列出来。
+    console.log('\n[1b] 侧栏池列表');
+    check('侧栏有 #pool-list 容器', !!(await page.$('#pool-list')));
+    const sideRows1 = await page.$$('#pool-list .side-item');
+    check('1 个池时只列 1 条（不显示冗余的「全部角色」）', sideRows1.length === 1, `实际 ${sideRows1.length}`);
+    let sideTxt = await page.textContent('#pool-list');
+    check('侧栏列出「默认池」', /默认池/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
+    check('侧栏条目带角色数', /1 位角色/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
+    check('侧栏有「新建池」按钮 #btn-add-pool', !!(await page.$('#btn-add-pool')));
+    check('侧栏仍有「新建角色」按钮 #btn-add-char', !!(await page.$('#btn-add-char')));
+    // 侧栏的新建池按钮要真的接上（打开后取消，不留副作用）
+    await page.click('#btn-add-pool');
+    await page.waitForTimeout(500);
+    check('★ 侧栏「新建池」按钮真的弹出输入框', !!(await page.$('#ui-prompt')));
+    await page.click('#pf-no');
+    await page.waitForTimeout(400);
+
     // ───────────────────── ② 新建池（真弹窗）─────────────────────
     console.log('\n[2] 新建池（真弹窗输入）');
     await page.click('.pool-chip.pool-add');
@@ -98,6 +120,28 @@ async function main() {
     check('后端真的多了一个池（共 2 个）', pools2.length === 2, `实际 ${pools2.length}`);
     const CAMP = (pools2.find((p) => p.name === '校园组') || {}).id;
     check('新池是空的（count 0）', pools2.find((p) => p.name === '校园组').count === 0);
+    const sideRows2 = await page.$$('#pool-list .side-item');
+    check('★ 多于 1 个池后侧栏变 3 条（全部角色 + 默认池 + 校园组）', sideRows2.length === 3, `实际 ${sideRows2.length}`);
+    sideTxt = await page.textContent('#pool-list');
+    check('侧栏出现「全部角色」总览', /全部角色/.test(sideTxt));
+    check('★ 侧栏也跟着高亮当前池（校园组）', /校园组/.test(await activeSideItem()),
+      (await activeSideItem()).trim());
+    // ★ 点侧栏跳池：顶部切换条必须同步 —— 两处读的是同一份 _curPoolId，不能各说各话
+    await page.locator('#pool-list .side-item', { hasText: '默认池' }).first().click();
+    await page.waitForTimeout(700);
+    check('★ 点侧栏「默认池」→ 顶部切换条同步高亮', /默认池/.test(await activePoolChip()),
+      (await activePoolChip()).trim());
+    check('★ 侧栏该条也高亮', /默认池/.test(await activeSideItem()));
+    await page.locator('#pool-list .side-item', { hasText: '全部角色' }).first().click();
+    await page.waitForTimeout(700);
+    check('★ 点侧栏「全部角色」→ 切回跨池总览',
+      /全部/.test(await activePoolChip())
+      && /探针角色/.test(await page.textContent('#main')));
+    // 切回校园组，保持后续用例的前置状态
+    await page.locator('#pool-list .side-item', { hasText: '校园组' }).first().click();
+    await page.waitForTimeout(700);
+    check('★ 切回校园组（后续用例的前置状态）', /校园组/.test(await activePoolChip()));
+    await page.screenshot({ path: path.join(SHOT, 'verify-pools-1b-sidebar.png') });
 
     // ───────────────────── ③ 空状态 + 在池内新建角色 ─────────────────────
     console.log('\n[3] 空池状态 + 「新建角色」落在当前池');

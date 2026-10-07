@@ -211,6 +211,9 @@ body::after {
   padding: 0 4px 8px;
   flex-shrink: 0;
 }
+/* 分组标题右侧的按钮组（「角色池」有两个：新建角色 / 新建池）。
+   不包一层的话 space-between 会把三个子元素摊开，标题和按钮各飞一边。 */
+.side-label-acts { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 
 .side-list {
   flex: 1; min-height: 0;
