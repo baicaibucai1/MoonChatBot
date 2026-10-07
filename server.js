@@ -158,7 +158,7 @@ async function runSelfCheck({ botId, bot, cfg, reply, chatFn, onPending, onSync 
   const C = require('./lib/characters');
   const SC = require('./lib/selfcheck');
 
-  const all = C.list(cfg.characters);
+  const all = C.allOf(cfg);
   const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
   const active = activeIds.map((id) => C.find(all, id)).filter(Boolean);
   const declaredSpecs = declaredCounterSpecsOf(botId);
@@ -284,7 +284,7 @@ function clampedText(clamped) {
 
 function buildWriterBlock(cfg, bot) {
   const c = require('./lib/characters');
-  const all = Array.isArray(cfg.characters) ? cfg.characters : [];
+  const all = c.allOf(cfg);
   const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
   const active = activeIds.map((id) => c.find(all, id)).filter(Boolean);
   // ★ 带范围的规格（角色卡 `##Counter：名字[范围]` 优先，其次写手「标准要求」里的声明）
@@ -406,7 +406,7 @@ function buildWriterBlock(cfg, bot) {
 // 供写手的 list_characters 工具使用：返回角色池名单 + 当前写手选定了哪些
 function listCharactersFor(bot, cfg) {
   const c = require('./lib/characters');
-  const all = c.list(cfg.characters);
+  const all = c.allOf(cfg);
   if (!all.length) return '角色池是空的。你可以在剧情中创造人物，并建议用户把他们加进池子。';
   const active = new Set(Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : []);
   const lines = all.map((x) => `- ${x.name}（id: ${x.id}）${active.has(x.id) ? ' ← 你当前选定' : ''}`
@@ -778,7 +778,7 @@ async function chatWithBot(botId, content, opts = {}) {
         // ★ 只生成待确认建议，不落盘。落盘在用户点「确认应用」后走
         //   PUT /api/characters/:id（那条路由内部调 characters.update，自动留版本档）。
         const C = require('./lib/characters');
-        const all = C.list(cfg.characters);
+        const all = C.allOf(cfg);
         const ch = C.find(all, String(args.characterId || ''));
         if (!ch) {
           content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`
@@ -821,7 +821,7 @@ async function chatWithBot(botId, content, opts = {}) {
         if (!nm) {
           content = '角色名不能为空。请给出 name 后重试。';
         } else {
-          const all = C.list(cfg.characters);
+          const all = C.allOf(cfg);
           const dup = all.find((x) => String(x.name || '').trim() === nm);
           const reason = String(args.reason || '').trim();
           if (opts.onPending) {
@@ -878,7 +878,7 @@ async function chatWithBot(botId, content, opts = {}) {
         //   ★ 计数器名必须先过 filterDeclared —— 写手只能改自己声明过的名字，
         //     否则它会把别的写手的私有计数器一起改了（「异名不引用」）。
         const C = require('./lib/characters');
-        const all = C.list(cfg.characters);
+        const all = C.allOf(cfg);
         const ch = C.find(all, String(args.characterId || ''));
         if (!ch) {
           content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`;
@@ -1489,16 +1489,23 @@ function buildAdminSystem(cfg, botId) {
     const st = app.bots.getStatus(b.id)?.status || '未启动';
     // 带出这位写手选了哪些角色（用名字，比 id 直观；池子里查不到的 id 就不显示）
     const names = (b.activeCharacterIds || [])
-      .map((cid) => (cfg.characters || []).find((c) => c.id === cid))
+      .map((cid) => (require('./lib/characters').allOf(cfg)).find((c) => c.id === cid))
       .filter(Boolean)
       .map((c) => c.name);
     const chTxt = names.length ? `，已选角色 ${names.join('、')}` : '，未选角色';
     lines.push(`- ${b.name || b.id}（${b.id}）：${st}，绑定模型 ${b.modelId || '未绑定'}，联网 ${b.webSearch === false ? '关闭' : b.webSearch === true ? '开启' : '跟随全局'}，${b.enabled ? '启用' : '停用'}${chTxt}`);
   }
-  lines.push('【角色池】' + ((cfg.characters || []).length ? `共 ${cfg.characters.length} 位（全体写手共用）` : '（空）'));
-  for (const c of cfg.characters || []) {
-    const tags = c.tags && c.tags.length ? ` [${c.tags.join('/')}]` : '';
-    lines.push(`- ${c.name}（${c.id}）${tags}${c.age ? ' ' + c.age : ''}`);
+  // ★ 多池：按池分组列出，管理员据此知道有哪些池、各装了谁
+  const CH = require('./lib/characters');
+  const pools = CH.listPools(cfg);
+  const totalChars = CH.allOf(cfg).length;
+  lines.push('【角色池】' + (pools.length ? `共 ${pools.length} 个池 / ${totalChars} 位` : '（空）'));
+  for (const p of pools) {
+    lines.push(`- 池「${p.name}」：${(p.characters || []).length} 位`);
+    for (const c of p.characters || []) {
+      const tags = c.tags && c.tags.length ? ` [${c.tags.join('/')}]` : '';
+      lines.push(`  · ${c.name}（${c.id}）${tags}${c.age ? ' ' + c.age : ''}`);
+    }
   }
   lines.push('【模型】' + (cfg.models.length ? '' : '（无，请先添加模型）'));
   for (const m of cfg.models) {
@@ -2056,7 +2063,7 @@ async function runAdminTool(cfg, name, args = {}) {
     const lines = (cfg.bots || []).map((b) => {
       const st = app.bots.getStatus(b.id)?.status || '未启动';
       const names = (b.activeCharacterIds || [])
-        .map((cid) => (cfg.characters || []).find((c) => c.id === cid))
+        .map((cid) => (require('./lib/characters').allOf(cfg)).find((c) => c.id === cid))
         .filter(Boolean)
         .map((c) => c.name);
       const chTxt = names.length ? `，已选角色 ${names.join('、')}` : '，未选角色';
@@ -2254,7 +2261,7 @@ async function runAdminTool(cfg, name, args = {}) {
     }
     // activeCharacterIds 只收池里真实存在的 id（防悬空引用）
     if (Array.isArray(upd.activeCharacterIds)) {
-      const valid = new Set((cfg.characters || []).map((x) => x.id));
+      const valid = new Set((require('./lib/characters').allOf(cfg)).map((x) => x.id));
       upd.activeCharacterIds = upd.activeCharacterIds.map((x) => String(x)).filter((x) => valid.has(x));
     }
     const payload = { type: 'bot', payload: { id: b.id, ...upd } };
@@ -2265,7 +2272,7 @@ async function runAdminTool(cfg, name, args = {}) {
   // 管理员侧的角色池改写建议（与写手侧的 propose_character_edit 共用一套待确认机制）
   if (name === 'propose_character_edit') {
     const c = require('./lib/characters');
-    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    const ch = c.findAny(cfg, String(args.characterId || ''));
     if (!ch) throw new Error('角色不存在: ' + args.characterId);
     const patch = c.buildEditPatch(args);
     if (!Object.keys(patch).length) throw new Error('至少要给一个要改的字段');
@@ -2277,7 +2284,7 @@ async function runAdminTool(cfg, name, args = {}) {
   // 管理员侧：列出角色池
   if (name === 'list_characters') {
     const c = require('./lib/characters');
-    const all = c.list(cfg.characters);
+    const all = c.allOf(cfg);
     // 谁在用这个角色（反过来标出来，管理员才知道改动会影响哪些写手）
     const usedBy = new Map();
     for (const b of cfg.bots || []) {
@@ -2320,7 +2327,7 @@ async function runAdminTool(cfg, name, args = {}) {
   // ---- 角色状态：读计数器与经历（只读，管理员据此判断该改什么）----
   if (name === 'read_character_state') {
     const c = require('./lib/characters');
-    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    const ch = c.findAny(cfg, String(args.characterId || ''));
     if (!ch) throw new Error('角色不存在: ' + args.characterId);
     const counters = ch.counters || {};
     const exps = ch.experiences || [];
@@ -2346,7 +2353,7 @@ async function runAdminTool(cfg, name, args = {}) {
   // 管理员侧：改计数器（待确认，**绝对值**）
   if (name === 'propose_counter_edit') {
     const c = require('./lib/characters');
-    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    const ch = c.findAny(cfg, String(args.characterId || ''));
     if (!ch) throw new Error('角色不存在: ' + args.characterId);
     const nm = String(args.name || '').trim();
     if (!nm) throw new Error('计数器名不能为空');
@@ -2386,7 +2393,7 @@ async function runAdminTool(cfg, name, args = {}) {
   // 管理员侧：加 / 删经历（待确认）
   if (name === 'propose_experience_edit') {
     const c = require('./lib/characters');
-    const ch = c.find(cfg.characters, String(args.characterId || ''));
+    const ch = c.findAny(cfg, String(args.characterId || ''));
     if (!ch) throw new Error('角色不存在: ' + args.characterId);
     const op = args.op === 'remove' ? 'remove' : 'add';
     if (op === 'add') {
@@ -2571,8 +2578,13 @@ async function adminEnsureEdits(cfg, model, baseMessages, apiKey, replyText, emi
 // ---- API 路由实现已迁至 lib/http/（路由表）与 lib/routes/（各域 handler）----
 
 // 存量迁移：旧「角色卡」配置 → 「写手卡 + 角色池」
-// ★ 幂等：只在 config.characters 不存在时真正执行；重复启动无副作用。
+// ★ 幂等：只在 config 还没有角色池标记时真正执行；重复启动无副作用。
+//   顺带把「单池 characters」升级成多池 characterPools（角色落进「默认池」）。
 // 迁移结果会打印出来（首次启动时用户能看到自己哪些角色被提取了）。
+// ★★ 只要 migrate() 报告 persist（配置被改过），就必须落盘 —— 这不是「顺手保存」：
+//   store.getConfig() 每次都重新读盘（lib/store.js），不落盘的话 ensurePools 造出来的
+//   角色池只会活在这一次调用的内存里，下一次读盘又是一份没有池的新对象，
+//   于是池 id 每读一次换一个、绑池的写手立刻指向不存在的池。
 // 失败绝不阻断启动 —— 面板还能用，用户可以在面板里人工处理。
 try {
   const pre = store.getConfig();
@@ -2588,6 +2600,11 @@ try {
     } else {
       console.log('  未提取到角色（persona.md 均为空模板）');
     }
+  } else if (rep.persist) {
+    // 已迁过写手卡，但这次补了角色池结构（或补齐了 poolIds 之类的字段）→ 落盘
+    store.saveConfig(pre);
+    console.log('[迁移] 配置已补齐（角色池结构 / 写手字段）');
+    if (rep.details.length) for (const d of rep.details) console.log(`  ${d}`);
   } else if (rep.writers) {
     store.saveConfig(pre); // 补齐了新 bot 的写手字段
   }

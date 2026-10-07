@@ -91,6 +91,10 @@ export async function patchSandboxConfig(dir, opts = {}) {
       useGlobal: false, webSearch: false, searchMode: 'auto',
       historyLimit: 10, intents: ['probe-intent'],
       activeCharacterIds: ['CHRprobe0001'],
+      // 绑定的角色池（多池架构）：形状上必须有这个字段，否则基线会报「消失 N 项」
+      poolIds: [],
+      // 「上一轮由池带来」的 id 账本：解绑时靠它分清哪些是池给的、哪些是手点的
+      poolCharacterIds: [],
       moments: [{ title: '探针时刻', quote: '一句台词', summary: '一段摘要' }],
       heartbeats: [{
         enabled: false, mode: 'random', tone: 'natural', prompt: '探针心跳',

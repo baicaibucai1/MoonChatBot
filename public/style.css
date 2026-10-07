@@ -2555,6 +2555,92 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .ch-chip:hover { border-color: var(--primary); color: var(--primary); }
 .ch-chip .ic { width: 12px; height: 12px; }
 
+/* ---- 多角色池：顶部池切换条 ---- */
+.pool-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin: 0 0 10px;
+}
+.pool-bar .spacer { flex: 1 1 auto; }
+.pool-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 11px; font-family: var(--font); font-size: 12px; line-height: 1.6;
+  color: var(--on-surface-variant); background: var(--surface-2);
+  border: 1px solid var(--outline); border-radius: 999px; cursor: pointer;
+}
+.pool-chip:hover { border-color: var(--primary); color: var(--primary); }
+/* 当前池：实心主色，一眼看出「我正在看哪个池」 */
+.pool-chip.active {
+  color: var(--on-primary-container); background: var(--primary-container);
+  border-color: var(--primary); font-weight: 600;
+}
+.pool-n {
+  font-size: 10.5px; font-variant-numeric: tabular-nums;
+  padding: 0 5px; border-radius: 999px; line-height: 1.6;
+  color: var(--on-surface-faint); background: var(--surface-3, var(--surface));
+}
+.pool-chip.active .pool-n { color: var(--on-primary-container); background: rgba(128, 128, 128, .22); }
+.pool-chip.pool-add { border-style: dashed; color: var(--on-surface-faint); }
+.pool-chip.pool-add:hover { color: var(--primary); border-color: var(--primary); }
+.pool-chip .ic { width: 12px; height: 12px; }
+
+/* 行尾「换池」下拉：一位角色只属于一个池 */
+.pool-sel {
+  max-width: 110px; padding: 3px 6px; font-family: var(--font); font-size: 11px;
+  color: var(--on-surface-variant); background: var(--surface-2);
+  border: 1px solid var(--outline); border-radius: var(--r-xs); cursor: pointer;
+}
+.pool-sel:hover { border-color: var(--primary); }
+
+/* 「池 · 某某池」来源标记 */
+.ch-pool-src {
+  flex: 0 0 auto; padding: 0 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 500; line-height: 1.7; letter-spacing: .2px;
+  color: var(--primary); background: var(--primary-container);
+  border: 1px solid var(--primary);
+}
+
+/* ---- 写手 → 角色池绑定条 ---- */
+.pool-bind {
+  margin: 0 0 12px; padding: 10px 12px;
+  background: var(--surface-2); border: 1px solid var(--outline); border-radius: var(--r-sm);
+}
+.pool-bind-head {
+  display: flex; align-items: center; margin: 0 0 8px;
+  font-size: 12px; font-weight: 600; color: var(--on-surface-variant);
+}
+.pool-bind-head .ic { width: 13px; height: 13px; margin-right: 5px; }
+.pool-bind-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.pool-bind-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; font-family: var(--font); font-size: 12px;
+  color: var(--on-surface-variant); background: var(--surface);
+  border: 1px dashed var(--outline); border-radius: 999px; cursor: pointer;
+}
+.pool-bind-chip:hover { border-color: var(--primary); color: var(--primary); }
+.pool-bind-chip.on {
+  color: var(--on-primary-container); background: var(--primary-container);
+  border-style: solid; border-color: var(--primary); font-weight: 600;
+}
+.pool-bind-chip .ic { width: 12px; height: 12px; }
+.pool-bind-note { margin-top: 8px; font-size: 11px; line-height: 1.7; color: var(--on-surface-faint); }
+
+/* 池给的勾选项：锁死（会被同步回来，取消勾选没意义） */
+.chr-pick.locked { opacity: .72; cursor: default; }
+.chr-pick.locked:hover { border-color: var(--outline); }
+
+/* 删池时「角色怎么办」的两个选项 */
+.pool-del-opt {
+  display: flex; align-items: flex-start; gap: 9px; cursor: pointer;
+  margin-top: 9px; padding: 10px 11px;
+  background: var(--surface-2); border: 1px solid var(--outline); border-radius: var(--r-sm);
+}
+.pool-del-opt:hover { border-color: var(--primary); }
+.pool-del-opt input { margin-top: 3px; flex: 0 0 auto; }
+.pool-del-opt span { display: block; font-size: 12.5px; line-height: 1.6; color: var(--on-surface); }
+.pool-del-opt .pool-del-h { font-size: 11.5px; color: var(--on-surface-faint); }
+.pool-del-opt.danger:hover { border-color: var(--error, #c62828); }
+.pool-del-opt.danger b { color: var(--error, #c62828); }
+
 /* 角色编辑弹窗 */
 .chr-edit-modal { width: min(640px, calc(100vw - 32px)); }
 .chr-edit-modal .modal-body { max-height: 70vh; overflow-y: auto; }

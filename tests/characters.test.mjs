@@ -282,8 +282,41 @@ test('★ 迁移是幂等的：characters 已存在时不再提取', () => {
   const cfg = { bots: [{ id: 'BOT1', name: '归云' }], characters: [{ id: 'CHR1', name: '已有' }] };
   const r = migrate.migrate(cfg, { memoryDirOf: () => '/nonexistent' });
   assert.equal(r.ran, false);
-  assert.equal(cfg.characters.length, 1);
-  assert.equal(cfg.characters[0].name, '已有');
+  assert.equal(characters.allOf(cfg).length, 1);
+  assert.equal(characters.allOf(cfg)[0].name, '已有');
+});
+
+// ★★ 回归：走「已经迁过写手卡」这条早退分支时，也必须报告 persist。
+//   真实事故：这条分支原先只改内存、不回话给调用方，server.js 于是不落盘；
+//   而 store.getConfig() 每次都重新读盘 → 这次内存里造的「默认池」下一读就没了，
+//   池 id 每请求一换，绑池立刻失效。persist=false 就是这个 bug 的开关。
+test('★ 已迁过写手卡时：单池→多池仍要报告 persist（否则不落盘、池 id 每次都飘）', () => {
+  const cfg = {
+    bots: [{ id: 'BOT1', name: '归云', kind: 'writer', activeCharacterIds: [], poolIds: [] }],
+    characters: [{ id: 'CHR1', name: '银' }],
+  };
+  const r = migrate.migrate(cfg, { memoryDirOf: () => '/nonexistent' });
+  assert.equal(r.ran, false, '不是首次迁移');
+  assert.equal(r.persist, true, '★ 改了配置就必须让调用方落盘');
+  assert.equal(Array.isArray(cfg.characterPools), true);
+  assert.equal('characters' in cfg, false);
+});
+
+test('★ 配置已经齐备时 persist=false（别每次启动都白写一遍盘）', () => {
+  const cfg = {
+    bots: [{ id: 'BOT1', name: '归云', kind: 'writer', activeCharacterIds: ['CHR1'], poolIds: [], poolCharacterIds: [] }],
+    characterPools: [{ id: 'POOLdefault', name: '默认池', characters: [{ id: 'CHR1', name: '银' }] }],
+  };
+  const r = migrate.migrate(cfg, { memoryDirOf: () => '/nonexistent' });
+  assert.equal(r.ran, false);
+  assert.equal(r.persist, false);
+});
+
+test('★ 首次迁移也报告 persist=true', () => {
+  const cfg = { bots: [{ id: 'BOT1', name: '归云' }] };
+  const r = migrate.migrate(cfg, {});
+  assert.equal(r.ran, true);
+  assert.equal(r.persist, true);
 });
 
 test('★ 迁移补齐写手字段（kind / activeCharacterIds）', () => {
@@ -297,7 +330,7 @@ test('★ 迁移补齐写手字段（kind / activeCharacterIds）', () => {
 test('迁移：memoryDirOf 返回不存在的目录时不崩、不建角色', () => {
   const cfg = { bots: [{ id: 'BOT9', name: '空壳' }] };
   const r = migrate.migrate(cfg, { memoryDirOf: () => '/definitely/not/here' });
-  assert.equal(cfg.characters.length, 0);
+  assert.equal(characters.allOf(cfg).length, 0);
   assert.equal(cfg.bots[0].kind, 'writer');
   assert.ok(r.details.some((d) => d.includes('BOT9')));
 });
@@ -305,7 +338,7 @@ test('迁移：memoryDirOf 返回不存在的目录时不崩、不建角色', ()
 test('迁移：未提供 memoryDirOf 时只补字段、不提取角色', () => {
   const cfg = { bots: [{ id: 'BOT1', name: '归云' }] };
   const r = migrate.migrate(cfg, {});
-  assert.equal(cfg.characters.length, 0);
+  assert.equal(characters.allOf(cfg).length, 0);
   assert.equal(cfg.bots[0].kind, 'writer');
   assert.equal(r.ran, true);
 });

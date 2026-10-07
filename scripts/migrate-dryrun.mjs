@@ -45,7 +45,13 @@ function main() {
     console.log(`    ${b.id}（${b.name || '未命名'}）persona.md=${size}B ` +
       (size < 0 ? '[无文件]' : blank ? '→ 判为空模板' : '→ ★ 判为有内容，将提取角色'));
   }
-  console.log(`  characters（角色池）: ${cfg.characters === undefined ? '不存在 → 会触发迁移' : '已存在 → 跳过'}`);
+  // 角色池有两种落地形态：旧版单池 cfg.characters，新版多池 cfg.characterPools。
+  // 任一存在都说明「角色体系已经在位」，不会再触发从 persona.md 提取角色的那套迁移。
+  const hasLegacy = Array.isArray(cfg.characters);
+  const hasPools = Array.isArray(cfg.characterPools);
+  console.log(`  characters（角色池）: ${hasLegacy ? '存在（旧版单池）' : '不存在'}`
+    + `   characterPools（多池）: ${hasPools ? `存在 → ${cfg.characterPools.length} 个池` : '不存在'}`
+    + `   → ${hasLegacy || hasPools ? '跳过角色提取' : '★ 会触发迁移'}`);
   console.log('');
 
   // ---- 在副本上跑迁移（不写盘） ----
@@ -65,22 +71,32 @@ function main() {
   console.log('');
 
   // ---- 迁移后角色池 ----
-  if (draft.characters && draft.characters.length) {
+  // 新版是「多池」：cfg.characterPools 是 [{id,name,characters:[...]}]，角色散在各池里。
+  // 旧版写法的 cfg.characters 只在迁移中途出现过（ensurePools 会把它收进「默认池」并删掉这个字段），
+  // 所以这里优先读 characterPools，兜底才看 characters。
+  const pools = Array.isArray(draft.characterPools)
+    ? draft.characterPools.map((p) => ({ name: p.name, chars: p.characters || [] }))
+    : (Array.isArray(draft.characters) && draft.characters.length ? [{ name: '（旧版单池）', chars: draft.characters }] : []);
+  if (pools.length && pools.some((p) => p.chars.length)) {
     console.log('【迁移后的角色池】');
-    for (const c of draft.characters) {
-      console.log(`  【${c.name}】${c.id}`);
-      console.log(`    来源: ${c.source || '-'}   标签: ${(c.tags || []).join('、') || '-'}`);
-      const pv = String(c.persona || '').replace(/\n/g, ' ').slice(0, 90);
-      console.log(`    设定: ${pv}${String(c.persona || '').length > 90 ? '…' : ''}`);
-      console.log(`    历史档: ${(c.history || []).length} 版   by=${(c.history || []).map(h => h.by).join(',')}`);
+    for (const p of pools) {
+      console.log(`  ■ 池「${p.name}」：${p.chars.length} 位`);
+      for (const c of p.chars) {
+        console.log(`    【${c.name}】${c.id}`);
+        console.log(`      来源: ${c.source || '-'}   标签: ${(c.tags || []).join('、') || '-'}`);
+        const pv = String(c.persona || '').replace(/\n/g, ' ').slice(0, 90);
+        console.log(`      设定: ${pv}${String(c.persona || '').length > 90 ? '…' : ''}`);
+        console.log(`      历史档: ${(c.history || []).length} 版   by=${(c.history || []).map(h => h.by).join(',')}`);
+      }
     }
     console.log('');
   }
 
   // ---- 写手引用 ----
-  console.log('【写手的 activeCharacterIds】');
+  console.log('【写手的 activeCharacterIds / 绑定的角色池】');
   for (const b of draft.bots) {
-    console.log(`  ${b.id}: kind=${b.kind || '(未设)'} active=[${(b.activeCharacterIds || []).join(', ')}]`);
+    console.log(`  ${b.id}: kind=${b.kind || '(未设)'} active=[${(b.activeCharacterIds || []).join(', ')}]`
+      + ` pools=[${(b.poolIds || []).join(', ')}]`);
   }
   console.log('');
 

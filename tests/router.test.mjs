@@ -56,8 +56,23 @@ before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
   // ★ 这个数字随路由增删而变，改动时也要改它 —— 断言的意义是「别有人悄悄加了路由却没想清楚顺序」
-  test('条目总数稳定在 77（... + 角色池 13 条 + 世界卡 5 条：改变列表/追加/删除 + 多世界列表/切换活跃）', () => {
-    assert.equal(router.routes.length, 77);
+  test('条目总数稳定在 84（... + 角色池 13 条 + 多角色池 7 条 + 世界卡 5 条：改变列表/追加/删除 + 多世界列表/切换活跃）', () => {
+    assert.equal(router.routes.length, 84);
+  });
+
+  test('★ pools 域守「先具体后通配」：/move 与 /:id/characters 必须排在 /:id 之前', () => {
+    // 同一个坑，换了个域再踩一次就太亏了：/api/pools/:id 的正则带 $ 锚定，
+    // 若排在 /move 前面，POST /api/pools/move 会被当成「id 为 move 的池」。
+    // 注意：正则源码里的斜杠是转义过的（'\/api\/pools\/...'），所以按 'pools' 定位
+    const poolRe = router.routes.map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.re && r.re.source.includes('pools'));
+    const move = router.routes.findIndex((r) => r.exact === '/api/pools/move');
+    const mkChar = poolRe.find(({ r }) => r.re.source.includes('characters'));
+    const wildcard = poolRe.find(({ r }) => !r.re.source.includes('characters') && !r.re.source.includes('bots'));
+    assert.ok(move >= 0, '/api/pools/move 必须存在');
+    assert.ok(wildcard, '/api/pools/:id 必须存在');
+    assert.ok(move < wildcard.i, `move(${move}) 必须排在 :id(${wildcard.i}) 之前`);
+    if (mkChar) assert.ok(mkChar.i < wildcard.i, `新建角色(${mkChar.i}) 必须排在 :id(${wildcard.i}) 之前`);
   });
 
   test('★ characters 域守「先具体后通配」：/history /rollback /commit /counters /experiences 必须排在 /:id 之前', () => {
