@@ -31,7 +31,7 @@ const SANDBOX_SCRIPTS = [
   'verify-pools.mjs', 'verify-pools-ui.mjs',
   'verify-writer-basics.mjs', 'verify-writer-pool.mjs',
   'verify-admin-characters.mjs', 'verify-admin-stream.mjs',
-  'verify-char-template.mjs', 'verify-character-edit.mjs',
+  'verify-char-template.mjs', 'verify-char-plaintext.mjs', 'verify-character-edit.mjs',
   'verify-composer.mjs', 'verify-counter-spec.mjs', 'verify-experience.mjs',
   'verify-progress.mjs', 'verify-selfcheck.mjs', 'verify-world-caps.mjs',
 ];

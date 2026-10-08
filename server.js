@@ -515,11 +515,7 @@ async function chatWithBot(botId, content, opts = {}) {
         properties: {
           characterId: { type: 'string', description: '角色 ID（从【你的角色】里的 id 获取；不确定就先看看当前角色列表）' },
           name: { type: 'string', description: '角色名（可选，仅在需要改名时给）' },
-          persona: { type: 'string', description: '改写后的角色设定全文（可选，要整体替换就整段给）' },
-          traits: { type: 'string', description: '性格特点（可选）' },
-          age: { type: 'string', description: '年龄（可选）' },
-          appearance: { type: 'string', description: '外表形象（可选）' },
-          background: { type: 'string', description: '背景故事（可选）' },
+          persona: { type: 'string', description: '改写后的角色设定全文（角色卡就是**一整份纯文本**：要改就整段重写，用 ## 小节分块，别只给一句片段）' },
           reason: { type: 'string', description: '为什么改（一句话，会展示给用户，帮助他判断是否同意）' },
         },
         required: ['characterId'],
@@ -541,11 +537,7 @@ async function chatWithBot(botId, content, opts = {}) {
         type: 'object',
         properties: {
           name: { type: 'string', description: '角色名（必填），如 银' },
-          persona: { type: 'string', description: '角色设定全文（推荐给：身份、性格、说话方式、与用户的关系）' },
-          traits: { type: 'string', description: '性格特点（可选，一句话）' },
-          age: { type: 'string', description: '年龄（可选）' },
-          appearance: { type: 'string', description: '外表形象（可选）' },
-          background: { type: 'string', description: '背景故事（可选）' },
+          persona: { type: 'string', description: '角色设定全文（角色卡就是这份纯文本：身份、性格、说话方式、外表、背景、与用户的关系都写在这里，用 ## 小节分块）' },
           reason: { type: 'string', description: '为什么要建这位角色（一句话，展示给用户帮助判断）' },
         },
         required: ['name'],
@@ -793,7 +785,7 @@ async function chatWithBot(botId, content, opts = {}) {
         } else {
           const patch = C.buildEditPatch(args);
           if (!Object.keys(patch).length) {
-            content = '你没有给出任何要修改的字段。请至少给一项（如 persona / traits / appearance / background）。';
+            content = '你没有给出任何要修改的字段。角色卡是一整份纯文本，请把改写后的全文给到 persona（也可以只给 name / tags）。';
           } else {
             const fields = Object.keys(patch).join('、');
             const reason = String(args.reason || '').trim();
@@ -831,6 +823,10 @@ async function chatWithBot(botId, content, opts = {}) {
                 payload: {
                   name: nm,
                   persona: String(args.persona ?? ''),
+                  // ★ 角色卡现在是**纯文本**（工具 schema 里已不再声明下面这四项），
+                  //   但这里照旧透传：老会话/老模型仍可能吐出来，丢掉就是丢内容。
+                  //   前端确认弹窗会照常展示，编辑角色时会并入正文（见 app.js 的
+                  //   foldLegacyIntoPersona）。清理前先确认没有模型还在用。
                   traits: String(args.traits ?? ''),
                   age: String(args.age ?? ''),
                   appearance: String(args.appearance ?? ''),
@@ -1474,7 +1470,7 @@ function buildAdminSystem(cfg, botId) {
   lines.push('   - 修改全局文件：{"editGlobal":{"key":"prompt","content":"改写后的完整内容"}}');
   lines.push('   - 更新写手配置：{"editBot":{"id":"BOT1","modelId":"Agnes","historyLimit":10}}');
   lines.push('   - 修改角色设定：{"editCharacter":{"characterId":"CHR...","persona":"改写后的角色设定全文","reason":"为什么改"}}');
-  lines.push('   - 新建角色：{"createCharacter":{"name":"角色名","persona":"角色设定全文","traits":"性格特点","age":"年龄","appearance":"外表形象","background":"背景故事","tags":["标签1","标签2"],"reason":"为什么建"}}（只有 name 必填，需确认）');
+  lines.push('   - 新建角色：{"createCharacter":{"name":"角色名","persona":"角色设定全文","tags":["标签1","标签2"],"reason":"为什么建"}}（角色卡就是这份纯文本 persona，用 ## 小节分块；只有 name 必填，需确认）');
   lines.push('   - 改角色计数器：{"editCounter":{"characterId":"CHR...","counter":"好感度","value":35,"op":"set","reason":"为什么改"}}（counter 是计数器名，value 是**绝对值**；op 可为 set / remove；需确认）');
   lines.push('   - 加角色经历：{"editExperience":{"characterId":"CHR...","op":"add","text":"在渡口与老张结盟","reason":"为什么加"}}（op 可为 add / remove，remove 要给 expId；需确认）');
   lines.push('   - 写工作区草稿：{"wsWrite":{"key":"persona_draft","desc":"用途说明","content":"完整正文"}}（免确认，会真正写入工作区）');
@@ -1902,11 +1898,7 @@ function adminToolSchemas(webEnabled) {
           properties: {
             characterId: { type: 'string', description: '角色 ID' },
             name: { type: 'string', description: '角色名（可选）' },
-            persona: { type: 'string', description: '改写后的角色设定全文（可选）' },
-            traits: { type: 'string', description: '性格特点（可选）' },
-            age: { type: 'string', description: '年龄（可选）' },
-            appearance: { type: 'string', description: '外表形象（可选）' },
-            background: { type: 'string', description: '背景故事（可选）' },
+            persona: { type: 'string', description: '改写后的角色设定全文（角色卡就是**一整份纯文本**：要改就整段重写，用 ## 小节分块）' },
             tags: { type: 'array', items: { type: 'string' }, description: '标签（可选，整组替换）' },
             reason: { type: 'string', description: '为什么改（一句话，展示给用户帮助判断）' },
           },
@@ -1923,11 +1915,7 @@ function adminToolSchemas(webEnabled) {
           type: 'object',
           properties: {
             name: { type: 'string', description: '角色名（必填），如 银' },
-            persona: { type: 'string', description: '角色设定全文（可选，推荐给：身份、性格、说话方式、与用户的关系）' },
-            traits: { type: 'string', description: '性格特点（可选，一句话）' },
-            age: { type: 'string', description: '年龄（可选）' },
-            appearance: { type: 'string', description: '外表形象（可选）' },
-            background: { type: 'string', description: '背景故事（可选）' },
+            persona: { type: 'string', description: '角色设定全文（角色卡就是这份纯文本：身份、性格、说话方式、外表、背景、关系都写在这里，用 ## 小节分块）' },
             tags: { type: 'array', items: { type: 'string' }, description: '标签（可选，如 ["主角","未来"]）' },
             reason: { type: 'string', description: '为什么建（一句话，展示给用户帮助判断）' },
           },
@@ -2314,6 +2302,7 @@ async function runAdminTool(cfg, name, args = {}) {
     const payload = { type: 'character_create', payload: {
       name: nm,
       persona: String(args.persona ?? ''),
+      // 同写手侧：schema 已不声明这四项，但仍透传（容忍老模型/老会话，别丢内容）
       traits: String(args.traits ?? ''),
       age: String(args.age ?? ''),
       appearance: String(args.appearance ?? ''),

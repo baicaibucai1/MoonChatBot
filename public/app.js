@@ -1022,15 +1022,53 @@ async function saveWriterCharacters(botId, ids) {
   renderMain();
 }
 
-// 角色可编辑字段（与后端 lib/characters.js 的 EDITABLE_FIELDS 对齐）
-const CHR_FIELDS = [
-  ['name', '角色名', '例：银'],
-  ['persona', '角色设定', '这个人物是谁：身份、性格、说话方式、与主人的关系……（写手改写剧情时会读它）'],
-  ['traits', '性格特点', '例：表面冷淡、内里依恋；不擅长表达情绪'],
-  ['age', '年龄', '例：外表 8 岁'],
-  ['appearance', '外表形象', '例：银发红瞳的仿真机器人男孩'],
-  ['background', '背景故事', '出身、经历、来到故事里之前发生过什么'],
-];
+// ★★ 角色卡是**纯文本**：新建 / 编辑只有一整份正文（Markdown），不再拆成「性格特点 /
+//   年龄 / 外表形象 / 背景故事」这类分类框 —— 正文里想分几节、叫什么，用户自己定
+//   （默认骨架见 lib/characters.js 的 DEFAULT_CHAR_TEMPLATE，在「设置 → 角色卡」里改）。
+//
+// 下面这四个是**旧版**分类字段（与后端 EDITABLE_FIELDS 一致）：
+//   · 表单不再呈现，但数据兼容、写手的工具仍能填 —— 所以改动的历史必须读得懂。
+//   · 打开编辑时会把它们并入正文，避免「看不见却还在往写手的 prompt 里塞」（见下）。
+const CHR_BODY_LEGACY = ['traits', 'age', 'appearance', 'background'];
+const CHR_LEGACY_LABEL = { traits: '性格特点', age: '年龄', appearance: '外表形象', background: '背景故事' };
+
+// 所有可编辑字段的中文名 —— 版本档的「改了哪几项」与 AI 建议的「旧 → 新」预览都用它。
+const CHR_LABELS = {
+  name: '角色名',
+  persona: '角色设定',
+  tags: '标签',
+  avatar: '形象链接',
+  ...Object.fromEntries(CHR_BODY_LEGACY.map((k) => [k, `${CHR_LEGACY_LABEL[k]}（旧）`])),
+};
+const chrLabel = (k) => CHR_LABELS[k] || k;
+
+// AI「新建角色 / 改写角色」建议的展示顺序（工具参数仍按这套命名，不能少旧字段）
+const CHR_PREVIEW_ORDER = ['name', 'persona', ...CHR_BODY_LEGACY, 'tags', 'avatar'];
+
+// 把旧版分类字段并入正文。
+// ★ 为什么要并：不并的话这些文字在界面上再也看不到，却仍被 lib/characters.js 的 brief()
+//   塞进写手的 prompt —— 用户改完卡片会发现「这句我明明没写过，它怎么知道」。
+// ★ 不重复塞：迁移来的数据里 persona 是原文全文、traits 是从中摘出的段落，直接拼会出现
+//   两份（brief() 里有一模一样的去重规则，两处同一套规矩）。
+// 返回 { text, folded, keys }；keys 是真正被并入的字段，用来给用户一句说明。
+function foldLegacyIntoPersona(c) {
+  const text = String((c && c.persona) || '');
+  const keys = [];
+  const blocks = [];
+  const put = (key, label, val) => {
+    const v = String(val || '').trim();
+    if (!v || text.includes(v)) return;   // 正文里已经有了 → 不重复
+    keys.push(key);
+    blocks.push(`## ${label}\n${v}`);
+  };
+  put('traits', '性格', c && c.traits);
+  put('age', '年龄', c && c.age);
+  put('appearance', '外表', c && c.appearance);
+  put('background', '背景', c && c.background);
+  if (!blocks.length) return { text, folded: false, keys: [] };
+  const head = text.trim() ? text.replace(/\s+$/, '') + '\n\n' : '';
+  return { text: head + blocks.join('\n\n'), folded: true, keys };
+}
 
 // ★ 完整角色（含全部经历）的本地缓存，键是角色 id。
 //   列表接口只带最近 3 条经历，状态区要展示全量、删除时还要拿到原文，所以单独拉详情存这儿。
@@ -1047,10 +1085,13 @@ async function fetchCharDetail(id) {
 async function openCharacterEditModal(charId, opts) {
   const c = charId ? (state.characters || []).find(x => x.id === charId) : null;
   const isNew = !c;
-  // ★ 新建时把全局「角色卡模板」套进「角色设定」—— 用户改一次模板，以后每张卡都是同一套骨架
-  const presetPersona = isNew ? charTemplateOf() : '';
+  // ★ 新建时把全局「角色卡模板」套进正文 —— 用户改一次模板，以后每张卡都是同一套骨架
+  const presetBody = isNew ? charTemplateOf() : '';
   // 编辑已有角色时先取一次全量（状态区要用），失败就退回列表里那份
   const full = isNew ? null : ((await fetchCharDetail(c.id)) || c);
+  // ★ 旧版分类字段并入正文（见 foldLegacyIntoPersona）；新建时没有旧字段可并
+  const folded = isNew ? { text: '', folded: false, keys: [] } : foldLegacyIntoPersona(full);
+  const bodyText = isNew ? presetBody : folded.text;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'chr-edit-modal';
@@ -1063,14 +1104,15 @@ async function openCharacterEditModal(charId, opts) {
       </div>
       <div class="modal-body">
         ${isNew ? '' : `<p class="empty-hint" style="margin:0 0 10px">角色 id：<code>${esc(c.id)}</code>　保存在全局角色池，所有写手共用。改动会自动留档，可回滚。</p>`}
-        ${CHR_FIELDS.map(([k, label, ph]) => `
-          <label class="frm">${label}</label>
-          ${k === 'name'
-            ? `<input id="chr-${k}" type="text" placeholder="${esc(ph)}" value="${esc((c && c[k]) || '')}">`
-            : `<textarea id="chr-${k}" rows="${k === 'persona' ? (isNew ? 12 : 5) : 2}" placeholder="${esc(ph)}">${esc(k === 'persona' && isNew ? presetPersona : ((c && c[k]) || ''))}</textarea>`}
-        `).join('')}
+        <label class="frm">角色名</label>
+        <input id="chr-name" type="text" placeholder="例：银" value="${esc((c && c.name) || '')}">
+        <label class="frm">角色设定<span class="frm-note">纯文本（Markdown）· 默认骨架在「设置 → 角色卡」里改</span></label>
+        <textarea id="chr-persona" class="chr-body" rows="${isNew ? 20 : 16}" spellcheck="false"
+          placeholder="这个人是谁：身份、性格、说话方式、与主人的关系……（写手改写剧情时会读它）">${esc(bodyText)}</textarea>
+        <p class="empty-hint" style="margin:8px 0 0">正文就是角色卡本身 —— 分几节、叫什么由你定。计数器一行一个写在正文里：<code>##Counter：好感度[0,100]</code>，<code>[]</code> = 不限。</p>
+        ${folded.folded ? `<p class="empty-hint" style="margin:8px 0 0">已把旧版分类字段（${esc(folded.keys.map((k) => CHR_LEGACY_LABEL[k] || k).join('、'))}）并入正文；保存后它们就归到正文里，不再单独存放。</p>` : ''}
         <label class="frm">形象链接（图片 URL）</label>
-        <input id="chr-avatar" type="text" placeholder="https://…　角色设定是纯文本，图片不进正文，只以链接挂在卡上" value="${esc((c && c.avatar) || '')}">
+        <input id="chr-avatar" type="text" placeholder="https://…　图片不进正文，只以链接挂在卡上" value="${esc((c && c.avatar) || '')}">
         <label class="frm">标签（逗号分隔）</label>
         <input id="chr-tags" type="text" placeholder="例：主角, 机器人, 未来" value="${esc(((c && c.tags) || []).join(', '))}">
         ${isNew ? '' : charStateAdminHtml(full)}
@@ -1171,19 +1213,24 @@ async function refreshCharState(charId) {
 function characterEdit(id) { openCharacterEditModal(id); }
 
 async function saveCharacter(id) {
-  const body = {};
-  for (const [k] of CHR_FIELDS) {
-    const el = $(`#chr-${k}`);
-    if (el) body[k] = el.value.trim();
-  }
-  const tagsEl = $('#chr-tags');
-  if (tagsEl) body.tags = tagsEl.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
-  // 形象链接：图片不进正文，只以 URL 挂在角色卡上
+  const nameEl = $('#chr-name');
+  const bodyEl = $('#chr-persona');
   const avEl = $('#chr-avatar');
-  if (avEl) body.avatar = avEl.value.trim();
+  const tagsEl = $('#chr-tags');
+  const body = {
+    name: nameEl ? nameEl.value.trim() : '',
+    persona: bodyEl ? bodyEl.value.trim() : '',
+    // 形象链接：图片不进正文，只以 URL 挂在角色卡上
+    avatar: avEl ? avEl.value.trim() : '',
+    tags: tagsEl ? tagsEl.value.split(/[,，]/).map(s => s.trim()).filter(Boolean) : [],
+  };
   if (!body.name) return toast('角色名不能为空', 'err');
   // 新建时把模板里的 {{名字}} 占位换成实际角色名（用户可能没填模板，没有占位就不动）
   if (!id && body.persona) body.persona = body.persona.replace(/\{\{\s*(?:名字|name)\s*\}\}/gi, body.name);
+  // ★ 编辑时清空旧版分类字段：打开弹窗时已把它们并进正文（foldLegacyIntoPersona），
+  //   不清的话下一次打开会**再并一遍**，正文里就出现两份同样的话。
+  //   值本来就是空的时候后端 update() 会跳过，不会平白多出一条版本档。
+  if (id) for (const k of CHR_BODY_LEGACY) body[k] = '';
   // ★ 在角色池页新建 → 直接落进当前正在看的那个池（而不是永远进第一个池）。
   //   只有正在看具体某个池时才带 poolId；「全部」和写手标签页都交给服务端用第一个池兜底。
   if (!id && view.type === 'chars' && _curPoolId) body.poolId = _curPoolId;
@@ -1269,8 +1316,7 @@ async function characterHistory(id) {
           const chg = Array.isArray(h.changed) ? h.changed.filter(k => k !== 'rollback') : [];
           const fields = chg.length
             ? chg.map(k => {
-              const meta = CHR_FIELDS.find(f => f[0] === k);
-              const label = meta ? meta[1] : k;
+              const label = chrLabel(k);
               const val = k === 'tags'
                 ? ((h[k] || []).join(' / ') || '（空）')
                 : (String(h[k] ?? '').trim() || '（空）');
@@ -1283,7 +1329,7 @@ async function characterHistory(id) {
             <div class="chr-hist-head">
               <span class="chr-hist-time">${esc(fmtTime(h.ts))}</span>
               <span class="chr-hist-by ${h.by === 'ai' ? 'ai' : ''}">${h.by === 'ai' ? '写手改写' : '你编辑'}</span>
-              ${chg.length ? `<span class="chr-hist-chg">改动：${esc(chg.map(k => (CHR_FIELDS.find(f => f[0] === k) || [k, k])[1]).join('、'))}</span>` : ''}
+              ${chg.length ? `<span class="chr-hist-chg">改动：${esc(chg.map(chrLabel).join('、'))}</span>` : ''}
               <span class="spacer"></span>
               <button class="ghost sm" onclick="characterRollback('${id}', ${h.index})">回滚到此版本</button>
             </div>
@@ -2398,14 +2444,15 @@ function charTemplateOf() {
 function renderCharacterTemplate() {
   return `
     <div class="card gen-card">
-      <div class="card-title">角色卡模板（新建角色时套用）
+      <div class="card-title">角色卡模板（新建角色时的默认正文）
         <span class="spacer"></span>
         <button class="ghost sm" onclick="resetCharTemplate()">${IC_REFRESH}<span class="lb">恢复默认</span></button>
         <button class="primary sm" onclick="saveCharTemplate()">保存</button>
       </div>
       <p class="empty-hint" style="margin:0 0 10px">
-        新建角色时，这份正文会预填进角色的「角色设定」。它决定一张角色卡的<b>基本样式</b>：
-        分几个小节、每节写什么。<code>{{名字}}</code> 是占位，会换成实际角色名。
+        角色卡是<b>纯文本</b>：新建 / 编辑角色只有一个正文框，这份模板就是它的默认骨架 ——
+        分几个小节、每节写什么，由你在这里定。新建角色时会预填进正文，
+        <code>{{名字}}</code> 是占位，保存时换成实际角色名。留空 = 新建时不预填（从空白写）。
       </p>
       <textarea id="chr-tpl" rows="18" spellcheck="false" placeholder="（留空则用默认模板）">${esc(charTemplateOf())}</textarea>
       <p class="empty-hint" style="margin-top:10px">
@@ -4606,7 +4653,7 @@ async function previewEdit(btn) {
     const cur = ((state.characters || []).find(c => c.id === p.characterId)) || {};
     const lines = [];
     for (const [k, v] of Object.entries(p.patch || {})) {
-      const label = (CHR_FIELDS.find(f => f[0] === k) || [k, k])[1];
+      const label = chrLabel(k);
       const oldV = Array.isArray(cur[k]) ? cur[k].join('、') : (cur[k] || '（空）');
       const newV = Array.isArray(v) ? v.join('、') : String(v ?? '');
       lines.push(`【${label}】\n  改前：${oldV}\n  改后：${newV}`);
@@ -4616,9 +4663,9 @@ async function previewEdit(btn) {
   else if (ed.type === 'character_create') {
     // 新建：直接把将写入的字段摊开，用户一眼看清要建一个什么样的人
     const lines = [];
-    for (const [k, ph] of CHR_FIELDS) {
+    for (const k of CHR_PREVIEW_ORDER) {
       const v = Array.isArray(p[k]) ? p[k].join('、') : String(p[k] ?? '');
-      if (v.trim()) lines.push(`【${ph}】\n${v}`);
+      if (v.trim()) lines.push(`【${chrLabel(k)}】\n${v}`);
     }
     content = lines.join('\n\n') || '（没有内容）';
   }

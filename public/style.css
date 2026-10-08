@@ -2656,6 +2656,10 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   border: 1px solid var(--outline); border-radius: var(--r-xs); resize: vertical;
 }
 .chr-edit-modal input:focus, .chr-edit-modal textarea:focus { outline: none; border-color: var(--primary); }
+/* 角色卡正文：整张卡就这一个框，给足高度与行距，让 ##小节 / ##Counter 一眼分得开 */
+.chr-edit-modal .chr-body { line-height: 1.75; min-height: 220px; }
+/* 字段名右边的小字说明（例：角色设定「纯文本（Markdown）· 模板在设置里改」） */
+.chr-edit-modal .frm-note { margin-left: 8px; font-weight: 400; font-size: 11px; color: var(--text-faint); }
 .chr-modal-acts { margin-top: 14px; display: flex; align-items: center; gap: 8px; }
 
 /* 版本档弹窗 */
