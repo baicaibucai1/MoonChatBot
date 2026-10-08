@@ -34,7 +34,12 @@ const { DEFAULT_POOL_ID } = CHARS;
 // 只复制运行必需的部分；node_modules 靠 NODE_PATH 指回真身，.env 绝不复制。
 // avatars/ 必须带上：config.json 里机器人的头像指向 /avatars/<file>，
 // 副本缺了它前端会打出一串 404（会让「页面加载无错误」这类测试误报）。
-const COPY_ENTRIES = ['server.js', 'setup.js', 'package.json', 'config.json', 'lib', 'public', 'memory', 'avatars'];
+// ★★ memory/ **故意不复制**：它是运行时数据，里面是用户真实建的文件
+//    （例如本机的 memory/BOT1/输出限制.md）。整份带过去，形状就跟着「谁的本机数据」走 ——
+//    实测症状：同一份基线，作者机器上报 `summaries.输出限制.*` 新增 6 项，
+//    干净克隆上却完全对齐。沙箱要的是**纯合成**的记忆区，由 seedRuntimeData()
+//    按固定夹具建出来；lib/memory.js 也会在读到缺失的预设文件时自行创建。
+const COPY_ENTRIES = ['server.js', 'setup.js', 'package.json', 'config.json', 'lib', 'public', 'avatars'];
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -111,6 +116,25 @@ export function makeSandbox() {
     if (!fs.existsSync(src)) continue;
     fs.cpSync(src, path.join(dir, entry), { recursive: true });
   }
+
+  // ★★ config.json / memory / avatars 都是**运行时数据**，不进版本库。
+  //   所以在全新克隆（或 CI）里它们根本不存在 —— 以前这里会直接崩在
+  //   patchSandboxConfig 读 config.json 的 ENOENT 上，于是「接口契约门禁」
+  //   在干净环境里**根本跑不起来**；本机一直有数据，所以这个洞从没暴露。
+  //   缺 config.json 就从 config.example.json 起一份：patchSandboxConfig 会整段替换
+  //   bots / models / characterPools，这里真正需要的只是那几个顶层键的形状。
+  const cfgPath = path.join(dir, 'config.json');
+  if (!fs.existsSync(cfgPath)) {
+    const tpl = path.join(REPO_ROOT, 'config.example.json');
+    if (!fs.existsSync(tpl)) {
+      throw new Error('沙箱无法初始化：既没有 config.json 也没有 config.example.json');
+    }
+    fs.copyFileSync(tpl, cfgPath);
+  }
+  // memory/ 与 avatars/ 即使为空也必须存在：lib/memory.js 会按 botId 往下建子目录，
+  // 父目录缺失时部分路径分支直接抛错（在面板那边表现为「记忆页打不开」）。
+  for (const d of ['memory', 'avatars']) fs.mkdirSync(path.join(dir, d), { recursive: true });
+
   return dir;
 }
 
@@ -199,10 +223,18 @@ export async function patchSandboxConfig(dir, opts = {}) {
     bot.appSecret = '__probe_secret__';
   }
   for (const model of cfg.models || []) {
+    // ★ 形状补齐：基线里 models[].webSearch 记的是 boolean。真实 config.json 里通常有，
+    //   config.example.json 里没有 —— 全新克隆因此报「消失 1 项」的假偏差。
+    //   只在缺失时补（已有就保留），因为 shape 只关心类型，值不该被夹具擅自改掉。
+    if (typeof model.webSearch !== 'boolean') model.webSearch = false;
     if (keepModelKeys) continue;      // 保留 Key，模型可真实调用
     delete model.apiKey;              // 所有模型调用在「未配置 Key」处早退
     model.apiKeyEnv = '__PROBE_NO_SUCH_KEY__';
   }
+  // 顶层搜索开关（/api/state 与 /api/config 的 shape 里都有 searchMode:string / webSearch:boolean）。
+  // 同样只在缺失时补 —— 具体值由真实 config 决定，夹具只负责形状不缩水。
+  if (typeof cfg.searchMode !== 'string') cfg.searchMode = 'auto';
+  if (typeof cfg.webSearch !== 'boolean') cfg.webSearch = false;
   cfg.port = await pickFreePort();
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
@@ -266,6 +298,19 @@ function seedRuntimeData(dir, bot) {
   ];
   fs.writeFileSync(path.join(memo, 'usage.jsonl'),
     usage.map((u) => JSON.stringify(u)).join('\n') + '\n', 'utf8');
+
+  // ★ 记忆层级（memory/<id>/_meta.json）—— api:mem-layers 里 `state.summaries.<key>.*`
+  //   这一组形状的来源。summaries 只列 **tier2** 的文件（lib/memory.js:1002），
+  //   而产品默认 tier 是 2（defaultTier）。
+  //   为什么必须把 persona 钉成 tier1：基线是在「persona 被手动改成 tier1」的状态下录的
+  //   （作者本机 memory/BOT1/_meta.json 里就有一条 persona.tier=1）。干净环境没有这份
+  //   私人设置，于是会多出 summaries.persona.{exists,fresh,empty,name,sections} 6 项，
+  //   报成「新增 6 项」的假偏差 —— 契约于是依赖了「谁的本机数据」。
+  //   钉住这个输入，契约才与具体机器无关。
+  //   ⚠ 这里**不**枚举其它预设文件：将来新增预设文件仍应以「shape 变化」的形式报出来，
+  //     那是有价值的信号，不该被夹具掩盖。
+  fs.writeFileSync(path.join(botDir, '_meta.json'),
+    JSON.stringify({ files: { persona: { tier: 1 } } }, null, 2) + '\n', 'utf8');
 }
 
 export async function startServer(dir, port) {

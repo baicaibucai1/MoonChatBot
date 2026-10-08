@@ -312,6 +312,23 @@ test('★ 配置已经齐备时 persist=false（别每次启动都白写一遍�
   assert.equal(r.persist, false);
 });
 
+// ★★ 回归（2026-10-08）：早退分支里「收编残留旧字段」也必须报告 persist，
+//   否则收编只活在这份内存对象里 —— 下一次 store.getConfig() 读盘，
+//   残留的 characters 又回来了，每请求收编一次，永远不落盘、日志一直响。
+test('★ 收编残留的旧 characters 时也要报告 persist 并写进 details', () => {
+  const cfg = {
+    bots: [{ id: 'BOT1', name: '归云', kind: 'writer', activeCharacterIds: [], poolIds: [], poolCharacterIds: [] }],
+    characterPools: [{ id: 'POOLdefault', name: '默认池', characters: [{ id: 'CHR1', name: '银' }] }],
+    characters: [{ id: 'CHR2', name: '残留角色' }],
+  };
+  const r = migrate.migrate(cfg, { memoryDirOf: () => '/nonexistent' });
+  assert.equal(r.ran, false, '不是首次迁移');
+  assert.equal(r.persist, true, '收编改动了配置 → 必须落盘');
+  assert.equal('characters' in cfg, false, '旧字段被摘掉');
+  assert.equal(characters.allOf(cfg).length, 2, '残留角色进了池，没丢');
+  assert.match(r.details.join('\n'), /残留/, '细节里要说明发生了什么（以前是静默的）');
+});
+
 test('★ 首次迁移也报告 persist=true', () => {
   const cfg = { bots: [{ id: 'BOT1', name: '归云' }] };
   const r = migrate.migrate(cfg, {});

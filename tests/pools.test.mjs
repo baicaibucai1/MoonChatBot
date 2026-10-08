@@ -61,6 +61,66 @@ test('★ ensurePools 报告 created：调用方据此知道「该落盘了」',
   assert.equal(C.ensurePools(already).created, false);
 });
 
+// ★★ 回归（2026-10-08 全量测试抓到的）：
+//   characterPools 已存在时，残留的顶层 characters 本来是**被静默忽略**的 ——
+//   4 个探针往那儿塞角色 / 改 persona，服务器只读池、没人读旧字段，
+//   报出来却是「池外角色不见了 / 计数器不收敛 / 提议帧不下发」，
+//   指向的功能和真实原因毫无关系，而且**全程零报错**。
+//   现在必须收编进默认池并报 orphans —— 宁可归属可疑，也不能静默丢数据。
+test('★ 残留的旧 characters 不再被静默忽略：收编进默认池并报 orphans', () => {
+  const cfg = {
+    characterPools: [{ id: C.DEFAULT_POOL_ID, name: '默认池', characters: [{ id: 'CHR1', name: '银' }] }],
+    characters: [{ id: 'CHR2', name: '池外角色' }],
+    bots: [],
+  };
+  const r = C.ensurePools(cfg);
+  assert.equal(r.orphans, 1, '收编 1 位');
+  assert.equal(r.migrated, 0, '这不算「旧格式迁移」，是残留收编');
+  assert.equal('characters' in cfg, false, '旧字段必须摘掉');
+  assert.deepEqual(C.allOf(cfg).map((c) => c.id).sort(), ['CHR1', 'CHR2'], '两位都得在池里');
+});
+
+test('★ 收编去重：池里已有同 id 时保留池里那份，不重复插', () => {
+  const cfg = {
+    characterPools: [{ id: C.DEFAULT_POOL_ID, name: '默认池', characters: [{ id: 'CHR1', name: '池里的银' }] }],
+    characters: [{ id: 'CHR1', name: '旧字段的银' }, { id: 'CHR2', name: '新角色' }],
+    bots: [],
+  };
+  const r = C.ensurePools(cfg);
+  assert.equal(r.orphans, 1, '只有 CHR2 是新的');
+  assert.equal(C.allOf(cfg).length, 2);
+  assert.equal(C.allOf(cfg).find((c) => c.id === 'CHR1').name, '池里的银');
+});
+
+test('★ 收编是幂等的：同一份「带残留的盘上数据」反复读，不会每次翻倍', () => {
+  const onDisk = {
+    characterPools: [{ id: C.DEFAULT_POOL_ID, name: '默认池', characters: [] }],
+    characters: [{ id: 'CHR9', name: '遗留' }],
+    bots: [],
+  };
+  const counts = [];
+  for (let i = 0; i < 4; i++) {
+    const cfg = JSON.parse(JSON.stringify(onDisk)); // 模拟 getConfig() 每次都读出新对象
+    C.ensurePools(cfg);
+    C.ensurePools(cfg);
+    counts.push(C.allOf(cfg).length);
+  }
+  assert.deepEqual(counts, [1, 1, 1, 1], `每次都必须恰好 1 位，实际 ${JSON.stringify(counts)}`);
+});
+
+// ★★ 回归：「至少有一个池」不能只靠「删池」守住。
+//   removePool 守着这条，但那只覆盖「删」这一条路 —— 整份 PUT /api/config
+//   传 characterPools: [] 同样能把角色体系清空，之后新建角色会无处可放。
+//   这条不变量归 ensurePools 管，因为它是配置的入口。
+test('★ 空池数组自愈：被 PUT 成 [] 也会补回默认池', () => {
+  const cfg = { characterPools: [], bots: [] };
+  const r = C.ensurePools(cfg);
+  assert.equal(r.created, true, '补了池 → 调用方该落盘');
+  assert.equal(C.listPools(cfg).length, 1);
+  assert.equal(C.listPools(cfg)[0].id, C.DEFAULT_POOL_ID);
+  assert.equal(C.ensurePools(cfg).created, false, '再调用不该重复补');
+});
+
 test('★ 不许删掉最后一个池（否则等于把角色体系清空）', () => {
   const cfg = { characters: [{ id: 'CHR1', name: '银' }], bots: [{ id: 'BOT1' }] };
   C.ensurePools(cfg);
