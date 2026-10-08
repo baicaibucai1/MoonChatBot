@@ -10,6 +10,7 @@
 //   ① 4 个 npm 门禁（串行）
 //   ② 自带沙箱的 verify-*.mjs（并行 4；沙箱内部用 pickFreePort() 自选端口，互不撞）
 //   ③ 需要外部服务的探针（真实出网的 net-reach；需在跑副本服务的 characters-ui）
+import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
@@ -141,6 +142,8 @@ let charUi = { name: 'node scripts/verify-characters-ui.mjs', code: -1, out: '',
   const srv = spawn('node', ['scripts/dev-sandbox.mjs', '--port', String(PORT)], {
     cwd: REPO, shell: true, stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let srvOut = '';
+  srv.stdout.on('data', (c) => { srvOut += c; });
   let ready = false;
   for (let i = 0; i < 40; i++) {
     if ((await httpGet(PORT, '/api/state')) === 200) { ready = true; break; }
@@ -153,7 +156,22 @@ let charUi = { name: 'node scripts/verify-characters-ui.mjs', code: -1, out: '',
   } else {
     charUi.err = `端口 ${PORT} 上的副本服务 20s 内未就绪`;
   }
+  // ★★ 收尾必须**顺带删掉它的临时目录**。
+  //   只 kill('SIGKILL') 的话 dev-sandbox 的 process.on('exit') 里的 cleanup() 不会跑，
+  //   于是每跑一次全量就在 %TEMP% 留一份完整副本（约 5MB）。
+  //   2026-10-08 攒到 25 个 / 97MB 才发现 —— 因为它是「慢慢漏」的，谁也不看 %TEMP%。
   srv.kill('SIGKILL');
+  const m = /沙箱目录\s+(\S+)/.exec(srvOut);
+  if (m) {
+    for (let i = 0; i < 3; i++) {
+      try { fs.rmSync(m[1], { recursive: true, force: true }); } catch { /* 句柄还没释放，重试 */ }
+      if (!fs.existsSync(m[1])) break;
+      await sleep(400);
+    }
+    if (fs.existsSync(m[1])) console.log(`  ⚠ 沙箱临时目录未能删除，请手动清理：${m[1]}`);
+  } else {
+    console.log('  ⚠ 没能从 dev-sandbox 的输出里认出沙箱目录，可能有临时目录残留');
+  }
   report(charUi);
 }
 
