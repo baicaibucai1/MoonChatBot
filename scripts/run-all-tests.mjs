@@ -73,7 +73,18 @@ function failLines(out, err) {
 const mark = (code) => (code === 0 ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m');
 const report = (r) => {
   console.log(`  ${mark(r.code)} ${r.name}  (${(r.ms / 1000).toFixed(1)}s)  ${highlight(r.out)}`);
-  if (r.code !== 0) for (const f of failLines(r.out, r.err)) console.log(`      ↳ ${f}`);
+  if (r.code === 0) return;
+  for (const f of failLines(r.out, r.err)) console.log(`      ↳ ${f}`);
+  // ★ 失败时把输出尾巴整段打出来。上面那组关键字匹配经常抓不到真正的死因 ——
+  //   进程中途崩掉时，「最后一行」很可能只是一句普普通通的 ✅，
+  //   只按关键字找失败行会得到一片空白，然后只能靠人再跑一遍才看得到原因。
+  const tail = r.out.split(/\r?\n/).filter((l) => l.trim()).slice(-14);
+  for (const l of tail) console.log(`      │ ${l.trim().slice(0, 150)}`);
+  if (r.err.trim()) {
+    for (const l of r.err.split(/\r?\n/).filter((l) => l.trim()).slice(-6)) {
+      console.log(`      ! ${l.trim().slice(0, 150)}`);
+    }
+  }
 };
 
 async function pool(items, worker, limit) {

@@ -85,6 +85,48 @@ console.log('\n[3] 全局角色池页');
   ok(/角色池/.test(body), '标题 = 「角色池」');
   ok(!!(await page.$('#chr-search')), '有搜索框');
   ok(/写手/.test(body), '文案里说明了它跟写手的关系');
+
+  // ★★ 回归（2026-10-08 实机抓到的 bug）：角色卡上的「被谁使用」必须对得上接口。
+  //   成因：openCharacterPool() 只 loadPools() 却不 loadCharacters()，而 /api/state 那份
+  //   characters **不带 usedBy**（usedBy 只在 /api/characters 里）→ 每张卡都写
+  //   「还没有写手选用」；更糟的是删一位正被写手用着的角色不弹警告，但接口照样会
+  //   把它从写手身上摘掉。
+  //   ⚠ 本文件顶部的注释一直宣称覆盖「被谁使用」，可此前**一条断言都没有** ——
+  //     空喊覆盖比不覆盖更坏。这里改成拿接口的值逐卡比对。
+  const rich = await (await fetch(`${BASE}/api/characters`)).json();
+  const wantUse = new Map((rich.characters || []).map((c) => [c.id, (c.usedBy || []).map((u) => u.name)]));
+  const cards = await page.$$eval('#main .ch-item', (els) => els.map((e) => ({
+    id: ((e.querySelector('.ch-id') || {}).textContent || '').trim(),
+    used: ((e.querySelector('.ch-usedby') || {}).textContent || '').trim(),
+  })));
+  ok(cards.length > 0, `渲染出 ${cards.length} 张角色卡`);
+  const usedCards = cards.filter((c) => (wantUse.get(c.id) || []).length);
+  if (!usedCards.length) {
+    console.log('  · 没有被写手使用的角色，跳过比对（先给写手选一位再跑）');
+  } else {
+    ok(usedCards.every((c) => /^被 .+ 使用$/.test(c.used)),
+      `被使用的角色卡写着「被 … 使用」（实际：${usedCards.map((c) => c.used).join(' / ')}）`);
+    ok(usedCards.every((c) => (wantUse.get(c.id) || []).every((n) => c.used.includes(n))),
+      '卡上列出的写手名与接口一致');
+    const idle = cards.find((c) => !(wantUse.get(c.id) || []).length);
+    if (idle) ok(/还没有写手选用/.test(idle.used), '没被使用的角色写「还没有写手选用」');
+
+    // ★ 同一个根因的第二个症状，也是更危险的那个：删一位**正被写手用着**的角色，
+    //   确认框必须点出是哪几位写手 —— 否则用户以为删了就删了，实际写手身上的引用
+    //   也被一并摘掉（接口会 prunedBots）。这里只打开确认框看一眼再取消，不真删。
+    // ⚠ characterDelete() 返回的 Promise 要等用户点按钮才 resolve，所以这里
+    //   绝不能把它的返回值交给 page.evaluate（那样会一直等下去 → 探针卡死）。
+    //   用带花括号的箭头函数不返回任何东西，evaluate 立刻收工。
+    await page.evaluate((id) => { window.characterDelete(id); }, usedCards[0].id);
+    await page.waitForSelector('#ui-confirm', { timeout: 3000 }).catch(() => {});
+    const dlg = ((await page.textContent('#ui-confirm').catch(() => '')) || '')
+      .replace(/\s+/g, ' ');
+    ok(/位写手正在用它/.test(dlg), `删除确认框点出了在用它的写手（实际：${dlg.slice(0, 90)}）`);
+    const names = wantUse.get(usedCards[0].id) || [];
+    ok(names.every((n) => dlg.includes(n)), `确认框列出的写手名与接口一致（${names.join('、')}）`);
+    await page.click('#ui-confirm #cf-no').catch(() => {});
+    await page.waitForTimeout(300);
+  }
   await page.screenshot({ path: path.join(SHOT, 'verify-character-pool.png') });
 }
 

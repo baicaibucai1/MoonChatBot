@@ -1220,6 +1220,11 @@ async function saveCharacter(id) {
 
 // 删除角色（★ 连根拔：提示会同时清掉哪些写手的引用）
 async function characterDelete(id) {
+  // ★ 先拉一次权威数据。usedBy 只有 /api/characters 才有，而 state.characters
+  //   会被任何一次 loadState()（/api/state）覆盖成没有 usedBy 的版本 ——
+  //   那样这里就拿不到 usedBy，「有 N 位写手正在用它」的警告会**静默消失**，
+  //   但删除照样会清掉写手身上的引用。与 poolDelete 同一套防御。
+  await loadCharacters();
   const c = (state.characters || []).find(x => x.id === id);
   if (!c) return;
   const usedBy = c.usedBy || [];
@@ -1318,7 +1323,16 @@ let _curPoolId = '';
 async function openCharacterPool() {
   view = { type: 'chars' };
   await loadPools();
-  renderSidebar(); renderMain();
+  // ★ 角色必须走 /api/characters 拉，不能只靠 state.characters。
+  //   为什么：/api/state 里那份 characters 是给侧栏/写手卡用的精简视图，**不带 usedBy**；
+  //   而池页要显示「被哪些写手使用」、删除确认也要靠 usedBy 决定警不警告。
+  //   只刷池不刷角色的后果（2026-10-08 实机抓到的 bug）：
+  //     · 池页每张卡都写「还没有写手选用」——明明有写手在用；
+  //     · 删一位**正被写手用着**的角色不弹警告，但接口确实会把它从写手身上摘掉，
+  //       属于「不告诉你就动了」。而任何一次 loadState() 都会把 state.characters
+  //       覆盖回没有 usedBy 的版本，所以这个警告是时灵时不灵的。
+  await loadCharacters();   // 内部已含 renderPoolList() + renderMain()
+  renderSidebar();          // 侧栏高亮跟着 view 切
 }
 
 function renderCharacterPool() {
