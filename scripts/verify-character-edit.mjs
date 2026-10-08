@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { makeSandbox, patchSandboxConfig, startServer, stopServer, removeSandbox, REPO_ROOT } from './lib/sandbox.mjs';
+import { makeSandbox, patchSandboxConfig, startServer, stopServer, removeSandbox, REPO_ROOT, setProbeCharacters, findProbeCharacter } from './lib/sandbox.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -123,10 +123,12 @@ try {
   const cfgPath = path.join(sandbox, 'config.json');
   const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
   // 造一个已知 id 的角色，塞进池子；并让第一个写手选定它
-  cfg.characters = [{
+  //   ★ 必须走 setProbeCharacters（默认池），不能写顶层 cfg.characters ——
+  //     后者已退役，服务器读不到，症状是「写手选了个不存在的角色 → 提议帧根本不下发」。
+  setProbeCharacters(cfg, [{
     id: CHR_ID, ts: Date.now(), name: '银', persona: '# 人格\n\n## 基本信息\n- 银，来自未来的仿真机器人男孩。',
     traits: '', age: '', appearance: '', background: '', tags: ['主角'], history: [],
-  }];
+  }]);
   cfg.bots[0].activeCharacterIds = [CHR_ID];
   cfg.bots[0].modelId = cfg.models[0].id;
   for (const m of cfg.models) {
@@ -180,8 +182,10 @@ try {
   check('正文以「提议」口吻收尾（没有谎称已改）', /提议|确认/.test(seen.text), seen.text.slice(0, 80));
 
   // 5) ★ 关键：提议阶段 config.json 必须纹丝不动
+  //    这里要读**磁盘原文件**（比走接口更严），但角色在池里 —— 顶层 cfg.characters
+  //    已退役，按旧字段找会一直拿到 undefined，把「没落盘」和「找错地方」混为一谈。
   const mid = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-  const midChr = (mid.characters || []).find((x) => x.id === CHR_ID);
+  const midChr = findProbeCharacter(mid, CHR_ID);
   check('★ 提议阶段未落盘（persona 仍是原值）', midChr?.persona.includes('来自未来的仿真机器人男孩') && !midChr.persona.includes('雾港'),
     String(midChr?.persona).slice(0, 60));
   check('★ 提议阶段无版本档（history 仍为空）', (midChr?.history || []).length === 0,
@@ -199,7 +203,7 @@ try {
 
   // 7) 落盘核对：persona 已更新 + 产生了版本档（可回滚的实质）
   const after = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-  const aChr = (after.characters || []).find((x) => x.id === CHR_ID);
+  const aChr = findProbeCharacter(after, CHR_ID);
   check('★ 确认后 persona 已更新落盘', String(aChr?.persona).includes('雾港'), String(aChr?.persona).slice(0, 60));
   check('★ 确认后产生版本档（history 长度 1）', (aChr?.history || []).length === 1, `history=${(aChr?.history || []).length}`);
   check('★ 版本档记的是「改之前」的内容（回滚有意义）',
@@ -220,7 +224,7 @@ try {
   check('回滚返回 ok', rbJson.ok === true, JSON.stringify(rbJson).slice(0, 120));
 
   const rolled = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-  const rChr = (rolled.characters || []).find((x) => x.id === CHR_ID);
+  const rChr = findProbeCharacter(rolled, CHR_ID);
   check('★ 回滚后 persona 回到原值', String(rChr?.persona).includes('来自未来的仿真机器人男孩')
     && !String(rChr?.persona).includes('雾港'), String(rChr?.persona).slice(0, 60));
   check('★ 回滚本身也留档（支持「回滚的回滚」）', (rChr?.history || []).length === 2,

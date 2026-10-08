@@ -25,7 +25,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { makeSandbox, patchSandboxConfig, startServer, stopServer, removeSandbox, pickFreePort, REPO_ROOT } from './lib/sandbox.mjs';
+import { makeSandbox, patchSandboxConfig, startServer, stopServer, removeSandbox, pickFreePort, REPO_ROOT, findProbeCharacter } from './lib/sandbox.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SHOT = path.join(HERE, 'shots');
@@ -149,7 +149,9 @@ async function main() {
       cfg.bots[0].activeCharacterIds = [CHAR_ID];
     }
     // ★ 角色卡正文里写死范围 [0,10] —— 这才是权威来源
-    const chr = (cfg.characters || []).find((c) => c.id === CHAR_ID);
+    //   角色住在池里（顶层 cfg.characters 已退役），要按池去找，否则拿到 undefined，
+    //   下面这行会被静默跳过 → 范围没写进角色卡 → 计数器不会被收敛。
+    const chr = findProbeCharacter(cfg, CHAR_ID);
     if (chr) chr.persona = `沙箱探针用的角色设定。\n\n##Counter：好感度[0,${MAXV}]\n`;
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 

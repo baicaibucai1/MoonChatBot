@@ -26,7 +26,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { makeSandbox, patchSandboxConfig, startServer, stopServer, removeSandbox, pickFreePort, REPO_ROOT } from './lib/sandbox.mjs';
+import { makeSandbox, patchSandboxConfig, startServer, stopServer, removeSandbox, pickFreePort, REPO_ROOT, findProbeCharacter } from './lib/sandbox.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SHOT = path.join(HERE, 'shots');
@@ -135,7 +135,9 @@ async function main() {
     // 显式打开自检（全局默认就是开，这里写死避免将来默认值变化把脚本带偏）
     cfg.selfCheck = true;
     // 角色卡上带范围，用来验证自检的数值同样被收敛
-    const chr = (cfg.characters || []).find((c) => c.id === CHAR_ID);
+    //   ★ 角色在池里，不能按退役的顶层 cfg.characters 找（找不到就静默跳过，
+    //     症状是「越界值没被收敛」，看起来像自检坏了）
+    const chr = findProbeCharacter(cfg, CHAR_ID);
     if (chr) chr.persona = `沙箱探针用的角色设定。\n\n##Counter：好感度[0,${MAXV}]\n`;
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 

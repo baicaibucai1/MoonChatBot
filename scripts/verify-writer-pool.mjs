@@ -24,7 +24,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { makeSandbox, patchSandboxConfig, startServer, stopServer, removeSandbox, pickFreePort, REPO_ROOT } from './lib/sandbox.mjs';
+import { makeSandbox, patchSandboxConfig, startServer, stopServer, removeSandbox, pickFreePort, REPO_ROOT, putProbeCharacter, probeCharacters } from './lib/sandbox.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SHOT = path.join(HERE, 'shots');
@@ -135,29 +135,28 @@ async function main() {
   try {
     const { port } = await patchSandboxConfig(dir);
 
+    // ★ 角色要放进「默认池」，不能写顶层的 cfg.characters —— 后者已退役，
+    //   服务器只读 characterPools，往旧字段写等于没写（角色永远不会出现）。
+    //   见 scripts/lib/sandbox.mjs 里 probePoolOf 的说明。
     // 池里再放一位「不属于这位写手」的角色 —— ⑥ 的越权用例需要它存在
     const cfgPath = path.join(dir, 'config.json');
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-    if (!(cfg.characters || []).some((c) => c.id === CHAR_OUT)) {
-      (cfg.characters = cfg.characters || []).push({
-        id: CHAR_OUT, ts: 1700000000000, name: '池外角色', persona: '不属于任何写手，用来验证权限边界。',
-        traits: '冷淡', age: '20', appearance: '灰衣', background: '来历不明', tags: ['边界'], avatar: '',
-        source: 'probe', history: [],
-      });
-    }
-    // 探针角色必须存在（沙箱只在 characters 为空时才造它）
-    if (!(cfg.characters || []).some((c) => c.id === CHAR_IN)) {
-      (cfg.characters = cfg.characters || []).unshift({
-        id: CHAR_IN, ts: 1700000000000, name: '探针角色', persona: '沙箱探针用的角色设定。',
-        traits: '沉稳', age: '18', appearance: '黑发', background: '来历不明', tags: ['探针'], avatar: '',
-        source: 'probe', history: [],
-      });
-    }
+    putProbeCharacter(cfg, {
+      id: CHAR_OUT, ts: 1700000000000, name: '池外角色', persona: '不属于任何写手，用来验证权限边界。',
+      traits: '冷淡', age: '20', appearance: '灰衣', background: '来历不明', tags: ['边界'], avatar: '',
+      source: 'probe', history: [],
+    });
+    // 探针角色必须存在（沙箱夹具已经在默认池里造好了同 id 的一位，这里是幂等合并）
+    putProbeCharacter(cfg, {
+      id: CHAR_IN, ts: 1700000000000, name: '探针角色', persona: '沙箱探针用的角色设定。',
+      traits: '沉稳', age: '18', appearance: '黑发', background: '来历不明', tags: ['探针'], avatar: '',
+      source: 'probe', history: [],
+    });
     WRITER_ID = (cfg.bots || [])[0]?.id || 'BOT1';
     WRITER_NAME = (cfg.bots || [])[0]?.name || WRITER_ID;
     cfg.bots[0].activeCharacterIds = [CHAR_IN];   // ★ 只选定 CHAR_IN
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
-    console.log(`探针写手：${WRITER_ID}（${WRITER_NAME}）　角色池：${(cfg.characters || []).map((c) => c.name).join('、')}`);
+    console.log(`探针写手：${WRITER_ID}（${WRITER_NAME}）　角色池：${probeCharacters(cfg).map((c) => c.name).join('、')}`);
 
     const llmPort = await pickFreePort();
     llm = fakeLLM();

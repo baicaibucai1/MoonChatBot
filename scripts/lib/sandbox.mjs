@@ -27,8 +27,9 @@ import { createRequire } from 'node:module';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, '..', '..');
 
-// 直接引用 lib 里的常量，避免夹具自己抄一份 id 之后两处漂移
-const { DEFAULT_POOL_ID } = createRequire(import.meta.url)('../../lib/characters.js');
+// 直接引用 lib 里的常量与函数，避免夹具自己抄一份 id / 抄一份池形状之后两处漂移
+const CHARS = createRequire(import.meta.url)('../../lib/characters.js');
+const { DEFAULT_POOL_ID } = CHARS;
 
 // 只复制运行必需的部分；node_modules 靠 NODE_PATH 指回真身，.env 绝不复制。
 // avatars/ 必须带上：config.json 里机器人的头像指向 /avatars/<file>，
@@ -36,6 +37,59 @@ const { DEFAULT_POOL_ID } = createRequire(import.meta.url)('../../lib/characters
 const COPY_ENTRIES = ['server.js', 'setup.js', 'package.json', 'config.json', 'lib', 'public', 'memory', 'avatars'];
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 探针角色的落位（多池形态）
+//
+// ★ 为什么需要这组助手：多池落地后，角色的家在 `characterPools[i].characters`，
+//   而**顶层的 `cfg.characters` 已退役** —— `ensurePools()` 只在「完全没有
+//   characterPools」时才把它搬进「默认池」，之后就删掉这个字段。
+//   探针脚本若还往 `cfg.characters` 写，就是往一个**已被忽略的字段**写：
+//   服务器读的是池，于是「角色没出现 / 计数器没被收敛」看起来像功能坏了，
+//   实际只是数据写错了地方（2026-10-08 全量测试抓到 4 个脚本栽在这上面）。
+//   所以「探针角色写在哪」只允许有一处答案 —— 就是下面这几个函数。
+
+// 取（必要时建）探针用的池，并保证它是个合法的多池形态。
+// 顺带 delete cfg.characters：旧字段和池里的角色重复会让人分不清哪个在生效。
+export function probePoolOf(cfg, poolId = DEFAULT_POOL_ID) {
+  CHARS.ensurePools(cfg); // 幂等：把「单池 characters」升级成「多池 characterPools」
+  let pool = cfg.characterPools.find((p) => p.id === poolId);
+  if (!pool) {
+    pool = { id: poolId, name: '默认池', desc: '', ts: Date.now(), characters: [] };
+    cfg.characterPools.push(pool);
+  }
+  if (!Array.isArray(pool.characters)) pool.characters = [];
+  delete cfg.characters;
+  return pool;
+}
+
+// 幂等写入：同 id 已存在就地合并（保留原有 fixture 字段），否则追加。
+export function putProbeCharacter(cfg, chr, poolId = DEFAULT_POOL_ID) {
+  const pool = probePoolOf(cfg, poolId);
+  const i = pool.characters.findIndex((c) => c.id === chr.id);
+  if (i >= 0) {
+    pool.characters[i] = { ...pool.characters[i], ...chr };
+    return pool.characters[i];
+  }
+  pool.characters.push(chr);
+  return chr;
+}
+
+// 整份替换（某些探针要「角色表里只有我这一位」）。
+export function setProbeCharacters(cfg, chars, poolId = DEFAULT_POOL_ID) {
+  probePoolOf(cfg, poolId).characters = chars;
+  return chars;
+}
+
+// 摊平读：等价于退役之前的 `cfg.characters`，供探针断言「这个 id 在不在」。
+export function probeCharacters(cfg) {
+  CHARS.ensurePools(cfg);
+  return cfg.characterPools.flatMap((p) => (Array.isArray(p.characters) ? p.characters : []));
+}
+
+// 单个 find：找不到返回 undefined（探针里普遍是 `if (chr) …` 的写法）。
+export const findProbeCharacter = (cfg, id) => probeCharacters(cfg).find((c) => c.id === id);
+
 
 // 向操作系统要一个空闲端口：监听 0 让内核分配，拿到号后立刻释放。
 // 不能在子进程里做 —— Windows 上管道 stdout 是异步的，子进程随即退出会丢掉输出。

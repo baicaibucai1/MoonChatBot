@@ -10,6 +10,7 @@
     "up": "node server.js",
     "lint": "eslint .",
     "test": "node --test \"tests/**/*.test.mjs\"",
+    "test:all": "node scripts/run-all-tests.mjs",
     "baseline": "node scripts/api-baseline.mjs",
     "baseline:check": "node scripts/api-baseline.mjs --check",
     "audit:regex": "node scripts/regex-audit.mjs",
