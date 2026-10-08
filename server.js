@@ -94,7 +94,9 @@ function makeChatFn(botId) {
 //   角色池是**跨写手共享的项目级数据**（存在 config.json 里，不在 memory/ 目录）。
 //   两者的数据源和生命周期都不同，混在一起会让 memory 模块依赖 config。
 // 该写手声明了哪些计数器。
-// ★ 这是「同名共享、异名不引用」的判据来源：解析不出来就什么都动不了（安全的一侧）。
+// ★ 这是**写手自己那一份**声明的来源 —— 但权限不只认它：角色卡正文里的 `##Counter：`
+//   同样是声明处，两边取并集（见 lib/characters.js 的 counterNamesFor）。
+//   解析不出来就什么都不放开（安全的一侧）。
 //
 // ★ 找哪份文件（用户决策 2026-10-05）：计数器设计属于「② 标准要求」，
 //   所以**先读 standards.md**；老写手把声明写在「写手设定」(persona.md) 里的，
@@ -173,15 +175,17 @@ async function runSelfCheck({ botId, bot, cfg, reply, chatFn, onPending, onSync 
     reply,
     botName: bot.name || botId,
     characters: active.map((c) => {
-      const view = C.declaredView(c, declaredNames);
       const specs = counterSpecsFor(botId, c);
+      // ★ 允许名单 = 角色卡正文的 `##Counter：` ∪ 写手声明的名字（见 characters.counterNamesFor）。
+      //   计数器是**角色的**财产：卡上写了就归它，写手不必再抄一遍声明。
+      const allow = C.counterNamesFor(c, declaredNames);
       return {
         id: c.id,
         name: c.name,
-        counters: view,
-        declared: declaredSpecs.map((s) => ({
-          name: s.name,
-          range: C.describeCounterRange(C.findCounterSpec(specs, s.name) || s),
+        counters: C.declaredView(c, allow),
+        declared: allow.map((n) => ({
+          name: n,
+          range: C.describeCounterRange(C.findCounterSpec(specs, n)),
         })),
       };
     }),
@@ -213,7 +217,10 @@ async function runSelfCheck({ botId, bot, cfg, reply, chatFn, onPending, onSync 
   for (const row of result.counters) {
     const ch = active.find((x) => x.id === row.characterId);
     if (!ch) continue;                       // 不在自己池里的角色，直接无视
-    const kept = C.filterDeclared(row.deltas, declaredNames);
+    // ★ 按**这个角色**的允许名单过滤（角色卡正文的 `##Counter：` ∪ 写手声明），
+    //   不是只看写手那一份 —— 否则卡上写了也会被静默丢掉。
+    const allow = C.counterNamesFor(ch, declaredNames);
+    const kept = C.filterDeclared(row.deltas, allow);
     const dropped = Object.keys(row.deltas).filter((k) => !(k in kept));
     if (!Object.keys(kept).length) continue;
     const specs = counterSpecsFor(botId, ch);
@@ -316,8 +323,9 @@ function buildWriterBlock(cfg, bot) {
       lines.push('');
       lines.push(`（id: ${ch.id}）`);
       lines.push(c.brief(ch, { full: true }));
-      // 角色当前状态：只显示**本写手声明过**的计数器（带范围）+ 最近经历
-      const st = c.stateBrief(ch, declared, { recent: 8, specs: counterSpecsFor(bot.id, ch) });
+      // 角色当前状态：显示这位角色**允许改**的计数器
+      // （角色卡正文的 `##Counter：` ∪ 写手声明的名字，带范围）+ 最近经历
+      const st = c.stateBrief(ch, c.counterNamesFor(ch, declared), { recent: 8, specs: counterSpecsFor(bot.id, ch) });
       if (st) lines.push(st);
     }
   } else if (all.length) {
@@ -382,22 +390,28 @@ function buildWriterBlock(cfg, bot) {
   if (active.length) {
     lines.push('');
     lines.push('【关于角色经历与计数器】');
-    if (declared.length) {
-      lines.push(`- 你声明过的计数器：${declaredSpecs.map((s) => c.describeCounterSpec(s)).join('、')}。`
-        + '**只有这些名字对你有意义** —— 别的写手声明的计数器你看不到、也不该去改（同名才是共享同一个值）。');
-      lines.push('- ★ 范围以**角色卡上写的 `##Counter：名字[最小,最大]` 为准**（角色卡没写时才用你这里的）。'
-        + '超出范围不会被拒绝，但会被**自动收敛到边界** —— 上限 100 时你给 +20 到 130，实际只会落到 100，'
+    // ★ 是否有计数器必须**按角色**看（允许名单 = 角色卡声明 ∪ 写手声明），
+    //   不能只看写手自己声明的那些 —— 否则卡上写了 `##Counter：`，这里却跟它说「你还没有声明」。
+    const anyAllowed = active.some((ch) => c.counterNamesFor(ch, declared).length);
+    if (anyAllowed) {
+      lines.push('- 你能改的计数器**逐个角色列在上面**每位角色的「【计数器】」那一行里（名字 + 当前值 + 范围）。');
+      lines.push('- 名字的来源有两处，效果一样：**角色卡正文里写的 `##Counter：名字[最小,最大]`**'
+        + '（计数器是角色的财产，卡上写了就归它，跟着角色走，范围也以它为准），'
+        + '以及你自己在「标准要求」里声明的。角色卡写了的不用你再声明一遍，直接就能改它的值。');
+      lines.push('- 超出范围不会被拒绝，但会被**自动收敛到边界** —— 上限 100 时你给 +20 到 130，实际只会落到 100，'
         + '工具回执会明确告诉你「已收敛到上限」；看到这句就别再重复加了。');
-      lines.push('- 计数器可以在角色卡正文里直接写：`##Counter：好感度[0,100]`，`[]` 留空 = 不限。');
     } else {
-      lines.push('- 你还没有声明任何计数器。想用得先提议在你的「标准要求」里补一段计数器声明，'
-        + '每条写成 `##Counter：名字[0,100]`（`[]` 留空表示不限；用 propose_memory_edit，选 standards 这个文件）。');
+      lines.push('- 你和你的角色目前都还没有计数器。想用得两处之一：'
+        + '① 在**角色卡正文**里加一行 `##Counter：名字[0,100]`（用 propose_character_edit，`[]` 留空 = 不限）；'
+        + '② 在「标准要求」里声明一段（用 propose_memory_edit，选 standards 这个文件）。'
+        + '两者都只是提议，用户确认后才生效。');
     }
     lines.push('- 剧情里出现值得留存的变化（角色成长、关系变化、关键决定）时，用 '
       + 'propose_experience_commit 提议把这段经历**沉淀到角色卡**上，可以同时带上计数器的**增量**'
       + '（如 {"好感度": 5}，不要写绝对值）。');
     lines.push('- 同样只出提议、不落盘：用户确认后才写进角色卡。不要断言"我已经记下了"。');
-    lines.push('- 计数器只能写你声明过的名字；不要凭空造名字，也不要给没在场的角色沉淀经历。');
+    lines.push('- 计数器只能写上面列给你的名字（角色卡写了的、或你声明过的）；'
+      + '不要凭空造名字，也不要给没在场的角色沉淀经历。');
   }
 
   return lines.join('\n');
@@ -412,12 +426,17 @@ function listCharactersFor(bot, cfg) {
   const lines = all.map((x) => `- ${x.name}（id: ${x.id}）${active.has(x.id) ? ' ← 你当前选定' : ''}`
     + (x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : ''));
   let out = `【角色池】共 ${all.length} 位\n` + lines.join('\n');
-  // ★ 只列出**本写手声明过**的计数器名（同名共享、异名不引用），并带上范围
+  // ★ 名字来源两处（角色卡正文的 `##Counter：` ∪ 写手声明），但**按角色分开算**：
+  //   只有「本写手选定」的角色才把角色卡上的声明算进去 —— 池里别人的角色仍旧只认
+  //   本写手声明过的名字，否则 list_characters 就成了偷看别家私有计数器的窗口。
   const declaredSpecs = declaredCounterSpecsOf(bot.id);
   const declared = declaredSpecs.map((s) => s.name);
+  const shown = new Set();
   const rows = [];
   for (const x of all) {
-    const view = c.declaredView(x, declared);
+    const allow = active.has(x.id) ? c.counterNamesFor(x, declared) : declared;
+    for (const n of allow) shown.add(n);
+    const view = c.declaredView(x, allow);
     const specs = counterSpecsFor(bot.id, x);
     const ks = Object.keys(view);
     if (ks.length) {
@@ -425,10 +444,12 @@ function listCharactersFor(bot, cfg) {
     }
   }
   if (rows.length) {
-    out += `\n【计数器的当前值（只列你声明过的：${declaredSpecs.map((s) => c.describeCounterSpec(s)).join('、')}）】\n`
-      + rows.join('\n');
-  } else if (declared.length === 0) {
-    out += '\n【计数器】你还没有声明计数器（在「标准要求」里加一段 `##Counter：名字[0,100]` 即可）。';
+    out += '\n【计数器的当前值（名字来自角色卡正文的 `##Counter：` 或你的「标准要求」；'
+      + '池里非你选定的角色只看得到你声明过的那些）】\n' + rows.join('\n');
+  } else if (shown.size === 0) {
+    out += '\n【计数器】你还没有任何计数器。两处可以加：'
+      + '① 在**角色卡正文**里写一行 `##Counter：名字[0,100]`（跟着角色走，用 propose_character_edit）；'
+      + '② 在「标准要求」里声明一段（用 propose_memory_edit，选 standards 这个文件）。';
   }
   out += '\n【写权限】只有标了「← 你当前选定」的角色你能改设定 / 沉淀经历；'
     + '池里其他角色归别的写手。需要新人物请用 propose_character_create 提议新建（确认后自动归你）。';
@@ -553,7 +574,8 @@ async function chatWithBot(botId, content, opts = {}) {
       name: 'propose_experience_commit',
       description: '【写操作·需确认】把剧情里的一段经历沉淀到角色卡上（记「发生了什么」+ 计数器的增量变化）。'
         + '不会立刻生效——生成一条待确认建议，用户点「确认应用」后才写入。'
-        + 'counters 只填**你自己在写手设定里声明过**的计数器名，值是**增量**（好感度 +5 就填 5）。',
+        + 'counters 只填**上面列给你的**计数器名（这张角色卡正文 `##Counter：` 写明的，'
+        + '或你在「标准要求」里声明的），值是**增量**（好感度 +5 就填 5）。',
       parameters: {
         type: 'object',
         properties: {
@@ -561,7 +583,7 @@ async function chatWithBot(botId, content, opts = {}) {
           text: { type: 'string', description: '这条经历的一句话记述（如「在渡口与老张结盟，答应替他找船」）' },
           counters: {
             type: 'object',
-            description: '计数器的**增量**变化，如 {"好感度": 5}。只能填你声明过的名字；没有变化就省略。',
+            description: '计数器的**增量**变化，如 {"好感度": 5}。只能填上面列给你的名字（角色卡写明或你声明过的）；没有变化就省略。',
             additionalProperties: { type: 'number' },
           },
           reason: { type: 'string', description: '为什么要沉淀（一句话，展示给用户帮助判断）' },
@@ -871,8 +893,9 @@ async function chatWithBot(botId, content, opts = {}) {
       } else if (tc.function.name === 'propose_experience_commit') {
         // ★ 经历沉淀：同样只出待确认建议，不落盘。
         //   落盘走 POST /api/characters/:id/commit（内部调 characters.commitExperience）。
-        //   ★ 计数器名必须先过 filterDeclared —— 写手只能改自己声明过的名字，
-        //     否则它会把别的写手的私有计数器一起改了（「异名不引用」）。
+        //   ★ 计数器名必须先过 filterDeclared —— 允许名单 = **这张角色卡正文的
+        //     `##Counter：`** ∪ 本写手声明的名字（见 characters.counterNamesFor）。
+        //     名单外的一律丢掉，否则它会把别的写手的私有计数器一起改了（「异名不引用」）。
         const C = require('./lib/characters');
         const all = C.allOf(cfg);
         const ch = C.find(all, String(args.characterId || ''));
@@ -888,16 +911,18 @@ async function chatWithBot(botId, content, opts = {}) {
           const specs = counterSpecsFor(botId, ch);
           const raw = (args.counters && typeof args.counters === 'object' && !Array.isArray(args.counters))
             ? args.counters : {};
-          // ★ 先按「本写手声明过的名字」过滤（异名不引用），再按范围收敛。
+          // ★ 先按**这位角色的允许名单**过滤再按范围收敛 —— 名单 = 这张角色卡正文的
+          //   `##Counter：` ∪ 本写手声明的名字（「异名不引用」照旧：名单外的全丢）。
           //   收敛必须在**提议阶段**就做：这里算出来的值就是用户确认后真正会写进去的值。
-          const kept = C.filterDeclared(raw, declared);
+          const kept = C.filterDeclared(raw, C.counterNamesFor(ch, declared));
           const proj = C.projectCounters(ch.counters || {}, kept, specs);
           const deltas = proj.applied;
           const dropped = Object.keys(raw).filter((k) => !(k in kept));
           const text = String(args.text || '').trim().slice(0, 500);
           if (!text && !Object.keys(deltas).length) {
             content = '这条沉淀既没有经历内容、也没有有效的计数器变化，无法提交。'
-              + (dropped.length ? `（你给的 ${dropped.join('、')} 不是本写手声明过的计数器名，已忽略）` : '');
+              + (dropped.length ? `（你给的 ${dropped.join('、')} 不是「${ch.name}」能改的计数器名 ——`
+                + '要改就得先把它写进这张角色卡正文的 `##Counter：名字[范围]`，或在你自己的「标准要求」里声明）' : '');
           } else {
             const reason = String(args.reason || '').trim();
             const cur = ch.counters || {};
@@ -1437,7 +1462,10 @@ function buildAdminSystem(cfg, botId) {
   lines.push('- 计数器的**值**在**角色卡**上（全体写手共用一张表）；计数器的**规则**（名字/范围/何时增减）写在两处：'
     + '**角色卡正文里的 `##Counter：名字[最小,最大]`**（跟着角色走，优先），以及**写手的「标准要求」**（standards，写手自己声明用哪些）。'
     + '`[]` 留空或不写 = 不限。改数值用 propose_counter_edit（超出范围会被自动收敛到边界）；改规则要改角色卡正文或 standards 这个文件。');
-  lines.push('- ★ **同名共享、异名不引用**：两位写手都声明了「好感度」→ 它们读写同一个值；写手只看得见自己声明过的名字。所以给写手加计数器前，先看它已声明了哪些，别重复造同名。');
+  lines.push('- ★ **同名共享、异名不引用**：两位写手都声明了「好感度」→ 它们读写同一个值。'
+    + '写手能改的名字 = **它自己角色池里那些角色卡正文上 `##Counter：` 写明的** ∪ **它在「标准要求」里声明的**'
+    + '（卡上写了就归那位角色，写手不用再声明一遍）；池外角色卡上的私有计数器它看不到、也改不了。'
+    + '所以给写手加计数器前，先看它和它的角色卡已有哪些，别重复造同名。');
   lines.push('- **经历是追加式**的：不要「修改」历史条目，要改就删除后重加（propose_experience_edit 先 op=remove 再 op=add）。');
   lines.push('- 想知道角色现在什么状态，用 read_character_state 读它的计数器与经历，别凭印象猜。');
   lines.push('- ★ 角色卡是**纯文本**：设定写在角色卡正文里，图片不进正文 —— 只是以**链接**（avatar）挂在卡上。'

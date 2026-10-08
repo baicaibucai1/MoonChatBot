@@ -592,6 +592,62 @@ test('filterDeclared：非数字的增量被丢掉', () => {
   assert.deepEqual(characters.filterDeclared({ 好感度: 'abc' }, ['好感度']), {});
 });
 
+// ---------- ★★ counterNamesFor：角色卡正文声明 ∪ 写手声明 ----------
+//
+// 用户决策 2026-10-08：「角色的计数器应该是绑定在角色身上的，但是写手可以根据提示词的
+// 计数器创建计数器」→ 角色卡正文的 `##Counter：名字[范围]` **本身就是一处声明**，
+// 权限不能再只认写手那一份。下面第一条就是当初那个 bug 的回归测试。
+
+test('★ counterNamesFor：角色卡声明 + 写手没声明 → 仍然有权改（回归：原先被静默丢掉）', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', persona: '##Counter：好感度[0,100]' });
+  const allow = characters.counterNamesFor(c, []);       // 写手一个字都没声明
+  assert.deepEqual(allow, ['好感度'], '卡上写了就算数，写手不必再抄一遍');
+
+  // 权限生效的三个后果，缺一不可：
+  assert.deepEqual(characters.declaredView(c, allow), { 好感度: 0 }, '① 看得见（没记过 → 0）');
+  assert.deepEqual(characters.filterDeclared({ 好感度: 10 }, allow), { 好感度: 10 }, '② 提议不再被丢');
+  const s = characters.stateBrief(c, allow);
+  assert.ok(s.includes('好感度'), '③ 提示词里真的出现了');
+});
+
+test('counterNamesFor：两处取并集，角色卡在前、去重、去空格', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', persona: '##Counter：好感度[0,100]' });
+  assert.deepEqual(
+    characters.counterNamesFor(c, [' 好感度 ', '', '理智', '理智']),
+    ['好感度', '理智'],
+  );
+});
+
+test('counterNamesFor：卡上没写、写手也没声明 → 空（安全的一侧）', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', persona: '普通人格，没有计数器' });
+  assert.deepEqual(characters.counterNamesFor(c, []), []);
+  assert.deepEqual(characters.counterNamesFor(c, undefined), []);
+});
+
+test('counterNamesFor：写手单独声明（卡上没写）这条路仍然通 —— 老配置全靠它', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', persona: '普通人格' });
+  assert.deepEqual(characters.counterNamesFor(c, ['剑术']), ['剑术']);
+});
+
+test('counterNamesFor：范围以角色卡为准 —— 同名的写手声明不覆盖卡的 spec', () => {
+  const c = characters.normalizeCharacter({ id: 'CHR1', persona: '##Counter：好感度[0,10]' });
+  // 名字来自并集，但 counterSpecsFor 是另一件事：这里只验证名字集合不会把范围带歪
+  const specs = characters.characterCounterSpecs(c);
+  assert.equal(characters.findCounterSpec(specs, '好感度').max, 10);
+  assert.deepEqual(characters.counterNamesFor(c, ['好感度']), ['好感度']);
+});
+
+test('★★ counterNamesFor 是「按角色」算的：池外角色拿不到卡上声明的名字', () => {
+  // list_characters 里池外角色只传 declared，避免变成偷看别家私有计数器的窗口。
+  const mine = characters.normalizeCharacter({ id: 'CHR1', persona: '##Counter：好感度[0,100]' });
+  const other = characters.normalizeCharacter({ id: 'CHR2', persona: '##Counter：秘密[0,100]' });
+  assert.deepEqual(characters.counterNamesFor(mine, []), ['好感度']);
+  assert.deepEqual(characters.counterNamesFor(other, []), ['秘密'],
+    '函数本身会认；是否调用由调用点按「这位写手选没选定这个角色」决定');
+  // 调用点的口径：池外的只传写手声明 → 「秘密」被挡在外面
+  assert.deepEqual(characters.filterDeclared({ 秘密: 5 }, []), {});
+});
+
 // ---------- 写手声明从哪来 ----------
 
 test('parseDeclaredCounters：解析「含『计数』标题」的小节', () => {
@@ -842,18 +898,19 @@ test('removeExperience：按 id 删（同毫秒的两条也不会误伤）', () 
 
 // ---------- 给写手的 prompt 文本 ----------
 
-test('stateBrief：只显示写手声明过的计数器', () => {
+test('stateBrief：只显示允许名单里的计数器（名单外的别家私有值不出现）', () => {
   const c = characters.normalizeCharacter({ id: 'CHR1', name: '银', counters: { 好感度: 5, 别家的: 99 } });
   const s = characters.stateBrief(c, ['好感度']);
   assert.ok(s.includes('好感度 5'));
   assert.ok(!s.includes('别家的'));
 });
 
-test('stateBrief：声明为空但卡上有值 → 明确说「不归你管」，别让它去猜', () => {
+test('stateBrief：名单为空但卡上有值 → 明确说「不归你管」，并指出两处声明处', () => {
   const c = characters.normalizeCharacter({ id: 'CHR1', name: '银', counters: { 好感度: 5 } });
   const s = characters.stateBrief(c, []);
-  assert.ok(!s.includes('好感度'));
-  assert.ok(s.includes('未在「写手设定」里声明'));
+  assert.ok(!s.includes('好感度'), '名字本身不出现');
+  assert.ok(s.includes('不显示、也不改动计数'), '明确告诉它别去猜');
+  assert.ok(s.includes('##Counter：'), '告诉它怎么启用（角色卡正文写一行）');
 });
 
 test('stateBrief：带出最近经历，且只取最后 N 条', () => {
