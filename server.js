@@ -291,9 +291,11 @@ function clampedText(clamped) {
 
 function buildWriterBlock(cfg, bot) {
   const c = require('./lib/characters');
-  const all = c.allOf(cfg);
-  const activeIds = Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : [];
-  const active = activeIds.map((id) => c.find(all, id)).filter(Boolean);
+  // ★★ 写手的视野 = **自己专属池里的角色**（池 ↔ 写手 1:1，用户决策 2026-10-08）。
+  //   ⚠️ 别用 c.allOf(cfg)：那是**全局**名单，拿它当写手视野就是把别家写手笔下的
+  //   人物名字和 id 一并交给模型 —— 用户报的「角色池中的角色会干扰写手」正是这个。
+  const ownPool = c.poolOfBot(cfg, bot.id);
+  const active = c.charactersOfBot(cfg, bot);
   // ★ 带范围的规格（角色卡 `##Counter：名字[范围]` 优先，其次写手「标准要求」里的声明）
   const declaredSpecs = active.length ? declaredCounterSpecsOf(bot.id) : [];
   const declared = declaredSpecs.map((s) => s.name);
@@ -317,8 +319,9 @@ function buildWriterBlock(cfg, bot) {
   //   否则它只能靠名字猜，而名字可能重复/将来可能改。
   if (active.length) {
     lines.push('');
-    // ★ 带上「池中总数」：写手得知道自己池子外还有谁，才会去用 list_characters 而不是凭空造
-    lines.push(`【你的角色池（你选定 ${active.length} 位 / 池中 ${all.length} 位）】`);
+    // ★ 只报自己池里的人数和池名 —— **不报「池中总数」**：那个数以前指的是全局角色总数，
+    //   等于告诉写手「你池子外还有别人的人物」（1:1 之后不该有这个概念）。
+    lines.push(`【你的角色池（${active.length} 位）】${ownPool ? `「${ownPool.name}」` : ''}`);
     for (const ch of active) {
       lines.push('');
       lines.push(`（id: ${ch.id}）`);
@@ -328,17 +331,12 @@ function buildWriterBlock(cfg, bot) {
       const st = c.stateBrief(ch, c.counterNamesFor(ch, declared), { recent: 8, specs: counterSpecsFor(bot.id, ch) });
       if (st) lines.push(st);
     }
-  } else if (all.length) {
-    lines.push('');
-    lines.push(`【你的角色池（你选定 0 位 / 池中 ${all.length} 位）】当前没有选定要写的角色。可选：`
-      + all.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')
-      + (all.length > 20 ? ' …' : '')
-      + '。用户可以在面板（写手设置里的「这位写手的角色池」）勾选，'
-      + '你也可以用 propose_character_create 提议新建一位——确认后会自动进你的池子。');
   } else {
     lines.push('');
-    lines.push('【你的角色池（空）】还没有任何角色。你可以在剧情里创造人物，'
-      + '并用 propose_character_create 提议把他加进角色池（确认后自动归你）。');
+    lines.push('【你的角色池（空）】你目前没有任何角色 —— 池子是你自己的，别人的角色你不会看到，也不用管。'
+      + '剧情里需要新人物（主角、对手、路人）时，用 propose_character_create 提议建一位，'
+      + '用户确认后他会**直接进你的角色池**，你下一轮就能写他。'
+      + (ownPool ? `（你的专属池是「${ownPool.name}」；用户也可以在面板上把角色放进这个池。）` : ''));
   }
 
   // ---- 角色池的写权限（用户决策 2026-10-05：写手可以往**自己的角色池**里新建角色）----
@@ -346,13 +344,13 @@ function buildWriterBlock(cfg, bot) {
   lines.push('');
   lines.push('【关于你的角色池：新建与改写】');
   lines.push('- 新建：剧情里需要新人物（路人、对手、新登场者）时，用 propose_character_create 提议建一位。'
-    + '用户点了「确认应用」后，角色会进全局角色池，并**自动加到你的角色池**里，'
+    + '用户点了「确认应用」后，他会**直接进你的角色池**（那是你自己的池子），'
     + '你下一轮就能写他、也能给他沉淀经历。');
   lines.push('- 改写：用 propose_character_edit 改设定（成长、关系变化、补外表/背景）。'
-    + '**只能改你自己角色池里的角色** —— 改别人池里的角色会被拒绝（那是别的写手笔下的人物）。');
+    + '**只能改你自己角色池里的角色** —— 池外的角色你查不到、也改不了。');
   lines.push('- 两者都只是「提议」：用户确认才生效，改设定还会自动留档可回滚。'
     + '所以不要断言「我已经建好了 / 我已经改好了」，只说这是提议、等用户确认。');
-  lines.push('- 记不清角色 id 就先用 list_characters 查（它会标出哪些是你当前选定的）。');
+  lines.push('- 记不清角色 id 就先用 list_characters 查（它列出的都是你池里的）。');
 
   // ---- ③ 世界卡（用户决策 2026-10-05）----
   // ★ 世界设定本来就在 world.md 里（作为记忆文件注入），这里补的是**写权限说明**与
@@ -417,24 +415,29 @@ function buildWriterBlock(cfg, bot) {
   return lines.join('\n');
 }
 
-// 供写手的 list_characters 工具使用：返回角色池名单 + 当前写手选定了哪些
+// 供写手的 list_characters 工具使用：**只列自己专属池里的角色**（池 ↔ 写手 1:1）
 function listCharactersFor(bot, cfg) {
   const c = require('./lib/characters');
-  const all = c.allOf(cfg);
-  if (!all.length) return '角色池是空的。你可以在剧情中创造人物，并建议用户把他们加进池子。';
-  const active = new Set(Array.isArray(bot.activeCharacterIds) ? bot.activeCharacterIds : []);
-  const lines = all.map((x) => `- ${x.name}（id: ${x.id}）${active.has(x.id) ? ' ← 你当前选定' : ''}`
+  // ★★ 池外角色一律不出现 —— 名字、id、计数器都不。这是「写手不能查阅角色池之外的角色」
+  //   的落点：以前这里用 allOf(cfg) 把全局名单交出去，等于向写手泄露别家写手下的人物。
+  const mine = c.charactersOfBot(cfg, bot);
+  const pool = c.poolOfBot(cfg, bot.id);
+  if (!mine.length) {
+    return '【你的角色池（空）】你目前没有任何角色 —— 池子是你自己的，别人的角色你不会看到。'
+      + (pool ? `（你的专属池是「${pool.name}」。）` : '')
+      + '剧情里需要新人物时，用 propose_character_create 提议建一位，确认后会直接进你的角色池。';
+  }
+  const lines = mine.map((x) => `- ${x.name}（id: ${x.id}）`
     + (x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : ''));
-  let out = `【角色池】共 ${all.length} 位\n` + lines.join('\n');
-  // ★ 名字来源两处（角色卡正文的 `##Counter：` ∪ 写手声明），但**按角色分开算**：
-  //   只有「本写手选定」的角色才把角色卡上的声明算进去 —— 池里别人的角色仍旧只认
-  //   本写手声明过的名字，否则 list_characters 就成了偷看别家私有计数器的窗口。
+  let out = `【你的角色池】共 ${mine.length} 位${pool ? `（池名「${pool.name}」）` : ''}\n` + lines.join('\n');
+  // ★ 名字来源两处并集（角色卡正文的 `##Counter：` ∪ 写手声明）。池内每位都算「你的」，
+  //   所以不再有「池外角色只认 declared」那条分支 —— 隔离改由「谁能进这个名单」保证。
   const declaredSpecs = declaredCounterSpecsOf(bot.id);
   const declared = declaredSpecs.map((s) => s.name);
   const shown = new Set();
   const rows = [];
-  for (const x of all) {
-    const allow = active.has(x.id) ? c.counterNamesFor(x, declared) : declared;
+  for (const x of mine) {
+    const allow = c.counterNamesFor(x, declared);
     for (const n of allow) shown.add(n);
     const view = c.declaredView(x, allow);
     const specs = counterSpecsFor(bot.id, x);
@@ -444,15 +447,14 @@ function listCharactersFor(bot, cfg) {
     }
   }
   if (rows.length) {
-    out += '\n【计数器的当前值（名字来自角色卡正文的 `##Counter：` 或你的「标准要求」；'
-      + '池里非你选定的角色只看得到你声明过的那些）】\n' + rows.join('\n');
+    out += '\n【计数器的当前值（名字来自角色卡正文的 `##Counter：` 或你的「标准要求」）】\n' + rows.join('\n');
   } else if (shown.size === 0) {
     out += '\n【计数器】你还没有任何计数器。两处可以加：'
       + '① 在**角色卡正文**里写一行 `##Counter：名字[0,100]`（跟着角色走，用 propose_character_edit）；'
       + '② 在「标准要求」里声明一段（用 propose_memory_edit，选 standards 这个文件）。';
   }
-  out += '\n【写权限】只有标了「← 你当前选定」的角色你能改设定 / 沉淀经历；'
-    + '池里其他角色归别的写手。需要新人物请用 propose_character_create 提议新建（确认后自动归你）。';
+  out += '\n【写权限】上面这些**都是你的角色** —— 每一位都能改设定、沉淀经历、读写它的计数器。'
+    + '需要新人物请用 propose_character_create 提议新建（确认后直接进你的角色池）。';
   return out;
 }
 
@@ -792,18 +794,17 @@ async function chatWithBot(botId, content, opts = {}) {
         // ★ 只生成待确认建议，不落盘。落盘在用户点「确认应用」后走
         //   PUT /api/characters/:id（那条路由内部调 characters.update，自动留版本档）。
         const C = require('./lib/characters');
-        const all = C.allOf(cfg);
-        const ch = C.find(all, String(args.characterId || ''));
+        // ★★ 查找**就限定在自己池里**（不是全池找到再判权限）。
+        //   先全池 find 再拒绝，回执里必然要打出那位角色的名字 —— 那就是泄露。
+        //   池外的一律当成「没有这个 id」，名字和 id 都不回显。
+        const mine = C.charactersOfBot(cfg, bot);
+        const ch = C.find(mine, String(args.characterId || ''));
         if (!ch) {
-          content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`
-            + (all.length ? `当前池里有：${all.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')}` : '');
-        } else if (!(Array.isArray(bot.activeCharacterIds) && bot.activeCharacterIds.includes(ch.id))) {
-          // ★ 权限边界：写手只能改写**自己角色池里**的角色。
-          //   池外的角色属于别的写手笔下（或还没归任何人），让它擅自改会出现「谁改的」说不清。
-          const mine = (bot.activeCharacterIds || []).map((id) => C.find(all, id)).filter(Boolean);
-          content = `角色「${ch.name}」不在你的角色池里 —— 你只能改写自己选定的角色。`
-            + (mine.length ? `你当前能改的是：${mine.map((x) => `${x.name}(${x.id})`).join('、')}。` : '你当前没有选定任何角色。')
-            + '如果你确实需要写这位角色，请在正文里告诉用户，让他在写手设置里把这位角色勾给你。';
+          content = `你的角色池里没有 id 为 ${args.characterId || '（空）'} 的角色。`
+            + (mine.length
+              ? `你池里有：${mine.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')}。`
+              : '你的角色池目前是空的。')
+            + '请用 list_characters 核对 id；需要新人物就用 propose_character_create 提议新建（确认后直接进你的池）。';
         } else {
           const patch = C.buildEditPatch(args);
           if (!Object.keys(patch).length) {
@@ -828,15 +829,17 @@ async function chatWithBot(botId, content, opts = {}) {
       } else if (tc.function.name === 'propose_character_create') {
         // ★ 同样只出待确认建议，不落盘。落盘在用户点「确认应用」后走
         //   POST /api/characters（内部调 characters.create，首版自动进历史档）。
-        //   ★ payload 带 writerId：前端确认后要顺手 PUT /api/bots/:id/characters，
-        //     把新角色挂进这位写手的池子——否则建完它自己也写不了。
+        //   ★ payload 带 writerId：前端确认时带上它，角色就**直接建进这位写手的专属池**
+        //     （1:1 之后不再需要「建完再挂一次」那一步）。
         const C = require('./lib/characters');
         const nm = String(args.name ?? '').trim();
         if (!nm) {
           content = '角色名不能为空。请给出 name 后重试。';
         } else {
-          const all = C.allOf(cfg);
-          const dup = all.find((x) => String(x.name || '').trim() === nm);
+          // ★ 重名只在自己池里查：别家写手有哪些人物跟你无关，
+          //   查全局等于把别人的角色名回显给你（「角色池中的角色会干扰写手」）。
+          const mine = C.charactersOfBot(cfg, bot);
+          const dup = mine.find((x) => String(x.name || '').trim() === nm);
           const reason = String(args.reason || '').trim();
           if (opts.onPending) {
             try {
@@ -861,9 +864,9 @@ async function chatWithBot(botId, content, opts = {}) {
               }, `待确认：写手「${bot.name || bot.id}」新建角色「${nm}」`);
             } catch {}
           }
-          content = `已生成新建角色「${nm}」的建议，等待用户在面板确认（确认后会自动进你的角色池）。`
-            + (dup ? `注意：角色池里已经有一位叫「${nm}」的（id: ${dup.id}）。如果不是同一位请换个名字；`
-              + `如果是同一位、你想改他，请用 propose_character_edit（前提是他已在你的角色池里）。` : '')
+          content = `已生成新建角色「${nm}」的建议，等待用户在面板确认（确认后会直接进你的角色池）。`
+            + (dup ? `注意：你的池里已经有一位叫「${nm}」的（id: ${dup.id}）。如果不是同一位请换个名字；`
+              + '如果是同一位、你想改他，请用 propose_character_edit。' : '')
             + '请以「提议」的口吻告知用户，不要说「已经建好了」。';
         }
       } else if (tc.function.name === 'propose_world_change') {
@@ -897,14 +900,16 @@ async function chatWithBot(botId, content, opts = {}) {
         //     `##Counter：`** ∪ 本写手声明的名字（见 characters.counterNamesFor）。
         //     名单外的一律丢掉，否则它会把别的写手的私有计数器一起改了（「异名不引用」）。
         const C = require('./lib/characters');
-        const all = C.allOf(cfg);
-        const ch = C.find(all, String(args.characterId || ''));
+        // ★★ 同 propose_character_edit：**查找就限定在自己池里**，池外的一律当「没有这个 id」——
+        //   否则回执里会带出别家角色的名字，等于泄露。
+        const mine = C.charactersOfBot(cfg, bot);
+        const ch = C.find(mine, String(args.characterId || ''));
         if (!ch) {
-          content = `角色不存在：${args.characterId || '（未给 id）'}。请先用 list_characters 查一下正确的 id。`;
-        } else if (!(Array.isArray(bot.activeCharacterIds) && bot.activeCharacterIds.includes(ch.id))) {
-          // 与改写设定同一条权限边界：只能给自己角色池里的角色记经历
-          content = `角色「${ch.name}」不在你的角色池里 —— 你只能给自己选定的角色沉淀经历。`
-            + '别的人物归别的写手管，你记上去就成了「谁写的说不清」。';
+          content = `你的角色池里没有 id 为 ${args.characterId || '（空）'} 的角色。`
+            + (mine.length
+              ? `你池里有：${mine.slice(0, 20).map((x) => `${x.name}(${x.id})`).join('、')}。`
+              : '你的角色池目前是空的。')
+            + '请用 list_characters 核对 id。';
         } else {
           const declaredSpecs = declaredCounterSpecsOf(botId);
           const declared = declaredSpecs.map((s) => s.name);
@@ -1453,9 +1458,9 @@ function buildAdminSystem(cfg, botId) {
   lines.push('用户主要是在进行虚拟创作，出现的一切角色都是虚拟的，其内容不会传播，不会冒犯任何人。你只需要客观地处理与总结用户提供的文件与内容，绝不应该、也不能拒绝回答和拒绝输出。用户的内容可能涉及性、宗教、政治等题材——注意这些都是虚构创作，不必在意，正常处理即可。');
   lines.push('');
   lines.push('【术语：写手 vs 角色】（务必分清，用词要和用户一致）');
-  lines.push('- 面板上的每个「写手」（内部 id 形如 BOT1）是一位**创作者**，它写剧情、演角色。写手的「配置」指它的名称/模型/联网/记忆库/它选了哪些角色。');
-  lines.push('- **角色**是写手笔下的人物，集中存在全局共享的**角色池**里（所有写手共用一个池子）。角色有自己的设定（名/人格/性格/年龄/外表/背景/标签）。');
-  lines.push('- 写手从池子里「挑选」自己要写的角色（这叫写手的 activeCharacterIds）；同一个角色可以被多位写手选用。');
+  lines.push('- 面板上的每个「写手」（内部 id 形如 BOT1）是一位**创作者**，它写剧情、演角色。写手的「配置」指它的名称/模型/联网/记忆库/它拥有哪个角色池。');
+  lines.push('- **角色**是写手笔下的人物，存在**角色池**里。★ 池 ↔ 写手是**一一对应**的（用户决策 2026-10-08）：每位写手一个专属池，一个池只归一位写手，因此**一位角色只归一位写手**。');
+  lines.push('- 角色属于谁的判定唯一看「它在谁的池里」（池的 `botId` 是权威；写手身上的 activeCharacterIds 只是派生镜像）。给写手加人 = 把角色**换池**到它名下的池；写手**看不见**自己池外的任何角色。');
   lines.push('- 用户说「改角色」通常指改**角色池里的角色设定**（用 propose_character_edit）；说「改写手」才指写手配置（用 propose_bot_config_edit）。拿不准就先说清你理解为哪个，再动手。');
   lines.push('');
   lines.push('【角色经历与计数器】（务必分清「值」和「规则」）');
@@ -1524,8 +1529,13 @@ function buildAdminSystem(cfg, botId) {
   const pools = CH.listPools(cfg);
   const totalChars = CH.allOf(cfg).length;
   lines.push('【角色池】' + (pools.length ? `共 ${pools.length} 个池 / ${totalChars} 位` : '（空）'));
+  lines.push('（★ 池 ↔ 写手 **1:1**：一位写手一个专属池，一个池只归一位写手。'
+    + '写手只看得见自己池里的角色 —— 别家写手笔下的角色对它完全不可见。'
+    + '要给人，就把角色**换池**到那位写手名下的池；「无主」的池没人看得见。）');
   for (const p of pools) {
-    lines.push(`- 池「${p.name}」：${(p.characters || []).length} 位`);
+    const owner = (cfg.bots || []).find((b) => b.id === p.botId);
+    lines.push(`- 池「${p.name}」：${(p.characters || []).length} 位　`
+      + `[${owner ? `归写手 ${owner.name || owner.id}（${owner.id}）` : '无主 —— 没有写手看得见'}]`);
     for (const c of p.characters || []) {
       const tags = c.tags && c.tags.length ? ` [${c.tags.join('/')}]` : '';
       lines.push(`  · ${c.name}（${c.id}）${tags}${c.age ? ' ' + c.age : ''}`);
@@ -1910,7 +1920,7 @@ function adminToolSchemas(webEnabled) {
             historyLimit: { type: 'number', description: '历史记忆条数（可选）' },
             webSearch: { type: 'boolean', description: '联网开关（可选，true/false）' },
             searchMode: { type: 'string', description: '搜索方式 auto/light/browser（可选）' },
-            activeCharacterIds: { type: 'array', items: { type: 'string' }, description: '该写手选定的角色 id 列表（可选，会过滤掉不存在的 id）' },
+            activeCharacterIds: { type: 'array', items: { type: 'string' }, description: '（已废弃，别用）写手的角色由它的专属池决定（池 ↔ 写手 1:1）；要改归属请换池，传这个字段会被拒绝' },
           },
           required: ['id'],
         },
@@ -1955,7 +1965,8 @@ function adminToolSchemas(webEnabled) {
       type: 'function',
       function: {
         name: 'list_characters',
-        description: '查看角色池里有哪些角色（返回 id、名字、标签、年龄、被哪些写手选用）。角色池是全体写手共用的。',
+        description: '查看角色池里有哪些角色（返回 id、名字、标签、年龄、**归哪位写手**）。'
+          + '池 ↔ 写手一一对应：一位角色只归一位写手（住在它的专属池里），标注「无主」的角色没有任何写手看得见。',
         parameters: { type: 'object', properties: {}, required: [] },
       },
     },
@@ -2272,13 +2283,20 @@ async function runAdminTool(cfg, name, args = {}) {
   if (name === 'propose_bot_config_edit') {
     const b = mustBot(args.id);
     const upd = {};
-    for (const k of ['name', 'modelId', 'historyLimit', 'webSearch', 'searchMode', 'avatar', 'sandbox', 'kind', 'activeCharacterIds']) {
+    // ★ activeCharacterIds **不在**这里：1:1 之后它是由「写手专属池」派生的镜像
+    //   （见 lib/characters.js 的 syncPoolCharacters）。管理员直接改它，会在下一次
+    //   同步时被静默覆盖 —— 那正是最难查的一类「改了没反应」。要给人就换池。
+    for (const k of ['name', 'modelId', 'historyLimit', 'webSearch', 'searchMode', 'avatar', 'sandbox', 'kind']) {
       if (args[k] !== undefined && args[k] !== null) upd[k] = args[k];
     }
-    // activeCharacterIds 只收池里真实存在的 id（防悬空引用）
-    if (Array.isArray(upd.activeCharacterIds)) {
-      const valid = new Set((require('./lib/characters').allOf(cfg)).map((x) => x.id));
-      upd.activeCharacterIds = upd.activeCharacterIds.map((x) => String(x)).filter((x) => valid.has(x));
+    if (args.activeCharacterIds !== undefined) {
+      return {
+        text: '写手的角色由它的**专属池**决定（池 ↔ 写手 1:1），不能直接改 activeCharacterIds ——'
+          + '即使改了，下一次同步也会被覆盖回池里的内容。要把角色给某位写手，'
+          + '请用 POST /api/pools/move 把角色**换池**到那位写手名下的池（面板「角色池」页也能做）。',
+        summary: '改角色归属请换池',
+        pending: null,
+      };
     }
     const payload = { type: 'bot', payload: { id: b.id, ...upd } };
     const keys = Object.keys(upd).join('、') || '（无字段）';
@@ -2298,28 +2316,27 @@ async function runAdminTool(cfg, name, args = {}) {
   }
 
   // 管理员侧：列出角色池
+  // ★ 管理员看得见全局（这是它的职责），但「谁在用」改成按**池的归属**算 —— 1:1 之后
+  //   「被某位写手选用」等价于「住在它的专属池里」，不再有「共用」的概念。
   if (name === 'list_characters') {
     const c = require('./lib/characters');
     const all = c.allOf(cfg);
-    // 谁在用这个角色（反过来标出来，管理员才知道改动会影响哪些写手）
-    const usedBy = new Map();
-    for (const b of cfg.bots || []) {
-      for (const cid of b.activeCharacterIds || []) {
-        if (!usedBy.has(cid)) usedBy.set(cid, []);
-        usedBy.get(cid).push(b.name || b.id);
-      }
-    }
     const lines = all.map((x) => {
       const tags = x.tags && x.tags.length ? ` [${x.tags.join('/')}]` : '';
-      const users = usedBy.get(x.id);
-      const by = users && users.length ? `；被 ${users.join('、')} 选用` : '；暂未被任何写手选用';
+      const p = c.poolOfChar(cfg, x.id);
+      const owner = p && p.botId ? (cfg.bots || []).find((b) => b.id === p.botId) : null;
+      const by = p
+        ? `；在池「${p.name}」${owner ? `，归写手 ${owner.name || owner.id}` : '，**无主**（没有写手看得见它）'}`
+        : '；**没在任何池里**（异常，建议排查）';
       const hist = (x.history || []).length;
       const nc = Object.keys(x.counters || {}).length;
       const ne = (x.experiences || []).length;
       const stats = [nc ? `计数器 ${nc} 个` : '', ne ? `经历 ${ne} 条` : ''].filter(Boolean).join('、');
       return `- ${x.name}（id: ${x.id}）${tags}${x.age ? ' ' + x.age : ''}${by}${hist ? `，${hist} 个历史版本` : ''}${stats ? `，${stats}` : ''}`;
     });
-    const text = lines.length ? `【角色池】共 ${all.length} 位（全体写手共用）\n` + lines.join('\n') : '【角色池】（空）';
+    const text = lines.length
+      ? `【角色池】共 ${all.length} 位（池 ↔ 写手 1:1；写手只看得到自己池里的）\n` + lines.join('\n')
+      : '【角色池】（空）';
     return { text, summary: `角色池 ${all.length} 位`, pending: null };
   }
 

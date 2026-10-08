@@ -215,30 +215,51 @@ test('换池到不存在的池 / 不存在的角色都要报错而不是静默',
   assert.equal(C.moveCharacter(cfg, c.id, def.id).moved, false, '原地不动应标记未移动');
 });
 
-// ---------- 写手绑池 = 批量拿到角色 ----------
+// ---------- 池 ↔ 写手：1:1（用户决策 2026-10-08「角色池对应写手」）----------
+//
+// ★ 权威是 `pool.botId`；bot.poolIds / activeCharacterIds 都是**派生镜像**，
+//   由 syncPoolCharacters 重算。所以下面每个用例都断言「同步之后」的值。
 
-test('★ 绑池即批量：池内角色自动进 activeCharacterIds', () => {
-  const cfg = fresh([{ id: 'BOT1', name: '异世界' }]);
+test('★ 每位写手自动获得一个专属池（没有任何池的写手会被补一个）', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }, { id: 'BOT2', name: '洛天' }]);
   C.ensurePools(cfg);
-  const p = C.createPool(cfg, { name: '校园组' });
+  C.syncPoolCharacters(cfg);
+
+  const p1 = C.poolOfBot(cfg, 'BOT1');
+  const p2 = C.poolOfBot(cfg, 'BOT2');
+  assert.ok(p1 && p2, '两位写手都有池');
+  assert.notEqual(p1.id, p2.id, '各是各的池，不共用');
+  assert.equal(p1.name, '归云的池');
+  assert.deepEqual(cfg.bots[0].poolIds, [p1.id]);
+  assert.deepEqual(cfg.bots[1].poolIds, [p2.id]);
+  // 幂等：再同步一次不该再造池
+  const n = C.syncPoolCharacters(cfg);
+  assert.equal(n, 0, '第二次同步无事可做');
+  // 3 个 = ensurePools 兜底的「默认池」（固定 id、无主、空）+ 两位写手各一个。
+  // 兜底池留着是有意的：它保「至少有一个池」这条不变量（removePool / 整份 PUT 都靠它），
+  // 也是历史角色迁入的落点 —— 无主池对写手不可见，所以留着没有副作用。
+  assert.equal(C.listPools(cfg).length, 3);
+  assert.equal(C.findPool(cfg, C.DEFAULT_POOL_ID).botId, '', '兜底池无主');
+  assert.equal(C.charactersOfBot(cfg, cfg.bots[0]).length, 0, '写手看不到兜底池里的东西');
+});
+
+test('★ 专属池即批量：池内角色自动进 activeCharacterIds', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }]);
+  C.ensurePools(cfg);
+  const p = C.createPool(cfg, { name: '归云的池', botId: 'BOT1' });
   const c1 = C.create(p.characters, { name: '银' }, 'user');
   const c2 = C.create(p.characters, { name: '顺顺' }, 'user');
-  cfg.bots[0].poolIds = [p.id];
 
   C.syncPoolCharacters(cfg);
-  assert.deepEqual(
-    cfg.bots[0].activeCharacterIds.slice().sort(),
-    [c1.id, c2.id].sort(),
-    '池内角色应全部展开到写手身上',
-  );
+  assert.deepEqual(cfg.bots[0].activeCharacterIds.slice().sort(), [c1.id, c2.id].sort(),
+    '池内角色应全部展开到写手身上');
 });
 
 test('★ 池里后加的角色，写手同步后也能看到（不是一次性快照）', () => {
-  const cfg = fresh([{ id: 'BOT1', name: '异世界' }]);
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }]);
   C.ensurePools(cfg);
-  const p = C.createPool(cfg, { name: '校园组' });
+  const p = C.createPool(cfg, { name: '归云的池', botId: 'BOT1' });
   C.create(p.characters, { name: '银' }, 'user');
-  cfg.bots[0].poolIds = [p.id];
   C.syncPoolCharacters(cfg);
   const before = cfg.bots[0].activeCharacterIds.length;
 
@@ -248,25 +269,66 @@ test('★ 池里后加的角色，写手同步后也能看到（不是一次性�
   assert.ok(cfg.bots[0].activeCharacterIds.includes(c2.id));
 });
 
-test('解绑池后同步：池内角色从写手身上撤掉，单独添加的不动', () => {
-  const cfg = fresh([{ id: 'BOT1', name: '异世界' }]);
+test('★ 换池即换归属：角色换到别人池里，原写手立刻看不见、新写手看得见', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }, { id: 'BOT2', name: '洛天' }]);
   C.ensurePools(cfg);
-  const p = C.createPool(cfg, { name: '校园组' });
-  const inPool = C.create(p.characters, { name: '银' }, 'user');
-  const def = C.listPools(cfg)[0];
-  const solo = C.create(def.characters, { name: '独行侠' }, 'user');
-
-  const b = cfg.bots[0];
-  b.poolIds = [p.id];
-  b.activeCharacterIds = [solo.id];
+  const p1 = C.createPool(cfg, { name: '归云的池', botId: 'BOT1' });
+  const p2 = C.createPool(cfg, { name: '洛天的池', botId: 'BOT2' });
+  const ch = C.create(p1.characters, { name: '银' }, 'user');
   C.syncPoolCharacters(cfg);
-  assert.ok(b.activeCharacterIds.includes(inPool.id));
-  assert.ok(b.activeCharacterIds.includes(solo.id));
+  assert.deepEqual(cfg.bots[0].activeCharacterIds, [ch.id]);
+  assert.deepEqual(cfg.bots[1].activeCharacterIds, []);
 
-  b.poolIds = [];
+  C.moveCharacter(cfg, ch.id, p2.id);
   C.syncPoolCharacters(cfg);
-  assert.equal(b.activeCharacterIds.includes(inPool.id), false, '解绑后池内角色应撤掉');
-  assert.ok(b.activeCharacterIds.includes(solo.id), '单独添加的角色必须保留');
+  assert.deepEqual(cfg.bots[0].activeCharacterIds, [], '原写手看不见了');
+  assert.deepEqual(cfg.bots[1].activeCharacterIds, [ch.id], '新写手看得见了');
+  assert.equal(C.allOf(cfg).length, 1, '换池是移动不是复制');
+});
+
+test('★ 写手删掉后：它的池变无主，但**角色一个不删**', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }]);
+  C.ensurePools(cfg);
+  const p = C.createPool(cfg, { name: '归云的池', botId: 'BOT1' });
+  const ch = C.create(p.characters, { name: '银' }, 'user');
+  C.syncPoolCharacters(cfg);
+
+  cfg.bots = [];                 // 写手被删
+  const n = C.syncPoolCharacters(cfg);
+  assert.ok(n > 0, '配置被改动了 → 调用方要落盘');
+  assert.equal(C.findPool(cfg, p.id).botId, '', '池变无主');
+  assert.equal(C.allOf(cfg).length, 1, '角色还在（宁可无主也不静默丢数据）');
+  assert.equal(C.findAny(cfg, ch.id).name, '银');
+});
+
+test('★ 一位写手却有两个池（历史数据）→ 只留第一个，其余置空不删', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }]);
+  cfg.characterPools = [
+    { id: 'POOLa', name: 'A', botId: 'BOT1', characters: [] },
+    { id: 'POOLb', name: 'B', botId: 'BOT1', characters: [] },
+  ];
+  C.syncPoolCharacters(cfg);
+  assert.equal(C.findPool(cfg, 'POOLa').botId, 'BOT1');
+  assert.equal(C.findPool(cfg, 'POOLb').botId, '', '第二个池置空，但池本身留着');
+  assert.deepEqual(cfg.bots[0].poolIds, ['POOLa']);
+});
+
+test('assignPoolToBot：认领无主池 OK；抢别人的池 / 建第二个池都拒绝', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }, { id: 'BOT2', name: '洛天' }]);
+  C.ensurePools(cfg);
+  const orphan = C.createPool(cfg, { name: '无主的' });
+
+  assert.equal(C.assignPoolToBot(cfg, orphan.id, 'BOT1').ok, true, '无主池可认领');
+  assert.equal(C.poolOfBot(cfg, 'BOT1').id, orphan.id);
+
+  const r2 = C.assignPoolToBot(cfg, orphan.id, 'BOT2');
+  assert.equal(r2.ok, false, '已经有主的池不能被抢');
+  assert.match(r2.err, /归写手/);
+
+  const orphan2 = C.createPool(cfg, { name: '又一个无主的' });
+  const r3 = C.assignPoolToBot(cfg, orphan2.id, 'BOT1');
+  assert.equal(r3.ok, false, '一位写手只能有一个池');
+  assert.match(r3.err, /已经有专属池/);
 });
 
 test('同步会顺手清掉指向已删角色的悬空 id', () => {
@@ -274,26 +336,28 @@ test('同步会顺手清掉指向已删角色的悬空 id', () => {
   C.ensurePools(cfg);
   cfg.bots[0].activeCharacterIds = ['CHR早就删了'];
   C.syncPoolCharacters(cfg);
-  assert.deepEqual(cfg.bots[0].activeCharacterIds, []);
+  assert.deepEqual(cfg.bots[0].activeCharacterIds, [], '派生字段会按池重算，悬空 id 自然消失');
 });
 
-test('charSource：来自已绑定池的角色不可单独移除', () => {
-  const cfg = fresh([{ id: 'BOT1', name: '异世界' }]);
+test('charSource：1:1 之后任何角色都不能从写手身上单独移除，并报出归属', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }, { id: 'BOT2', name: '洛天' }]);
   C.ensurePools(cfg);
-  const def = C.listPools(cfg)[0];
-  const other = C.createPool(cfg, { name: '别的组' });
-  const c1 = C.create(def.characters, { name: '银' }, 'user');
-  const c2 = C.create(other.characters, { name: '顺顺' }, 'user');
+  const mine = C.createPool(cfg, { name: '归云的池', botId: 'BOT1' });
+  const theirs = C.createPool(cfg, { name: '洛天的池', botId: 'BOT2' });
+  const c1 = C.create(mine.characters, { name: '银' }, 'user');
+  const c2 = C.create(theirs.characters, { name: '顺顺' }, 'user');
   const b = cfg.bots[0];
-  b.poolIds = [def.id];
 
   const s1 = C.charSource(cfg, b, c1.id);
   assert.equal(s1.from, 'pool');
-  assert.equal(s1.detachable, false, '来自已绑定池 → 不允许单独移除（同步会加回来）');
+  assert.equal(s1.detachable, false);
+  assert.equal(s1.mine, true, '这是它自己池里的角色');
+  assert.equal(s1.ownerId, 'BOT1');
 
   const s2 = C.charSource(cfg, b, c2.id);
-  assert.equal(s2.from, 'direct');
-  assert.equal(s2.detachable, true);
+  assert.equal(s2.detachable, false, '池外角色也不能「移除」——它本来就不属于这位写手');
+  assert.equal(s2.mine, false);
+  assert.equal(s2.ownerId, 'BOT2', '面板据此显示「归 洛天」');
 });
 
 // ---------- 路由顺序 ----------

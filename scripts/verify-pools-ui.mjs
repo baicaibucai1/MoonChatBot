@@ -1,24 +1,32 @@
-// 真机验证：多角色池的前端 UI（角色栏 + 写手标签页 + 写手设置弹窗）
+// 真机验证：角色池的前端 UI（角色栏 + 写手标签页 + 写手设置弹窗）—— **1:1 语义**
+//
+// ★★ 2026-10-08 语义变更（用户：「角色池中的角色会干扰写手，应该改为角色池对应写手」）：
+//   池 ↔ 写手 **一一对应**，写手只看得到自己池里的角色。
+//   于是这份脚本原先验证的三样东西**已经不存在**，整段换掉：
+//     · 「新建池」按钮（池跟着写手生，不跟着按钮生）
+//     · 写手标签页的「绑定条」+ 点一下批量绑池
+//     · 写手设置里「池给的勾选项锁死」（勾选框本身没了；池给的 = 全部，只读展示）
+//   换成了：池归谁的展示、只读的专属池、换池是唯一改归属的入口、有主的池删不掉。
 //
 // 为什么必须用真浏览器：
 //   本轮前端改的是**模板字符串 + 内联 onclick**，语法检查（node --check）只能证明
 //   「文件能解析」，证明不了：
 //     · poolBarHtml 真的被插进了卡片头部（不是写了函数却忘了用）
-//     · 池切换后重绘的是列表而不是整个页面（否则搜索框每敲一个字就失焦）
+//     · 侧栏 / 池 chip 真的标出了「归谁 / 无主」（用错数据源就会全写「无主」）
+//     · 写手「角色」页真的只渲染自己池里的人（这是用户报的那个 bug 的界面侧）
 //     · 行尾「换池」下拉真的把角色搬过去了（POST /api/pools/move 走了没）
-//     · 池给的勾选项**真的被锁死**（disabled + checked）—— 否则用户取消勾选保存后
-//       同步又把它加回来，看起来像「取消勾选没用」
-//     · 删池的三选一弹窗真的出来了（池非空时必须让人明确选「搬走」还是「一起删」）
+//     · 有主的池 UI 上真的没有「删除池」按钮（服务端 400 只是兜底）
 //   这些只有真机点一遍才知道。
 //
 // 验证点：
-//   ① 角色栏顶部池切换条：全部 / 每个池 / 新建池，计数正确
-//   ② 新建池（走真弹窗输入，不是直接调 API）
+//   ① 角色栏顶部池切换条：全部 / 每个池（带归属）/ **没有**「新建池」
+//   ①b 侧栏池列表：每池一条 + 「归 X / 无主」+ 没有 #btn-add-pool
+//   ② 加一位写手后，它自动有池，侧栏与切换条都跟着长出「归 阿雪」那条
 //   ③ 池空时的空状态文案 + 「新建角色」落在**当前池**（不是第一个池）
-//   ④ 行尾「换池」下拉把角色搬走，两边计数同步变化
-//   ⑤ 写手「角色」标签页：绑定条存在、点一下即批量绑池、池给的角色标「池 · xxx」且不可单独移除
-//   ⑥ 写手设置弹窗：池给的勾选项被锁死（disabled + checked），勾选集里也有绑定条
-//   ⑦ 删池：空池走确认框；非空池走三选一（搬走 / 一起删）
+//   ④ 行尾「换池」下拉：选项标出每个池归谁；换池后两边计数同步
+//   ⑤ 写手「角色」标签页：只列自己池里的人、只有一块只读的专属池、没有可点绑定条 / 移除按钮
+//   ⑥ 写手设置弹窗：专属池只读展示，**没有勾选框**
+//   ⑦ 删池：有主的池没有「删除池」按钮；无主池有，非空时走二选一（搬走 / 一起删）
 //   ⑧ 全程无 JS 错误
 //
 // 用法：node scripts/verify-pools-ui.mjs
@@ -53,8 +61,12 @@ async function main() {
     const BASE = srv.base;
     console.log(`沙箱已启动 ${BASE}\n`);
 
+    const cfgPath = path.join(dir, 'config.json');
     const getState = async () => (await fetch(`${BASE}/api/state`)).json();
     const getPools = async () => ((await (await fetch(`${BASE}/api/pools`)).json()).pools) || [];
+    const put = async (url, body) => (await fetch(BASE + url, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })).json();
 
     browser = await chromium.launch(fs.existsSync(CHROME) ? { executablePath: CHROME } : {});
     const page = await browser.newPage({ viewport: { width: 1360, height: 940 } });
@@ -67,7 +79,6 @@ async function main() {
 
     const st0 = await getState();
     const botId = (st0.bots || [])[0].id;
-    // 取文本的「可能不存在」版本：断言失败时要报 ✗，不能因为选择器等不到而直接抛异常
     const txtOf = async (sel) => { const el = await page.$(sel); return el ? (await el.textContent()) : ''; };
     const activePoolChip = () => txtOf('.pool-chip.active');
     const activeSideItem = () => txtOf('#pool-list .side-item.active');
@@ -79,16 +90,20 @@ async function main() {
     check('出现了池切换条 .pool-bar', !!(await page.$('.pool-bar')));
     check('有「全部」chip', /全部/.test(await page.textContent('.pool-bar')));
     check('有「默认池」chip', /默认池/.test(await page.textContent('.pool-bar')));
-    check('有「新建池」按钮', !!(await page.$('.pool-chip.pool-add')));
-    const allChip = await page.textContent('.pool-chip.active');
-    check('「全部」默认高亮（_curPoolId 为空）', /全部/.test(allChip), allChip.trim());
-    const defChipTxt = await page.locator('.pool-chip', { hasText: '默认池' }).first().textContent();
-    check('默认池 chip 带计数 1', /1/.test(defChipTxt), defChipTxt.trim());
+    check('★★ 没有「新建池」按钮（池跟着写手生，不跟着按钮生）', !(await page.$('.pool-chip.pool-add')));
+    const defChip = await page.locator('.pool-chip', { hasText: '默认池' }).first();
+    check('默认池 chip 带计数 1', /1/.test(await defChip.textContent()), (await defChip.textContent()).trim());
+    check('★ 默认池 chip 的 title 标出归谁',
+      /归|专属池|探针写手/.test(await defChip.getAttribute('title')),
+      await defChip.getAttribute('title'));
+    check('「全部」默认高亮（_curPoolId 为空）', /全部/.test(await activePoolChip()),
+      (await activePoolChip()).trim());
     check('「全部」视图下能看到探针角色', /探针角色/.test(await page.textContent('#main')));
+    check('★ 页头说明写清「池 ↔ 写手一一对应」',
+      /一一对应/.test(await page.textContent('.ch-card')), '');
     await page.screenshot({ path: path.join(SHOT, 'verify-pools-1-bar.png') });
 
     // ───────────────────── ①b 侧栏池列表 ─────────────────────
-    // 侧栏原本只有一条写死的「角色池」，多池之后必须按池列出来。
     console.log('\n[1b] 侧栏池列表');
     check('侧栏有 #pool-list 容器', !!(await page.$('#pool-list')));
     const sideRows1 = await page.$$('#pool-list .side-item');
@@ -96,179 +111,176 @@ async function main() {
     let sideTxt = await page.textContent('#pool-list');
     check('侧栏列出「默认池」', /默认池/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
     check('侧栏条目带角色数', /1 位角色/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
-    check('侧栏有「新建池」按钮 #btn-add-pool', !!(await page.$('#btn-add-pool')));
+    check('★★ 侧栏条目标出「归 探针写手」', /归\s*探针写手/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
+    check('★★ 没有「新建池」按钮 #btn-add-pool', !(await page.$('#btn-add-pool')));
     check('侧栏仍有「新建角色」按钮 #btn-add-char', !!(await page.$('#btn-add-char')));
-    // 侧栏的新建池按钮要真的接上（打开后取消，不留副作用）
-    await page.click('#btn-add-pool');
-    await page.waitForTimeout(500);
-    check('★ 侧栏「新建池」按钮真的弹出输入框', !!(await page.$('#ui-prompt')));
-    await page.click('#pf-no');
-    await page.waitForTimeout(400);
 
-    // ───────────────────── ② 新建池（真弹窗）─────────────────────
-    console.log('\n[2] 新建池（真弹窗输入）');
-    await page.click('.pool-chip.pool-add');
-    await page.waitForTimeout(400);
-    check('弹出输入框 #ui-prompt', !!(await page.$('#ui-prompt')));
-    await page.fill('#pf-input', '校园组');
-    await page.click('#pf-ok');
+    // ───────────────────── ② 加一位写手 → 自动有池 ─────────────────────
+    console.log('\n[2] 加一位写手（走 API）→ 它自动获得专属池');
+    const rawCfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const b2 = {
+      ...JSON.parse(JSON.stringify(rawCfg.bots[0])),
+      id: 'BOT2', name: '阿雪', poolIds: [], activeCharacterIds: [], poolCharacterIds: [],
+    };
+    await put('/api/config', { bots: [rawCfg.bots[0], b2] });
+    await page.evaluate(() => window.loadState && window.loadState());
     await page.waitForTimeout(1000);
-    check('新池出现在切换条', /校园组/.test(await page.textContent('.pool-bar')));
-    const active2 = await page.textContent('.pool-chip.active');
-    check('★ 新建后自动切到新池（不是留在「全部」）', /校园组/.test(active2), active2.trim());
-    const pools2 = await getPools();
-    check('后端真的多了一个池（共 2 个）', pools2.length === 2, `实际 ${pools2.length}`);
-    const CAMP = (pools2.find((p) => p.name === '校园组') || {}).id;
-    check('新池是空的（count 0）', pools2.find((p) => p.name === '校园组').count === 0);
+    const P2 = ((await getPools()).find((p) => p.botName === '阿雪') || {}).id;
+    check('★ 新写手自动有池（用户不用手点）', !!P2, JSON.stringify((await getPools()).map((p) => [p.id, p.botName])));
+    // 切到「全部」再检查两处列表
+    await page.evaluate(() => window.openCharacterPool());
+    await page.waitForTimeout(800);
+    const barTxt = await page.textContent('.pool-bar');
+    check('切换条长出「阿雪的池」', /阿雪的池/.test(barTxt), barTxt.replace(/\s+/g, ' ').trim());
     const sideRows2 = await page.$$('#pool-list .side-item');
-    check('★ 多于 1 个池后侧栏变 3 条（全部角色 + 默认池 + 校园组）', sideRows2.length === 3, `实际 ${sideRows2.length}`);
+    check('★ 多于 1 个池后侧栏变 3 条（全部角色 + 两个池）', sideRows2.length === 3, `实际 ${sideRows2.length}`);
     sideTxt = await page.textContent('#pool-list');
-    check('侧栏出现「全部角色」总览', /全部角色/.test(sideTxt));
-    check('★ 侧栏也跟着高亮当前池（校园组）', /校园组/.test(await activeSideItem()),
-      (await activeSideItem()).trim());
-    // ★ 点侧栏跳池：顶部切换条必须同步 —— 两处读的是同一份 _curPoolId，不能各说各话
+    check('侧栏同时标出两位写手的名字',
+      /归\s*探针写手/.test(sideTxt) && /归\s*阿雪/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
+    // 点侧栏跳池：顶部切换条必须同步（两处读同一份 _curPoolId）
     await page.locator('#pool-list .side-item', { hasText: '默认池' }).first().click();
     await page.waitForTimeout(700);
     check('★ 点侧栏「默认池」→ 顶部切换条同步高亮', /默认池/.test(await activePoolChip()),
       (await activePoolChip()).trim());
-    check('★ 侧栏该条也高亮', /默认池/.test(await activeSideItem()));
-    await page.locator('#pool-list .side-item', { hasText: '全部角色' }).first().click();
-    await page.waitForTimeout(700);
-    check('★ 点侧栏「全部角色」→ 切回跨池总览',
-      /全部/.test(await activePoolChip())
-      && /探针角色/.test(await page.textContent('#main')));
-    // 切回校园组，保持后续用例的前置状态
-    await page.locator('#pool-list .side-item', { hasText: '校园组' }).first().click();
-    await page.waitForTimeout(700);
-    check('★ 切回校园组（后续用例的前置状态）', /校园组/.test(await activePoolChip()));
     await page.screenshot({ path: path.join(SHOT, 'verify-pools-1b-sidebar.png') });
 
-    // ───────────────────── ③ 空状态 + 在池内新建角色 ─────────────────────
+    // ───────────────────── ③ 空池 + 在当前池新建角色 ─────────────────────
     console.log('\n[3] 空池状态 + 「新建角色」落在当前池');
+    await page.locator('.pool-chip', { hasText: '阿雪的池' }).first().click();
+    await page.waitForTimeout(700);
+    check('★ 切到阿雪的池且高亮', /阿雪的池/.test(await activePoolChip()), (await activePoolChip()).trim());
     const mainTxt = await page.textContent('#main');
     check('★ 空状态文案说的是「这个池还是空的」', /这个池还是空的/.test(mainTxt));
     check('空状态引导「换池搬过来」', /换池/.test(mainTxt));
-    // 点卡片标题里的「新建角色」
     await page.locator('.ch-card .card-title .primary').first().click();
     await page.waitForTimeout(700);
     check('弹出角色编辑弹窗', !!(await page.$('#chr-edit-modal')));
     await page.fill('#chr-name', '小满');
     await page.fill('#chr-persona', '# 人格\n\n活泼的小满。');
     await page.locator('#chr-edit-modal .chr-modal-acts .primary').click();
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1400);
     check('弹窗已关闭', !(await page.$('#chr-edit-modal')));
     const st3 = await getState();
     const xiaoman = (st3.characters || []).find((c) => c.name === '小满');
     check('角色已创建', !!xiaoman);
-    check('★ 落在当前池「校园组」而不是第一个池', !!xiaoman && xiaoman.poolId === CAMP,
-      xiaoman && `poolId=${xiaoman.poolId} 期望=${CAMP}`);
-    check('当前池 chip 计数变成 1',
-      /1/.test(await page.locator('.pool-chip', { hasText: '校园组' }).first().textContent()));
+    check('★ 落在当前池「阿雪的池」而不是第一个池', !!xiaoman && xiaoman.poolId === P2,
+      xiaoman && `poolId=${xiaoman.poolId} 期望=${P2}`);
+    check('★ 归属显示成「归写手阿雪」',
+      /归写手「阿雪」/.test(await page.textContent('.ch-card')),
+      (await page.textContent('.ch-list')).replace(/\s+/g, ' ').slice(0, 160));
     await page.screenshot({ path: path.join(SHOT, 'verify-pools-2-newchar.png') });
 
     // ───────────────────── ④ 换池下拉 ─────────────────────
     console.log('\n[4] 行尾「换池」下拉');
     check('有 .pool-sel 下拉（池数 > 1 才出现）', !!(await page.$('.pool-sel')));
+    const opts = await page.$$eval('.ch-item .pool-sel option', (els) => els.map((e) => e.textContent));
+    check('★ 下拉选项标出每个池归谁（否则看不出「给哪位写手」）',
+      opts.some((t) => /归\s*阿雪/.test(t)) && opts.some((t) => /归\s*探针写手/.test(t)),
+      JSON.stringify(opts));
     const defId = (await getPools()).find((p) => p.name === '默认池').id;
-    // 选中「默认池」触发 onchange → poolMoveChar
     await page.locator('.ch-item .pool-sel').first().selectOption(defId);
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1400);
     const pools4 = await getPools();
     check('★ 角色换池成功：默认池变 2 位', pools4.find((p) => p.id === defId).count === 2,
       `count=${pools4.find((p) => p.id === defId).count}`);
-    check('★ 原池「校园组」变空', pools4.find((p) => p.id === CAMP).count === 0);
+    check('★ 原池「阿雪的池」变空', pools4.find((p) => p.id === P2).count === 0);
     const st4 = await getState();
     check('角色归属已改到默认池',
       (st4.characters.find((c) => c.name === '小满') || {}).poolId === defId);
 
-    // ───────────────────── ⑤ 写手标签页：绑池 ─────────────────────
-    console.log('\n[5] 写手「角色」标签页绑池');
+    // ───────────────────── ⑤ 写手「角色」标签页（只读专属池）─────────────────────
+    console.log('\n[5] 写手「角色」标签页：只看得到自己池里的人');
     await page.evaluate((id) => { window.selectBot(id); window.switchBotTab('characters'); }, botId);
     await page.waitForTimeout(1000);
-    check('出现绑定条 .pool-bind', !!(await page.$('.pool-bind')));
-    const chips = await page.$$('.pool-bind-chip');
-    check('绑定条里每个池一个 chip', chips.length === 2, `实际 ${chips.length}`);
-    // 绑「默认池」（此时有 2 位：探针角色 + 小满）
-    await page.locator('.pool-bind-chip', { hasText: '默认池' }).first().click();
-    await page.waitForTimeout(1400);
-    const st5 = await getState();
-    const b5 = st5.bots.find((x) => x.id === botId);
-    check('★ 绑池成功：poolIds 含默认池', (b5.poolIds || []).includes(defId), JSON.stringify(b5.poolIds));
-    check('★ 整池角色一次性进 activeCharacterIds（2 位）',
-      (b5.activeCharacterIds || []).length === 2, JSON.stringify(b5.activeCharacterIds));
-    check('绑上的 chip 有 .on 高亮',
-      /默认池/.test(await page.textContent('.pool-bind-chip.on')), '');
+    check('出现专属池区块 .pool-bind', !!(await page.$('.pool-bind')));
+    check('★★ 没有「可点的绑定 chip」（归属不由这里决定）',
+      (await page.$$('.pool-bind .pool-bind-chip')).length === 0
+      || (await page.$$eval('.pool-bind .pool-bind-chip', (e) => e.map((x) => x.tagName.toLowerCase()))).every((t) => t === 'span'),
+      JSON.stringify(await page.$$eval('.pool-bind .pool-bind-chip', (e) => e.map((x) => x.tagName))));
+    check('专属池 chip 写的是它自己的池名',
+      /默认池/.test(await page.textContent('.pool-bind')), (await page.textContent('.pool-bind')).replace(/\s+/g, ' ').slice(0, 160));
     const tabTxt = await page.textContent('#main');
-    check('★ 池给的两位带「池 · 默认池」标记', (await page.$$('.ch-pool-src')).length === 2,
-      `实际 ${(await page.$$('.ch-pool-src')).length} 个`);
-    const disabledActs = await page.$$('.ch-acts button[disabled]');
-    check('★ 池给的角色没有「移除」按钮（点也没用，会被同步回来）', disabledActs.length === 2,
-      `实际 ${disabledActs.length} 个禁用按钮`);
-    check('禁用按钮的说明写了「池给的」', /池给的/.test(tabTxt));
-    await page.screenshot({ path: path.join(SHOT, 'verify-pools-3-bind.png') });
+    check('★ 自己池里的人都在（探针角色 / 小满）',
+      /探针角色/.test(tabTxt) && /小满/.test(tabTxt), tabTxt.replace(/\s+/g, ' ').slice(0, 200));
+    check('★ 池来源标记「池 · 默认池」出现两次', (await page.$$('.ch-pool-src')).length === 2,
+      `实际 ${(await page.$$('.ch-pool-src')).length}`);
+    check('★★ 没有「移除」按钮（角色不能不属于任何池，改归属只能换池）',
+      (await page.$$('.ch-acts button[disabled]')).length === 0
+      && !/移除/.test(tabTxt), tabTxt.replace(/\s+/g, ' ').slice(0, 200));
+    check('★ 副标题说明「池 ↔ 写手一一对应」', /一一对应/.test(tabTxt), '');
+    // 阿雪那边必须只有它自己的人（此刻它的池是空的）
+    await page.evaluate(() => { window.selectBot('BOT2'); window.switchBotTab('characters'); });
+    await page.waitForTimeout(900);
+    const tabB = await page.textContent('#main');
+    check('★★ 阿雪的角色页是空的（看不到别人的角色）',
+      !/探针角色/.test(tabB) && !/小满/.test(tabB), tabB.replace(/\s+/g, ' ').slice(0, 200));
+    await page.evaluate((id) => { window.selectBot(id); window.switchBotTab('characters'); }, botId);
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: path.join(SHOT, 'verify-pools-3-ownpool.png') });
 
-    // ───────────────────── ⑥ 写手设置弹窗：锁死勾选 ─────────────────────
-    console.log('\n[6] 写手设置弹窗里池给的勾选项被锁死');
+    // ───────────────────── ⑥ 写手设置弹窗（只读，无勾选框）─────────────────────
+    console.log('\n[6] 写手设置弹窗：专属池只读展示');
     await page.evaluate((id) => window.openBotSettings(id), botId);
     await page.waitForTimeout(1100);
     check('设置弹窗已打开', !!(await page.$('#bot-settings-modal')));
-    check('设置里有角色池区块', !!(await page.$('#bot-settings-modal .chr-pool')));
-    check('设置里也有绑定条', !!(await page.$('#bot-settings-modal .chr-pool .pool-bind')));
-    const locked = await page.$$('#bot-settings-modal .chr-pick.locked');
-    check('★ 池给的两位被标 locked', locked.length === 2, `实际 ${locked.length}`);
-    const lockedBoxState = await page.$$eval('#bot-settings-modal .chr-pick.locked input[type=checkbox]',
-      (els) => els.map((e) => ({ checked: e.checked, disabled: e.disabled })));
-    check('★ locked 的勾选框是 checked + disabled（取消不掉，避免「取消勾选没用」）',
-      lockedBoxState.length === 2 && lockedBoxState.every((s) => s.checked && s.disabled),
-      JSON.stringify(lockedBoxState));
+    const setPool = await page.$('#bot-settings-modal .chr-pool');
+    check('设置里有专属角色池区块', !!setPool);
+    const setTxt = setPool ? await setPool.textContent() : '';
+    check('★★ 一个勾选框都没有了', (await page.$$('#bot-settings-modal .chr-pick-box')).length === 0,
+      `实际 ${(await page.$$('#bot-settings-modal .chr-pick-box')).length} 个`);
+    check('池里两位以只读条列出（.chr-pick.locked）',
+      (await page.$$('#bot-settings-modal .chr-pick.locked')).length === 2,
+      `实际 ${(await page.$$('#bot-settings-modal .chr-pick.locked')).length}`);
+    check('★ 文案写清「它也只看得见这些」', /只看得见这些/.test(setTxt), setTxt.replace(/\s+/g, ' ').slice(0, 200));
+    check('★ 给出「换池」入口（改归属的唯一方式）',
+      /换池/.test(setTxt), setTxt.replace(/\s+/g, ' ').slice(0, 200));
     await page.screenshot({ path: path.join(SHOT, 'verify-pools-4-settings.png') });
     await page.evaluate(() => window.closeBotSettings());
     await page.waitForTimeout(500);
 
     // ───────────────────── ⑦ 删池 ─────────────────────
-    console.log('\n[7] 删池（空池走确认框 / 非空池走三选一）');
+    console.log('\n[7] 删池：有主的删不掉 / 无主的能删');
     await page.evaluate(() => window.openCharacterPool());
     await page.waitForTimeout(900);
-    // 7a：校园组此刻是空的 → 走普通确认框
-    await page.locator('.pool-chip', { hasText: '校园组' }).first().click();
+    await page.locator('.pool-chip', { hasText: '默认池' }).first().click();
     await page.waitForTimeout(700);
-    check('切到校园组后出现「删除池」按钮', /删除池/.test(await page.textContent('.pool-bar')));
-    await page.locator('.pool-bar button', { hasText: '删除池' }).first().click();
-    await page.waitForTimeout(500);
-    check('空池走普通确认框 #ui-confirm', !!(await page.$('#ui-confirm')));
-    await page.click('#cf-ok');
-    await page.waitForTimeout(1200);
-    check('校园组已从切换条消失', !/校园组/.test(await page.textContent('.pool-bar')));
-    check('后端只剩 1 个池', (await getPools()).length === 1, `实际 ${(await getPools()).length}`);
+    const barOwned = await page.textContent('.pool-bar');
+    check('★ 有主的池：有「改名」但没有「删除池」', /改名/.test(barOwned) && !/删除池/.test(barOwned),
+      barOwned.replace(/\s+/g, ' ').trim());
 
-    // 7b：建一个有角色的池，删的时候必须弹三选一
-    await page.click('.pool-chip.pool-add');
-    await page.waitForTimeout(400);
-    await page.fill('#pf-input', '临时组');
-    await page.click('#pf-ok');
+    // 造一个无主池：让 BOT2 释放它的池，并往池里放一位角色
+    const P2b = (await getPools()).find((p) => p.name === '阿雪的池');
+    await fetch(`${BASE}/api/pools/${P2b.id}/characters`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '待搬角色' }),
+    });
+    await put('/api/bots/BOT2/pools', { poolIds: [] });
+    await page.evaluate(() => window.loadState && window.loadState());
     await page.waitForTimeout(1000);
-    const TMP = (await getPools()).find((p) => p.name === '临时组').id;
-    await page.locator('.ch-card .card-title .primary').first().click();
+    await page.evaluate(() => window.openCharacterPool());
+    await page.waitForTimeout(800);
+    const orphanRow = await page.locator('.pool-chip', { hasText: '阿雪的池' }).count();
+    check('★ 释放后的池仍在切换条上（无主，不是被删了）', orphanRow >= 1, String(orphanRow));
+    const sideOrphan = await page.textContent('#pool-list');
+    check('★ 侧栏把它标成「无主」', /无主/.test(sideOrphan), sideOrphan.replace(/\s+/g, ' ').trim());
+    await page.locator('.pool-chip', { hasText: '阿雪的池' }).first().click();
     await page.waitForTimeout(700);
-    await page.fill('#chr-name', '待搬角色');
-    await page.locator('#chr-edit-modal .chr-modal-acts .primary').click();
-    await page.waitForTimeout(1200);
-    check('临时组里有 1 位', (await getPools()).find((p) => p.id === TMP).count === 1);
+    const barOrphan = await page.textContent('.pool-bar');
+    check('★ 无主池：出现「删除池」按钮', /删除池/.test(barOrphan), barOrphan.replace(/\s+/g, ' ').trim());
     await page.locator('.pool-bar button', { hasText: '删除池' }).first().click();
     await page.waitForTimeout(500);
-    check('★ 非空池弹出三选一 #pool-del-modal', !!(await page.$('#pool-del-modal')));
-    const opts = await page.$$('#pool-del-modal .pool-del-opt');
-    check('三选一里有两个选项（搬走 / 一起删）', opts.length === 2, `实际 ${opts.length}`);
-    check('默认选中「搬走」（安全的那条）',
-      await page.isChecked('#pool-del-modal input[value=move]'));
+    check('★ 非空的无主池走二选一 #pool-del-modal', !!(await page.$('#pool-del-modal')));
+    const delOpts = await page.$$('#pool-del-modal .pool-del-opt');
+    check('二选一里有两个选项（搬走 / 一起删）', delOpts.length === 2, `实际 ${delOpts.length}`);
+    check('默认选中「搬走」（安全的那条）', await page.isChecked('#pool-del-modal input[value=move]'));
     await page.screenshot({ path: path.join(SHOT, 'verify-pools-5-delmodal.png') });
     await page.click('#pd-ok');
-    await page.waitForTimeout(1400);
+    await page.waitForTimeout(1600);
     const afterDel = await getPools();
-    check('临时组已删除', !afterDel.some((p) => p.id === TMP));
-    check('★ 角色被搬到剩余池（没丢）',
-      afterDel[0].characters.some((c) => c.name === '待搬角色'),
-      JSON.stringify(afterDel[0].characters.map((c) => c.name)));
+    check('无主池已删除', !afterDel.some((p) => p.id === P2b.id));
+    check('★ 角色被搬到别的池（没丢）',
+      (await getState()).characters.some((c) => c.name === '待搬角色'),
+      JSON.stringify((await getState()).characters.map((c) => c.name)));
 
     // ───────────────────── ⑧ JS 错误 ─────────────────────
     console.log('\n[8] JS 错误');

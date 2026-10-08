@@ -1,8 +1,15 @@
-// 真机验证：多角色池的 HTTP 层（/api/pools/* 与 /api/bots/:id/pools）
+// 真机验证：角色池的 HTTP 层（/api/pools/* 与 /api/bots/:id/pools）—— **1:1 语义**
+//
+// ★★ 2026-10-08 语义变更（用户：「角色池中的角色会干扰写手，应该改为角色池对应写手」）：
+//   池 ↔ 写手 **一一对应**。权威是 `characterPools[i].botId`；
+//   bot.poolIds / activeCharacterIds / poolCharacterIds 全是**派生镜像**。
+//   写手只看得到自己池里的角色；没有「公共池」「手动勾选」「绑多个池」这些概念了。
+//   这份脚本原先验证的是「绑池 = 批量 / 解绑撤回 / 手动勾的留着」——那些语义已取消，
+//   本轮整段改写。旧语义的历史留在 git 里（verify-pools.mjs 的上一个版本）。
 //
 // 为什么必须跑 HTTP 而不只是跑单测：
 //   tests/pools.test.mjs 直接调 lib/characters.js 的纯函数，绕过整个路由层。
-//   而本轮新增的 lib/routes/pools.js 是**全新文件**，风险恰恰都在路由层：
+//   而 lib/routes/pools.js 的风险恰恰都在路由层：
 //     · 路由顺序 —— /api/pools/move 必须排在 /api/pools/:id 之前（否则被通配吃掉）
 //     · 域顺序   —— 'pools' 必须排在 'bots' 之前（否则 /api/bots/:id 截走 /pools）
 //     · 请求体   —— 上下文里没有 c.query，drop 只能从 body 读
@@ -11,17 +18,15 @@
 //
 // 验证点：
 //   ① 老 config（单池 cfg.characters）→ 启动后自动落进「默认池」
-//   ② GET /api/pools 形状（id/name/count/characters/usedBy）+ /api/state 带 pools 与 poolId
-//   ③ 新建池：成功 / 重名 400 / 空名 400
-//   ④ 改名：成功 / 改成重名 400 / 不存在的池 404
-//   ⑤ 在指定池里新建角色（落到那个池，不是第一个池）
-//   ⑥ 角色换池：唯一归属（原池少一个、新池多一个）
-//   ⑦ ★ 绑池 = 批量：整池角色一次性进 activeCharacterIds
-//   ⑧ ★ 持续同步：绑池后往池里加人，写手自动拿到
-//   ⑨ ★ 解绑撤回：池给的撤回、手动勾的留下
-//   ⑩ ★ 绕过池接口直接 PUT /api/config 也丢不掉池给的角色（meta.js 里的兜底同步）
-//   ⑪ 删池：默认把角色搬到剩余池 / drop=true 连角色一起删
-//   ⑫ ★ 删不掉最后一个池（400）—— 否则等于把角色体系清空
+//   ② 形状：/api/pools 带 botId/botName/usedBy；/api/state 的角色带 poolId/poolName
+//   ③ 新建池：必须带 botId；已有池的写手再建 → 400；新写手自动获得专属池
+//   ④ 改名：成功 / 重名 400 / 不存在 404
+//   ⑤ 在指定池里新建角色（落那个池，不是第一个池）
+//   ⑥ 角色换池：唯一归属 + ★ 幂等（换到自己已经在的池 → 200 moved:false，不能 500）
+//   ⑦ 写手 ↔ 池：认领无主池 / 释放 / 最多一个 / 抢别人的池被拒
+//   ⑧ ★ 严格按池：绕过接口往 activeCharacterIds 塞池外角色 → 被重算掉
+//   ⑨ 删池：有主的池不能删；无主池能删（默认搬走 / drop 连人删）
+//   ⑩ 真的落盘了（config.json 里 characterPools 带 botId）
 //
 // 用法：node scripts/verify-pools.mjs
 
@@ -52,10 +57,12 @@ const code = async (url, method, body) => (await fetch(base + url, {
   body: JSON.stringify(body === undefined ? {} : body),
 })).status;
 
-// 常用查询：拿 state / pools
 const st = () => get('/api/state');
 const pools = async () => (await get('/api/pools')).pools || [];
-const bot1 = async () => (await st()).bots.find((b) => b.id === 'BOT1') || {};
+const bot = async (id) => (await st()).bots.find((b) => b.id === id) || {};
+const poolById = async (id) => (await pools()).find((p) => p.id === id) || {};
+const poolOfBot = async (id) => ((await bot(id)).poolIds || [])[0] || '';
+const saveBots = async (bots) => send('/api/config', 'PUT', { bots });
 
 async function main() {
   const dir = makeSandbox();
@@ -82,6 +89,10 @@ async function main() {
     const p0 = ps[0];
     check('池视图含 desc / ts / count / usedBy',
       'desc' in p0 && 'ts' in p0 && typeof p0.count === 'number' && Array.isArray(p0.usedBy));
+    check('★ 池视图带 botId / botName（1:1 的权威 + 给人看的名字）',
+      p0.botId === 'BOT1' && p0.botName === '探针写手', JSON.stringify([p0.botId, p0.botName]));
+    check('★ usedBy = 主人（最多一位）', p0.usedBy.length === 1 && p0.usedBy[0].id === 'BOT1',
+      JSON.stringify(p0.usedBy));
     check('池视图里的角色已被裁成列表态（有 historyCount、没有 history 全文）',
       p0.characters[0] && typeof p0.characters[0].historyCount === 'number' && !('history' in p0.characters[0]));
     let s = await st();
@@ -89,155 +100,182 @@ async function main() {
     check('/api/state 的角色带 poolId / poolName',
       !!s.characters.find((c) => c.id === 'CHRprobe0001' && c.poolId === DEF && c.poolName === '默认池'),
       JSON.stringify(s.characters.map((c) => [c.id, c.poolId])));
-    check('写手带 poolIds 字段（空数组）', Array.isArray((await bot1()).poolIds));
+    check('★ 写手只绑一个池（derived mirror）',
+      (await bot('BOT1')).poolIds.join(',') === DEF, JSON.stringify((await bot('BOT1')).poolIds));
 
-    // ───────────────────────── ③ 新建池 ─────────────────────────
-    console.log('\n[3] 新建池');
-    let r = await send('/api/pools', 'POST', { name: '校园组' });
-    check('新建成功', r.ok === true, JSON.stringify(r));
-    const CAMP = r.pool && r.pool.id;
-    check('新池 id 带 POOL 前缀', !!CAMP && CAMP.startsWith('POOL'));
-    check('池名原样保留', r.pool && r.pool.name === '校园组');
-    check('池数变成 2', (await pools()).length === 2);
-    check('重名被拒（400）', await code('/api/pools', 'POST', { name: '校园组' }) === 400);
-    check('空名被拒（400）', await code('/api/pools', 'POST', { name: '   ' }) === 400);
+    // ───────────────────────── ③ 新建池（1:1，必须指定写手）─────────────────────────
+    console.log('\n[3] 新建池：必须指定归属写手');
+    let r = await send('/api/pools', 'POST', { name: '凭空建的池' });
+    check('不带 botId 被拒（400）—— 没有「公共池」', r.ok === false, JSON.stringify(r).slice(0, 140));
+    check('不带 botId 时错误信息指路（说明池要归写手）', /写手/.test(String(r.err)), String(r.err).slice(0, 140));
+    check('带不存在的写手（404）', await code('/api/pools', 'POST', { name: 'x', botId: 'BOTnope' }) === 404);
+    r = await send('/api/pools', 'POST', { name: '重复的池', botId: 'BOT1' });
+    check('已经有池的写手再建池被拒（400）', r.ok === false, JSON.stringify(r).slice(0, 140));
+    check('空名被拒（400）', await code('/api/pools', 'POST', { name: '   ', botId: 'BOT1' }) === 400);
+
+    // ★ 新写手自动获得专属池：走 PUT /api/config 加一位（写手是整份覆盖新增的）
+    const bots0 = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).bots;
+    const b2 = {
+      ...JSON.parse(JSON.stringify(bots0[0])),
+      id: 'BOT2', name: '阿雪', poolIds: [], activeCharacterIds: [], poolCharacterIds: [],
+    };
+    r = await saveBots([bots0[0], b2]);
+    check('/api/config 加一位新写手成功', r.ok === true, JSON.stringify(r));
+    const P2 = await poolOfBot('BOT2');
+    check('★ 新写手自动获得一个专属池（不用手动建）', !!P2, JSON.stringify((await bot('BOT2')).poolIds));
+    check('★ 新池归它（botId=BOT2）',
+      (await poolById(P2)).botId === 'BOT2' && (await poolById(P2)).botName === '阿雪',
+      JSON.stringify(await poolById(P2)));
+    check('新池是空的', (await poolById(P2)).count === 0);
+    check('池数变成 2', (await pools()).length === 2, `实际 ${(await pools()).length}`);
 
     // ───────────────────────── ④ 改名 ─────────────────────────
     console.log('\n[4] 改名 / 改描述');
-    r = await send(`/api/pools/${CAMP}`, 'PUT', { name: '校园组★', desc: '主校区那几位' });
-    check('改名成功', r.ok === true && r.pool.name === '校园组★', JSON.stringify(r));
+    r = await send(`/api/pools/${DEF}`, 'PUT', { name: '默认池★', desc: '主校区那几位' });
+    check('改名成功', r.ok === true && r.pool.name === '默认池★', JSON.stringify(r).slice(0, 140));
     check('描述写进去了', r.ok && r.pool.desc === '主校区那几位');
-    check('改成重名被拒（400）', await code(`/api/pools/${CAMP}`, 'PUT', { name: '默认池' }) === 400);
+    check('★ 改名不改归属', r.ok && r.pool.botId === 'BOT1', JSON.stringify([r.pool.botId, r.pool.botName]));
+    check('改成重名被拒（400）', await code(`/api/pools/${DEF}`, 'PUT', { name: '阿雪的池' }) === 400);
     check('不存在的池（404）', await code('/api/pools/POOLnosuch', 'PUT', { name: 'x' }) === 404);
 
     // ───────────────────────── ⑤ 在指定池里新建角色 ─────────────────────────
     console.log('\n[5] 在指定池里新建角色');
-    r = await send(`/api/pools/${CAMP}/characters`, 'POST', { name: '小满', persona: '# 人格\n\n活泼。' });
-    check('角色创建成功', r.ok === true, JSON.stringify(r));
+    r = await send(`/api/pools/${DEF}/characters`, 'POST', { name: '小满', persona: '# 人格\n\n活泼。' });
+    check('角色创建成功', r.ok === true, JSON.stringify(r).slice(0, 140));
     const XIAOMAN = r.character && r.character.id;
     check('返回的角色是刚建的那位', r.ok && r.character.name === '小满');
     s = await st();
-    check('★ 落在「校园组★」而不是第一个池',
-      !!s.characters.find((c) => c.id === XIAOMAN && c.poolId === CAMP),
+    check('★ 落在「默认池★」而不是第一个池',
+      !!s.characters.find((c) => c.id === XIAOMAN && c.poolId === DEF),
       JSON.stringify(s.characters.find((c) => c.id === XIAOMAN)?.poolId));
-    check('默认池仍是 1 位（没被塞进去）',
-      (await pools()).find((p) => p.id === DEF).count === 1);
+    check('★ 新角色直接进了池主（BOT1）的名单',
+      ((await bot('BOT1')).activeCharacterIds || []).includes(XIAOMAN),
+      JSON.stringify((await bot('BOT1')).activeCharacterIds));
+    check('另一个池（阿雪的池）没被塞进去', (await poolById(P2)).count === 0);
     check('往不存在的池建角色（404）', await code('/api/pools/POOLnosuch/characters', 'POST', { name: 'x' }) === 404);
-    check('空角色名（400）', await code(`/api/pools/${CAMP}/characters`, 'POST', { name: '' }) === 400);
+    check('空角色名（400）', await code(`/api/pools/${DEF}/characters`, 'POST', { name: '' }) === 400);
 
-    // ───────────────────────── ⑥ 角色换池 ─────────────────────────
-    console.log('\n[6] 角色换池（唯一归属）');
-    r = await send('/api/pools/move', 'POST', { characterId: 'CHRprobe0001', toPoolId: CAMP });
-    check('换池成功', r.ok === true, JSON.stringify(r));
+    // ───────────────────────── ⑥ 角色换池（唯一归属 + 幂等）─────────────────────────
+    console.log('\n[6] 角色换池（唯一归属 + 幂等）');
+    r = await send('/api/pools/move', 'POST', { characterId: 'CHRprobe0001', toPoolId: P2 });
+    check('换池成功', r.ok === true, JSON.stringify(r).slice(0, 140));
     ps = await pools();
-    check('原池（默认池）少了一位', ps.find((p) => p.id === DEF).count === 0, `count=${ps.find((p) => p.id === DEF).count}`);
-    check('新池（校园组★）多了那位',
-      ps.find((p) => p.id === CAMP).characters.some((c) => c.id === 'CHRprobe0001'));
+    check('原池（默认池★）少了一位', ps.find((p) => p.id === DEF).count === 1,
+      `count=${ps.find((p) => p.id === DEF).count}`);
+    check('新池（阿雪的池）多了那位',
+      ps.find((p) => p.id === P2).characters.some((c) => c.id === 'CHRprobe0001'));
     check('★ 换池走的是 move 精确路由（没被 :id 通配吃掉）', r.ok !== false && !/不存在/.test(String(r.err)));
+    check('★ 归属跟着池走：BOT1 少一位、BOT2 多一位',
+      !((await bot('BOT1')).activeCharacterIds || []).includes('CHRprobe0001')
+      && ((await bot('BOT2')).activeCharacterIds || []).includes('CHRprobe0001'),
+      JSON.stringify({ b1: (await bot('BOT1')).activeCharacterIds, b2: (await bot('BOT2')).activeCharacterIds }));
     check('缺参数（400）', await code('/api/pools/move', 'POST', { characterId: 'CHRprobe0001' }) === 400);
     check('目标池不存在（404）', await code('/api/pools/move', 'POST', { characterId: 'CHRprobe0001', toPoolId: 'POOLnosuch' }) === 404);
 
-    // ───────────────────────── ⑦ 绑池 = 批量 ─────────────────────────
-    console.log('\n[7] 绑池 = 批量拿到整池角色');
-    r = await send('/api/bots/BOT1/pools', 'PUT', { poolIds: [CAMP] });
-    check('绑定成功', r.ok === true, JSON.stringify(r));
-    check('poolIds 已写入', Array.isArray(r.poolIds) && r.poolIds.includes(CAMP));
-    check('★ 池里 2 位角色一次性进了 activeCharacterIds',
-      r.activeCharacterIds.includes('CHRprobe0001') && r.activeCharacterIds.includes(XIAOMAN),
-      JSON.stringify(r.activeCharacterIds));
-    check('池视图的 usedBy 显示出这位写手',
-      (await pools()).find((p) => p.id === CAMP).usedBy.some((u) => u.id === 'BOT1'));
-    check('绑定不存在的池 → 被过滤掉（不出现在 poolIds）',
-      (await send('/api/bots/BOT1/pools', 'PUT', { poolIds: [CAMP, 'POOLnosuch'] })).poolIds.join(',') === CAMP);
+    // ★★ 幂等：换到自己已经在的池 —— 这是个很正常的操作（下拉提交当前值），
+    //    必须 200。以前这里会 500：moveCharacter 短路时只回 pool 不回 character，
+    //    路由却直接 bare(r.character) → 抛 TypeError。
+    r = await send('/api/pools/move', 'POST', { characterId: 'CHRprobe0001', toPoolId: P2 });
+    check('★★ 换到自己已经在的池：200 且 moved:false（曾经是 500）',
+      r.ok === true && r.moved === false, JSON.stringify(r).slice(0, 160));
+    check('★ 且仍然回带角色（回执形状不因短路而缺字段）',
+      !!r.character && r.character.id === 'CHRprobe0001', JSON.stringify(r.character && r.character.id));
+    check('池计数没变（幂等无副作用）', (await poolById(P2)).count === 1);
+
+    // ───────────────────────── ⑦ 写手 ↔ 池 ─────────────────────────
+    console.log('\n[7] 写手 ↔ 池：认领 / 释放 / 最多一个');
+    r = await send('/api/bots/BOT1/pools', 'PUT', { poolIds: [P2] });
+    check('★ 抢别人的池被拒（400）', r.ok === false, JSON.stringify(r).slice(0, 160));
+    check('BOT1 仍然守着它自己的池', (await poolOfBot('BOT1')) === DEF, await poolOfBot('BOT1'));
+    check('最多一个（给两个 → 400）', await code('/api/bots/BOT1/pools', 'PUT', { poolIds: [DEF, P2] }) === 400);
     check('poolIds 非数组（400）', await code('/api/bots/BOT1/pools', 'PUT', { poolIds: 'x' }) === 400);
     check('写手不存在（404）', await code('/api/bots/NOPE/pools', 'PUT', { poolIds: [] }) === 404);
-
-    // ───────────────────────── ⑧ 持续同步 ─────────────────────────
-    console.log('\n[8] 持续同步：往绑定的池里加人');
-    r = await send(`/api/pools/${CAMP}/characters`, 'POST', { name: '阿霁' });
-    const AJI = r.character && r.character.id;
-    check('新角色已建进池子', r.ok === true);
-    const b = await bot1();
-    check('★ 写手自动拿到新角色（无需再绑一次）',
-      b.activeCharacterIds.includes(AJI), JSON.stringify(b.activeCharacterIds));
-
-    // ───────────────────────── ⑨ 解绑撤回 ─────────────────────────
-    console.log('\n[9] 解绑撤回（池给的撤、手动勾的留）');
-    // 先手动加一位「非池来源」的角色（默认池里的），再解绑
-    r = await send(`/api/pools/${DEF}/characters`, 'POST', { name: '手点角色' });
-    const MANUAL = r.character && r.character.id;
-    check('默认池里建了一位（该池没绑给写手）', r.ok === true);
-    const cur = (await bot1()).activeCharacterIds;
-    r = await send('/api/bots/BOT1/characters', 'PUT', { characterIds: [...cur, MANUAL] });
-    check('手动把这位加进写手', r.ok === true && (r.activeCharacterIds || []).includes(MANUAL));
+    check('认领不存在的池（404）', await code('/api/bots/BOT1/pools', 'PUT', { poolIds: ['POOLnosuch'] }) === 404);
     r = await send('/api/bots/BOT1/pools', 'PUT', { poolIds: [] });
-    check('解绑成功', r.ok === true && r.poolIds.length === 0, JSON.stringify(r));
-    check('★ 池给的三位已撤回',
-      !r.activeCharacterIds.includes('CHRprobe0001')
-      && !r.activeCharacterIds.includes(XIAOMAN)
-      && !r.activeCharacterIds.includes(AJI),
-      JSON.stringify(r.activeCharacterIds));
-    check('★ 手动勾的那位被保留', r.activeCharacterIds.includes(MANUAL), JSON.stringify(r.activeCharacterIds));
+    check('释放当前池成功', r.ok === true, JSON.stringify(r));
+    const P1B = await poolOfBot('BOT1');
+    check('★ 释放后又补了一个新的空池（写手总得有个池）', !!P1B && P1B !== DEF, P1B);
+    check('★ 释放掉的池变无主（角色一个没删）',
+      (await poolById(DEF)).botId === '' && (await poolById(DEF)).count === 1,
+      JSON.stringify({ botId: (await poolById(DEF)).botId, count: (await poolById(DEF)).count }));
+    check('BOT1 的名单跟着空了（池里本来就只剩释放前的老角色）',
+      Array.isArray((await bot('BOT1')).activeCharacterIds), JSON.stringify((await bot('BOT1')).activeCharacterIds));
 
-    // ───────────────────────── ⑩ 绕过池接口直接写 /api/config ─────────────────────────
-    console.log('\n[10] 绕过池接口直接 PUT /api/config（兜底同步）');
-    r = await send('/api/bots/BOT1/pools', 'PUT', { poolIds: [CAMP] });
-    check('重新绑池', r.ok === true);
-    // ★ 直接从 config.json 取 bots 攒 payload：/api/state 的 bots 带派生字段，
-    //   拿它回写会把状态数据混进配置（真实前端就是这么写的，但探针不该扩大这个面）。
-    const cfgBots = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')).bots
-      .map((x) => (x.id === 'BOT1'
-        // 故意只写「手点那位」—— 模拟写手设置弹窗把池给的角色漏掉
-        ? { ...x, activeCharacterIds: [MANUAL] }
-        : x));
-    r = await send('/api/config', 'PUT', { bots: cfgBots });
+    // 认领无主池：把 DEF 认回来
+    r = await send('/api/bots/BOT1/pools', 'PUT', { poolIds: [DEF] });
+    check('★ 认领无主池成功（换个池也是一次调用）', r.ok === true, JSON.stringify(r).slice(0, 160));
+    check('认领后 DEF 归 BOT1', (await poolById(DEF)).botId === 'BOT1', JSON.stringify(await poolById(DEF)));
+    check('★ 换池即换归属：新老池的名单各自重算',
+      ((await bot('BOT1')).activeCharacterIds || []).includes(XIAOMAN)
+      && !((await bot('BOT1')).activeCharacterIds || []).includes('CHRprobe0001'),
+      JSON.stringify((await bot('BOT1')).activeCharacterIds));
+
+    // ───────────────────────── ⑧ 严格按池（绕过接口也塞不进池外角色）─────────────────────────
+    console.log('\n[8] ★ 严格按池：绕过池接口直接 PUT /api/config 塞池外角色');
+    // 故意把「阿雪池里的 CHRprobe0001」写进 BOT1 的 activeCharacterIds
+    // —— 模拟旧前端 / 手动改配置。改归属只能靠换池，所以它必须被重算掉。
+    const cfgNow = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+    r = await saveBots(cfgNow.bots.map((x) => (x.id === 'BOT1'
+      ? { ...x, activeCharacterIds: [...(x.activeCharacterIds || []), 'CHRprobe0001'] }
+      : x)));
     check('/api/config 保存成功', r.ok === true, JSON.stringify(r));
-    const back = (await bot1()).activeCharacterIds;
-    check('★ 池给的角色被自动补回来（配置接口也守住同步不变量）',
-      back.includes(AJI) && back.includes(XIAOMAN) && back.includes('CHRprobe0001') && back.includes(MANUAL),
-      JSON.stringify(back));
+    const back = (await bot('BOT1')).activeCharacterIds || [];
+    check('★★ 池外的角色被重算掉（不会被塞进写手身上）',
+      !back.includes('CHRprobe0001'), JSON.stringify(back));
+    check('★ 池内的角色还在', back.includes(XIAOMAN), JSON.stringify(back));
 
-    // ───────────────────────── ⑪ 删池 ─────────────────────────
-    console.log('\n[11] 删池（默认搬走 / drop 删掉）');
-    // 校园组★ 目前 3 位（CHRprobe0001 / 小满 / 阿霁），默认池 1 位（手点角色）
-    r = await send(`/api/pools/${CAMP}`, 'DELETE', {});
-    check('删池成功', r.ok === true, JSON.stringify(r));
-    check('★ 默认把 3 位角色搬走（moved=3, dropped=0）', r.moved === 3 && r.dropped === 0, JSON.stringify(r));
-    ps = await pools();
-    check('只剩 1 个池', ps.length === 1, `实际 ${ps.length}`);
-    check('角色全落到默认池（1 + 3 = 4 位）', ps[0].count === 4, `count=${ps[0].count}`);
-    check('写手身上对已删池的绑定被清掉', ((await bot1()).poolIds || []).length === 0);
-    check('★ 解绑后池给的角色撤回，只剩手动那位',
-      (await bot1()).activeCharacterIds.join(',') === MANUAL,
-      JSON.stringify((await bot1()).activeCharacterIds));
+    // ───────────────────────── ⑨ 删池 ─────────────────────────
+    console.log('\n[9] 删池：有主的不能删 / 无主的能删');
+    check('★ 删有主的池被拒（400）', await code(`/api/pools/${DEF}`, 'DELETE', {}) === 400);
+    const rOwned = await send(`/api/pools/${DEF}`, 'DELETE', {});
+    check('★ 拒绝信息说清是谁的专属池', /专属池/.test(String(rOwned.err)) && /探针写手/.test(String(rOwned.err)),
+      String(rOwned.err).slice(0, 160));
+    check('池还在、角色也还在',
+      (await poolById(DEF)).id === DEF && (await poolById(DEF)).count === 1);
 
-    // drop=true：连角色一起删
-    r = await send('/api/pools', 'POST', { name: '临时组' });
-    const TMP = r.pool.id;
-    await send(`/api/pools/${TMP}/characters`, 'POST', { name: '待删甲' });
-    await send(`/api/pools/${TMP}/characters`, 'POST', { name: '待删乙' });
-    check('临时组里有 2 位', (await pools()).find((p) => p.id === TMP).count === 2);
-    r = await send(`/api/pools/${TMP}`, 'DELETE', { drop: true });
+    // 造一个无主池：先给 BOT2 建个角色，再释放它的池（释放后池归无主、新人留在池里）
+    await send(`/api/pools/${P2}/characters`, 'POST', { name: '待搬角色' });
+    await send('/api/bots/BOT2/pools', 'PUT', { poolIds: [] });
+    const P2B = await poolOfBot('BOT2');
+    check('BOT2 释放后也拿到新的空池', !!P2B && P2B !== P2, P2B);
+    check('P2 现在无主（botId 空）', (await poolById(P2)).botId === '', JSON.stringify(await poolById(P2)));
+    check('无主池里的角色还在（释放不清人）', (await poolById(P2)).count === 2,
+      `count=${(await poolById(P2)).count}`);
+    r = await send(`/api/pools/${P2}`, 'DELETE', {});
+    check('★ 删无主池成功', r.ok === true, JSON.stringify(r));
+    check('★ 默认把角色搬走（moved=2, dropped=0）', r.moved === 2 && r.dropped === 0, JSON.stringify(r));
+    check('P2 已消失', !(await pools()).some((p) => p.id === P2));
+    const names = (await st()).characters.map((c) => c.name);
+    check('那两位角色还在（只是换了个池）',
+      names.includes('探针角色') && names.includes('待搬角色'), JSON.stringify(names));
+
+    // drop=true：连角色一起删（再造一个无主池）
+    await send(`/api/pools/${P2B}/characters`, 'POST', { name: '待删甲' });
+    await send(`/api/pools/${P2B}/characters`, 'POST', { name: '待删乙' });
+    await send('/api/bots/BOT2/pools', 'PUT', { poolIds: [] });
+    check('P2B 里 2 位', (await poolById(P2B)).count === 2, `count=${(await poolById(P2B)).count}`);
+    r = await send(`/api/pools/${P2B}`, 'DELETE', { drop: true });
     check('drop=true 删池成功', r.ok === true, JSON.stringify(r));
     check('★ 连角色一起删（dropped=2）', r.dropped === 2 && r.moved === 0, JSON.stringify(r));
     s = await st();
     check('这两位角色真的没了', !s.characters.some((c) => c.name === '待删甲' || c.name === '待删乙'));
-
-    // ───────────────────────── ⑫ 删不掉最后一个池 ─────────────────────────
-    console.log('\n[12] 删不掉最后一个池');
-    ps = await pools();
-    check('此刻只剩 1 个池', ps.length === 1, `实际 ${ps.length}`);
-    check('★ 删最后一个池被拒（400）', await code(`/api/pools/${ps[0].id}`, 'DELETE', {}) === 400);
-    check('★ 池还在，角色也还在（没被清空）',
-      (await pools()).length === 1 && (await st()).characters.length > 0);
     check('删不存在的池（404）', await code('/api/pools/POOLnosuch', 'DELETE', {}) === 404);
 
-    // ───────────────────────── 落盘检查 ─────────────────────────
-    console.log('\n[13] 真的落盘了（config.json 里是 characterPools）');
+    // ───────────────────────── ⑩ 落盘 ─────────────────────────
+    console.log('\n[10] 真的落盘了（config.json）');
     const raw = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
     check('config.json 有 characterPools', Array.isArray(raw.characterPools));
     check('config.json 里没有残留的旧 characters 字段', raw.characters === undefined);
-    check('写手身上有 poolCharacterIds 账本（解绑撤回靠它）',
+    check('★ 每个池都有 botId 字段（无主写空串）',
+      raw.characterPools.every((p) => typeof p.botId === 'string'),
+      JSON.stringify(raw.characterPools.map((p) => [p.id, p.botId])));
+    check('★ 一位写手最多拥有一个池',
+      raw.characterPools.filter((p) => p.botId === 'BOT1').length <= 1
+      && raw.characterPools.filter((p) => p.botId === 'BOT2').length <= 1,
+      JSON.stringify(raw.characterPools.map((p) => [p.id, p.botId])));
+    check('写手身上 poolIds 只有一个', (raw.bots[0].poolIds || []).length === 1,
+      JSON.stringify(raw.bots[0].poolIds));
+    check('写手身上有 poolCharacterIds 账本',
       Array.isArray(raw.bots[0].poolCharacterIds), JSON.stringify(raw.bots[0].poolCharacterIds));
 
     console.log(`\n结果：${fails.length ? '❌ ' + fails.length + ' / ' + n + ' 项失败' : '✅ 全部通过（' + n + ' 项）'}`);

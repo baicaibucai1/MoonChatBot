@@ -174,9 +174,12 @@ export async function patchSandboxConfig(dir, opts = {}) {
       historyLimit: 10, intents: ['probe-intent'],
       activeCharacterIds: ['CHRprobe0001'],
       // 绑定的角色池（多池架构）：形状上必须有这个字段，否则基线会报「消失 N 项」
-      poolIds: [],
-      // 「上一轮由池带来」的 id 账本：解绑时靠它分清哪些是池给的、哪些是手点的
-      poolCharacterIds: [],
+      // ★ 2026-10-08 起池 ↔ 写手是 **1:1**：这里必须正好是下面那个池的 id，
+      //   而且池那侧要写 `botId: 'BOT1'`（权威在池上）。两边不一致时
+      //   syncPoolCharacters 会把 bot 这侧改回池的归属 —— 探针会看到「绑定莫名失效」。
+      poolIds: ['POOLdefault'],
+      // 「上一轮由池带来」的 id 账本：1:1 之后它恒等于 activeCharacterIds
+      poolCharacterIds: ['CHRprobe0001'],
       moments: [{ title: '探针时刻', quote: '一句台词', summary: '一段摘要' }],
       heartbeats: [{
         enabled: false, mode: 'random', tone: 'natural', prompt: '探针心跳',
@@ -198,6 +201,9 @@ export async function patchSandboxConfig(dir, opts = {}) {
       name: '默认池',
       desc: '',
       ts: 1700000000000,
+      // ★ 池的**所有者**（1:1 的权威在这一侧）。夹具里把探针池判给 BOT1，
+      //   与上面 bots[0].poolIds 对应；少写它写手就看不到池里的角色（探针会全挂）。
+      botId: 'BOT1',
       characters: [{
         id: 'CHRprobe0001', ts: 1700000000000, name: '探针角色',
         persona: '沙箱探针用的角色设定。', traits: '沉稳', age: '18',

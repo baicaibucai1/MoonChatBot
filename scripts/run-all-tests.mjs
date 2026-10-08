@@ -30,6 +30,10 @@ const GATES = [
 // 自带沙箱（makeSandbox）的端到端探针：可以并行，跑完自己清理临时目录
 const SANDBOX_SCRIPTS = [
   'verify-pools.mjs', 'verify-pools-ui.mjs',
+  // ★ 池 ↔ 写手 1:1 的隔离（用户 2026-10-08 报的「角色池中的角色会干扰写手」）：
+  //   这条是那次修复的验收测试 —— 写手 A 的提示词 / list_characters / 拒绝回执里
+  //   都不能出现写手 B 的角色。改动 server.js 的写手视野时务必让它保持绿。
+  'verify-writer-isolation.mjs',
   'verify-writer-basics.mjs', 'verify-writer-pool.mjs',
   'verify-admin-characters.mjs', 'verify-admin-stream.mjs',
   'verify-char-template.mjs', 'verify-char-plaintext.mjs', 'verify-character-edit.mjs',

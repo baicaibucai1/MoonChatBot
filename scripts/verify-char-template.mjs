@@ -199,16 +199,19 @@ async function main() {
     // ── ③ ★ 模板里的 ##Counter 应立刻成为该角色的计数器范围 ──
     console.log('\n[3] ★ 模板里的 ##Counter 被引擎读到（无需再写标准要求）');
     NEW_CHAR_ID_HOLDER.value = created ? created.id : '';
-    // 把新角色挂给写手，让写手能对它沉淀经历
-    // ★ 这个接口收的是 characterIds（**数组**，整份覆盖），不是单个 characterId
-    const cur = ((st.bots || []).find((b) => b.id === 'BOT1') || {}).activeCharacterIds || [];
-    const attach = await (await fetch(`${srv.base}/api/bots/BOT1/characters`, {
+    // 把新角色换池到写手的专属池，让写手能对它沉淀经历
+    // ★ 池 ↔ 写手 1:1 之后，改归属的**唯一**入口是 POST /api/pools/move
+    //   （旧的 PUT /api/bots/:id/characters 已改成指路，会返回 400）。
+    //   沙箱夹具里 BOT1 的专属池是 POOLdefault。
+    const attach = await (await fetch(`${srv.base}/api/pools/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ characterIds: [...new Set([...cur, NEW_CHAR_ID_HOLDER.value])] }),
+      body: JSON.stringify({ characterId: NEW_CHAR_ID_HOLDER.value, toPoolId: 'POOLdefault' }),
     })).json();
-    check('新角色已挂进写手的角色池', attach.ok && attach.activeCharacterIds.includes(NEW_CHAR_ID_HOLDER.value),
-      JSON.stringify(attach));
+    check('新角色在写手的专属池里',
+      attach.ok && attach.pool && attach.pool.id === 'POOLdefault'
+      && (attach.pool.characters || []).some((x) => x.id === NEW_CHAR_ID_HOLDER.value),
+      JSON.stringify({ ok: attach.ok, moved: attach.moved, pool: attach.pool && attach.pool.id }));
     await page.evaluate(() => window.loadState && window.loadState(false));
     await page.waitForTimeout(800);
     await page.evaluate(() => window.selectBot && window.selectBot('BOT1', 'chat'));

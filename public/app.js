@@ -451,6 +451,32 @@ function renderSidebar() {
   renderPoolList();
 }
 
+// 池归哪位写手（池 ↔ 写手 1:1 的权威字段是 pool.botId）。
+// ★ 两个数据源形状不同，必须都认：
+//   · /api/pools（loadPools 写进 state.pools）→ 带 botId / botName，权威；
+//   · /api/state（loadState 会把 state.pools 整个换掉）→ **不带**归属字段
+//     （基线探针记着 /api/state 的字段集，不加新字段就为了不动那份契约）。
+//     这时退回写手身上的派生镜像 poolIds 反查 —— 它由 syncPoolCharacters 维持。
+// 返回 null = 无主（旧数据 / 写手已删）。无主的池里角色**任何写手都看不见**。
+function poolOwner(pool) {
+  if (!pool) return null;
+  if (pool.botId !== undefined) {
+    return pool.botId ? { id: String(pool.botId), name: String(pool.botName || pool.botId) } : null;
+  }
+  const b = (state.bots || []).find((x) => (Array.isArray(x.poolIds) ? x.poolIds : []).map(String).includes(String(pool.id)));
+  return b ? { id: String(b.id), name: String(b.name || b.id) } : null;
+}
+
+// 某个池集合里的角色（从 state.characters 里筛）。
+// ★ 这是前端判断「一位写手看得见谁」的**唯一算法** —— 池归它，它就看得见池里的。
+//   别再退回 bot.activeCharacterIds（派生镜像，可能比池晚一拍）或全局 state.characters
+//   （那是所有写手的角色混在一起，用它就是「角色池中的角色会干扰写手」那个 bug）。
+function charsInPools(poolIds) {
+  const ids = (Array.isArray(poolIds) ? poolIds : []).map(String).filter(Boolean);
+  if (!ids.length) return [];
+  return (state.characters || []).filter((c) => c.poolId && ids.includes(String(c.poolId)));
+}
+
 // 侧栏的池列表：首条是「全部角色」（跨池总览），之后每个池一条。
 // 高亮跟着 _curPoolId 走 —— 和角色池页顶部的切换条是同一份状态，两边不会各说各话。
 function renderPoolList() {
@@ -477,7 +503,12 @@ function renderPoolList() {
     rows.push(item('', '全部角色', `${chars.length} 位 · 跨所有池`, icoLayers, '所有池里的角色，一起看'));
   }
   for (const p of list) {
-    rows.push(item(p.id, p.name, `${p.count || 0} 位角色`, icoLayers, `角色池「${p.name}」`));
+    // ★ 侧栏要能一眼看出「这个池是谁的」：池 ↔ 写手 1:1 之后，用户是按写手认池的。
+    //   无主的池要显眼 —— 里面的人**没有写手看得见**，是待处理的遗留。
+    const o = poolOwner(p);
+    const meta = `${p.count || 0} 位角色 · ${o ? '归 ' + o.name : '无主（没有写手看得见）'}`;
+    rows.push(item(p.id, p.name, meta, icoLayers,
+      o ? `写手「${o.name}」的专属角色池` : `角色池「${p.name}」（无主：里面 ${p.count || 0} 位角色没有任何写手看得见）`));
   }
   box.innerHTML = rows.join('') || '<div class="side-empty">还没有角色池</div>';
 }
@@ -798,75 +829,67 @@ function avatarInner(b) {
 // 「精彩时刻」由 AI 从记忆档案 + 最近对话里提炼的高光片段。原先挂在角色卡第二行、
 // 挤成横排小条（因为角色卡是窄条横幅，怕把对话视线往下挤）；现在独立成标签页，
 // 空间充裕 → 改成卡片网格，摘要与台词**默认全展开**（画廊是用来浏览的，不该再藏一层）。
-// 「角色」标签页：这位写手笔下的角色（从全局角色池里挑选）
+// 「角色」标签页：这位写手笔下的角色
 // ------------------------------------------------------------------
-// ★ 认知：bot 是**写手**，角色是它笔下的人物，存在全局共享的池子里。
-//   所以这里管的是「这位写手要用哪几位角色」，而不是「这位角色是谁」。
-//   池子本身（新建 / 编辑 / 删除）在全局「角色池」页 —— 左侧栏入口。
-// ★ 写手 → 角色池的绑定条。
-//   绑池 = 把整池角色「批量」交给这位写手，而且是**持续同步**的：
-//   往池里新加一位会自动带过来，解绑则自动撤回（只撤回池给的，手动勾的不受影响）。
-//   池给的这几位不允许在这里单独「移除」—— 移了下一轮同步又会回来，
-//   让人以为按钮坏了。想撤就解绑池，或者把角色换到别的池。
-function writerPoolBindHtml(b) {
+// ★★ 认知（2026-10-08 用户决策「角色池对应写手」）：
+//   **一位写手恰好一个专属池**（池 ↔ 写手 1:1），写手的角色 = 它池里的角色，
+//   而且写手**看不见池外**的任何角色（名字、id 都不出现）。
+//   所以这一页只做两件事：展示它池里的角色 + 指路去角色池页给人。
+//   ⚠️ 别再用 state.characters（那是全局扁平名单）当候选 —— 那就是「角色池中的
+//   角色会干扰写手」的来源。
+// ★ 这里不再有「绑池」「从池里挑人」：给某位写手加人的唯一方式是把角色**换池**
+//   到它名下（角色池页的「换池」），因为池是它的。
+function writerOwnPoolHtml(b) {
   const pools = state.pools || [];
-  if (!pools.length) return '';
-  const bound = (Array.isArray(b.poolIds) ? b.poolIds : []).map(String);
-  const chips = pools.map((p) => {
-    const on = bound.includes(String(p.id));
-    return `<button class="pool-bind-chip${on ? ' on' : ''}" type="button"
-        onclick="toggleWriterPool('${b.id}','${p.id}')"
-        title="${on
-          ? `已绑定「${p.name}」：池内 ${p.count || 0} 位角色会持续同步给它。点一下解绑（池给的角色会自动撤回）。`
-          : `绑上「${p.name}」：池内 ${p.count || 0} 位角色一次性交给它，之后往池里加人也会自动带过来。`}">
-        ${on ? IC_CHECK : IC_PLUS}<span class="ch-chip-n">${esc(p.name)}</span><span class="pool-n">${p.count || 0}</span>
-      </button>`;
-  }).join('');
+  const mine = (Array.isArray(b.poolIds) ? b.poolIds : []).map(String);
+  const pool = pools.find((p) => mine.includes(String(p.id))) || null;
   return `<div class="pool-bind">
-      <div class="pool-bind-head">${IC_LAYERS}<span class="lb">绑定的角色池</span>
+      <div class="pool-bind-head">${IC_LAYERS}<span class="lb">专属角色池</span>
         <span class="spacer"></span>
-        <button class="ghost sm" type="button" onclick="openCharacterPool()" title="打开角色池：新建池 / 新建角色 / 把角色换池">管理角色池</button>
+        <button class="ghost sm" type="button" onclick="openCharacterPool()" title="打开角色池：新建角色 / 把角色换给别的写手">管理角色池</button>
       </div>
-      <div class="pool-bind-list">${chips}</div>
-      <div class="pool-bind-note">绑池是「批量 + 持续同步」：绑上就把整池角色交给它，往池里新加一位会自动带过来；解绑则自动撤回池给的角色。下面单点勾选是零散加人，不受解绑影响。</div>
+      <div class="pool-bind-list">
+        <span class="pool-bind-chip on">${IC_CHECK}<span class="ch-chip-n">${esc(pool ? pool.name : '（还没建好）')}</span><span class="pool-n">${pool ? (pool.count || 0) : 0}</span></span>
+      </div>
+      <div class="pool-bind-note">池 ↔ 写手<b>一一对应</b>：这个池只归它，它也只看得见这个池里的角色 —— 别家写手笔下的人物对它完全不可见。
+        要给它加人，请到角色池页把角色<b>换池</b>到「${esc(pool ? pool.name : '它的池')}」。</div>
     </div>`;
 }
 
 function renderCharactersTabHtml(b) {
-  const all = state.characters || [];
-  const activeIds = Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : [];
-  const boundPools = (Array.isArray(b.poolIds) ? b.poolIds : []).map(String);
-  const mine = activeIds.map(id => all.find(c => c.id === id)).filter(Boolean);
-  const rest = all.filter(c => !activeIds.includes(c.id));
+  const ownPools = (Array.isArray(b.poolIds) ? b.poolIds : []).map(String);
+  const pool = (state.pools || []).find(p => ownPools.includes(String(p.id))) || null;
+  // ★★ 只取**自己池里**的角色（charsInPools 是唯一算法）。以前这里用
+  //   activeCharacterIds 去**全局**名单里筛，还把「池中 N 位」按全局总数显示 ——
+  //   那等于把别家写手有哪些人、一共几位报给它看。
+  const mine = charsInPools(ownPools);
 
   const head = `<div class="card-title">${IC_USERS}<span class="lb">写手的角色</span>
       <span class="spacer"></span>
-      <span class="ch-count">已选 ${mine.length} / 池中 ${all.length}</span>
-      <button class="ghost sm" onclick="openCharacterPool()" title="打开全局角色池：新建 / 编辑 / 删除角色">${IC_USERS}<span class="lb">角色池</span></button>
+      <span class="ch-count">${mine.length} 位${pool ? ` · 池「${esc(pool.name)}」` : ''}</span>
+      <button class="ghost sm" onclick="openCharacterPool()" title="打开角色池：新建 / 编辑 / 删除角色 / 换池">${IC_USERS}<span class="lb">角色池</span></button>
     </div>`;
 
-  if (!all.length) {
+  if (!mine.length) {
     return `<div class="card ch-card">${head}
+      ${writerOwnPoolHtml(b)}
       <div class="gal-empty">
         <div class="gal-empty-ic">${IC_USERS}</div>
-        <div class="gal-empty-t">角色池还是空的</div>
-        <div class="gal-empty-h">角色是写手笔下的人物。去角色池里建一位，或者直接跟写手聊——它可以在剧情里创造人物并建议你加进池子。</div>
-        <div class="gal-empty-act"><button class="primary sm" onclick="openCharacterPool()">${IC_PLUS}<span class="lb">去角色池新建</span></button></div>
+        <div class="gal-empty-t">这位写手的角色池还是空的</div>
+        <div class="gal-empty-h">角色是写手笔下的人物，池子只归它 —— 别家写手的角色它看不到。直接跟它聊，它可以在剧情里创造人物并建议你加进池子；也可以去角色池页把已有角色<b>换池</b>到「${esc(pool ? pool.name : '它的池')}」。</div>
+        <div class="gal-empty-act">
+          <button class="primary sm" onclick="newCharForWriter('${b.id}')">${IC_PLUS}<span class="lb">给它新建一位</span></button>
+          <button class="ghost sm" onclick="openCharacterPool()">${IC_LAYERS}<span class="lb">去角色池换池</span></button>
+        </div>
       </div>
     </div>`;
   }
 
-  const mineCards = mine.length
-    ? mine.map(c => {
-      // 这位角色是「池给的」还是「手点的」？池给的不能单点移除（会被同步回来）
-      const fromPool = !!c.poolId && boundPools.includes(String(c.poolId));
-      return `
+  const mineCards = mine.map(c => `
       <div class="ch-item">
         <div class="ch-avatar">${characterAvatarInner(c)}</div>
         <div class="ch-main">
-          <div class="ch-name">${esc(c.name)}${fromPool
-            ? `<span class="ch-pool-src" title="来自绑定的角色池「${esc(c.poolName || c.poolId)}」，持续同步中">池 · ${esc(c.poolName || c.poolId)}</span>`
-            : ''}</div>
+          <div class="ch-name">${esc(c.name)}<span class="ch-pool-src" title="住在它的专属池「${esc(c.poolName || '')}」里 —— 池只归这位写手">池 · ${esc(c.poolName || '')}</span></div>
           <div class="ch-meta">${esc(c.id)}${c.age ? ' · ' + esc(c.age) : ''}${c.tags?.length ? ' · ' + c.tags.map(t => esc(t)).join(' / ') : ''}${(c.experienceCount || 0) ? ' · ' + c.experienceCount + ' 条经历' : ''}</div>
           ${c.persona ? `<div class="ch-snippet">${esc(snippet(c.persona, 90))}</div>` : ''}
           ${charStateHtml(c, 2)}
@@ -874,53 +897,14 @@ function renderCharactersTabHtml(b) {
         <div class="ch-acts">
           <button class="ghost sm" onclick="characterHistory('${c.id}')" title="查看历史版本，可回滚">${IC_HISTORY}<span class="lb">版本</span></button>
           <button class="ghost sm" onclick="characterEdit('${c.id}')" title="编辑角色设定">${IC_SETTINGS}<span class="lb">编辑</span></button>
-          ${fromPool
-            ? `<button class="ghost sm" disabled title="这位角色是绑定的角色池给的，会被持续同步回来。想撤掉它，请解绑上面的池，或把角色换到别的池。">池给的</button>`
-            : `<button class="ghost sm" onclick="characterDetach('${b.id}','${c.id}')" title="从这位写手的角色里移除（不影响角色池）">移除</button>`}
+          <button class="ghost sm" onclick="openCharacterPool()" title="想把它从这位写手手里拿走？去角色池页换池 —— 角色不能不属于任何池，所以这里没有「移除」">${IC_LAYERS}<span class="lb">换池</span></button>
         </div>
-      </div>`;
-    }).join('')
-    : `<div class="ch-hint">这位写手还没选角色。${rest.length ? '从下面挑一位，或者先跟它聊一会儿让它自己提议。' : ''}</div>`;
-
-  const addPanel = rest.length
-    ? `<div class="ch-add">
-        <div class="ch-add-t">从角色池添加</div>
-        <div class="ch-add-list">
-          ${rest.map(c => `<button class="ch-chip" onclick="characterAttach('${b.id}','${c.id}')" title="加进这位写手的角色">${IC_PLUS}<span class="ch-chip-n">${esc(c.name)}</span></button>`).join('')}
-        </div>
-      </div>`
-    : '';
+      </div>`).join('');
 
   return `<div class="card ch-card">${head}
-    ${writerPoolBindHtml(b)}
+    ${writerOwnPoolHtml(b)}
     <div class="ch-list">${mineCards}</div>
-    ${addPanel}
   </div>`;
-}
-
-// 绑 / 解绑一个角色池。服务端会重算 activeCharacterIds 再回传，
-// 所以这里直接用返回值覆盖本地，不必再拉一遍 state。
-async function toggleWriterPool(botId, poolId) {
-  const b = (state.bots || []).find(x => x.id === botId);
-  if (!b) return toast('写手不存在', 'err');
-  const cur = (Array.isArray(b.poolIds) ? b.poolIds : []).map(String);
-  const next = cur.includes(String(poolId))
-    ? cur.filter(x => x !== String(poolId))
-    : cur.concat(String(poolId));
-  const p = (state.pools || []).find(x => x.id === poolId);
-  const on = !cur.includes(String(poolId));
-  const r = await api(`/api/bots/${encodeURIComponent(botId)}/pools`, 'PUT', { poolIds: next });
-  if (!r.ok) return toast(r.err || '绑定失败', 'err');
-  b.poolIds = r.poolIds || next;
-  if (Array.isArray(r.activeCharacterIds)) b.activeCharacterIds = r.activeCharacterIds;
-  toast(on
-    ? `已绑定角色池「${(p && p.name) || poolId}」：池里 ${(p && p.count) || 0} 位角色已交给这位写手`
-    : `已解绑角色池「${(p && p.name) || poolId}」：池给的角色已撤回`, 'ok');
-  // 写手设置弹窗开着的时候只重绘设置里那块（别动用户正在填的其他表单项）
-  if (document.querySelector('#bot-settings-modal .chr-pool')) return refreshBotPool(botId);
-  const el = document.querySelector('.bot-tab-body');
-  if (view.type === 'bot' && _botTab === 'characters' && el) el.innerHTML = renderCharactersTabHtml(b);
-  else renderMain();
 }
 
 // 角色头像：现在还没有形象库，先用「名字首字」的占位块 —— 比空白更容易分辨
@@ -995,32 +979,15 @@ async function loadCharacters() {
   return state.characters || [];
 }
 
-// 把角色加进写手（先本地算好完整数组再 PUT —— 见 memory 里「PUT 是整份覆盖」那条坑）
-async function characterAttach(botId, charId) {
-  const b = (state.bots || []).find(x => x.id === botId);
-  if (!b) return toast('写手不存在', 'err');
-  const ids = Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds.slice() : [];
-  if (!ids.includes(charId)) ids.push(charId);
-  await saveWriterCharacters(botId, ids);
-}
-
-// 从写手的角色里移除（不影响角色池本身）
-async function characterDetach(botId, charId) {
-  const b = (state.bots || []).find(x => x.id === botId);
-  if (!b) return;
-  const ids = (b.activeCharacterIds || []).filter(x => x !== charId);
-  await saveWriterCharacters(botId, ids);
-}
-
-async function saveWriterCharacters(botId, ids) {
-  const r = await api(`/api/bots/${encodeURIComponent(botId)}/characters`, 'PUT', { characterIds: ids });
-  if (!r.ok) return toast(r.err || '保存失败', 'err');
-  // 本地同步（避免等一次 loadState 才看到变化）
-  const b = (state.bots || []).find(x => x.id === botId);
-  if (b) b.activeCharacterIds = r.activeCharacterIds || ids;
-  if (r.rejected && r.rejected.length) toast(`已忽略 ${r.rejected.length} 个无效角色 id`, '');
-  renderMain();
-}
+// ★★ 这里原先有 characterAttach / characterDetach / saveWriterCharacters 三个函数，
+//   「勾选角色 → PUT /api/bots/:id/characters」那条路（用户决策 2026-10-08「角色池对应写手」）。
+//   1:1 之后**角色的归属就是池的归属**，而池只归一位写手 —— 于是「给写手挑角色」这件事
+//   不再存在：给写手加人 = 把角色**换池**到它名下的池（POST /api/pools/move）。
+//   所以它们连同「从角色池添加」面板一起删掉了。
+//   ★ 副作用（正是要的效果）：写手身上再也没有「手动勾选的名单」可以覆盖池的判定，
+//   也就不会出现「写手看见了池外的角色」。
+//   ★ 注意 activeCharacterIds 这个字段还在（服务端派生镜像，见 lib/characters.js 的
+//   syncPoolCharacters），只是前端不再直接写它了。
 
 // ★★ 角色卡是**纯文本**：新建 / 编辑只有一整份正文（Markdown），不再拆成「性格特点 /
 //   年龄 / 外表形象 / 背景故事」这类分类框 —— 正文里想分几节、叫什么，用户自己定
@@ -1231,9 +1198,18 @@ async function saveCharacter(id) {
   //   不清的话下一次打开会**再并一遍**，正文里就出现两份同样的话。
   //   值本来就是空的时候后端 update() 会跳过，不会平白多出一条版本档。
   if (id) for (const k of CHR_BODY_LEGACY) body[k] = '';
-  // ★ 在角色池页新建 → 直接落进当前正在看的那个池（而不是永远进第一个池）。
-  //   只有正在看具体某个池时才带 poolId；「全部」和写手标签页都交给服务端用第一个池兜底。
-  if (!id && view.type === 'chars' && _curPoolId) body.poolId = _curPoolId;
+  // ★★ 建到哪里由「谁发起」决定（池 ↔ 写手 1:1，见 lib/characters.js 文件头）：
+  //   · 从写手页「新建角色」进来 → 带 botId，服务端直接建进**那位写手的专属池**
+  //     （原先的「建完再 PUT 一次挂进去」两步已删除：多一步就有中间态，
+  //      中间态里角色不在任何池里 —— 换池是唯一改归属的方式，更好维护）。
+  //   · 在角色池页看具体某个池 → 带 poolId，落进当前正在看的池（写手页/「全部」时不带，
+  //     由服务端按 body.botId 找池；两个都没给才用第一个池兜底）。
+  // ★ 互斥：forWriter 优先。两个都带的话服务端以 botId 为准（见 lib/routes/characters.js
+  //   的 targetPool），但这边先判掉，省得日志里出现两个来源。
+  const forWriter = _chrNewWriter;
+  _chrNewWriter = '';
+  if (!id && forWriter) body.botId = forWriter;
+  else if (!id && view.type === 'chars' && _curPoolId) body.poolId = _curPoolId;
 
   let r;
   if (id) {
@@ -1242,42 +1218,40 @@ async function saveCharacter(id) {
     r = await api('/api/characters', 'POST', body);
   }
   if (!r.ok) return toast(r.err || '保存失败', 'err');
-  // 新建 + 从写手设置进来 → 建完顺手挂进那位写手的角色池
-  const forWriter = _chrNewWriter;
-  _chrNewWriter = '';
-  let joined = false;
-  if (!id && forWriter && r.character && r.character.id) {
-    joined = await attachCharToWriter(forWriter, r.character.id);
-  }
   toast(id
     ? `已保存${r.changed && r.changed.length ? '（' + r.changed.join('、') + '）' : ''}`
-    : (joined ? '角色已创建，并加入该写手的角色池' : '角色已创建'), 'ok');
+    : (forWriter ? '角色已创建，已进它的专属池' : '角色已创建'), 'ok');
   const m = document.getElementById('chr-edit-modal');
   if (m) m.remove();
-  // ★ 先刷新角色池缓存再重绘设置里的勾选区：botPoolHtml 读的是 state.characters，
-  //   顺序反了的话新角色还没进 state，勾选项就画不出来。
+  // ★ 先刷新角色缓存再重绘：写手页那块「专属池」读的是 state.characters，
+  //   顺序反了的话新角色还没进 state，列表里就少一位。
   await loadCharacters();
-  if (joined) refreshBotPool(forWriter);
-  // ★ 停在这个页面时必须连池一起刷：新建角色会改变池的 count，
-  //   而切换条上的数字读的是 state.pools。只刷 characters 的话数字停在旧值，
-  //   更糟的是 poolDelete 会按**过期的** count 判断「池是不是空的」，
-  //   于是删一个非空的池时直接跳过三选一、悄悄把池里角色搬走。
-  if (view.type === 'chars') { await loadPools(); renderMain(); }
+  // ★ 同时刷池：新建角色会改变池的 count，而切换条上的数字读的是 state.pools。
+  //   只刷 characters 的话数字停在旧值，更糟的是 poolDelete 会按**过期的** count
+  //   判断「池是不是空的」，于是删一个非空的池时跳过三选一、悄悄把池里角色搬走。
+  await loadPools();
+  if (forWriter) refreshBotPool(forWriter);
+  // 停在这两页时重绘：角色页看得到新角色，写手页的「角色」标签页也是
+  if (view.type === 'chars' || view.type === 'bot') renderMain();
 }
 
-// 删除角色（★ 连根拔：提示会同时清掉哪些写手的引用）
+// 删除角色（★ 连根拔：提示会说清它原来归谁）
 async function characterDelete(id) {
-  // ★ 先拉一次权威数据。usedBy 只有 /api/characters 才有，而 state.characters
-  //   会被任何一次 loadState()（/api/state）覆盖成没有 usedBy 的版本 ——
-  //   那样这里就拿不到 usedBy，「有 N 位写手正在用它」的警告会**静默消失**，
-  //   但删除照样会清掉写手身上的引用。与 poolDelete 同一套防御。
+  // ★ 先拉一次权威数据。归属（ownerName / usedBy）只有 /api/characters 才有，
+  //   而 state.characters 会被任何一次 loadState()（/api/state）覆盖成没有归属的版本 ——
+  //   那样这里就拿不到归属，「它归某位写手」的警告会**静默消失**，
+  //   但删除照样会把它从那个池里摘掉。与 poolDelete 同一套防御。
   await loadCharacters();
   const c = (state.characters || []).find(x => x.id === id);
   if (!c) return;
-  const usedBy = c.usedBy || [];
-  const warn = usedBy.length
-    ? `\n⚠️ 有 ${usedBy.length} 位写手正在用它：${usedBy.map(u => u.name).join('、')}。\n删除后会从这些写手的角色里一并移除。`
-    : '';
+  // ★ 1:1 之后最多一位主人（池的所有者），措辞从「N 位写手正在用它」改成「归写手 X」。
+  //   兼容两种数据源：/api/characters 的 ownerName，或从池反查（state.pools 带 botId 时）。
+  const ownerName = c.ownerName
+    || (poolOwner((state.pools || []).find(p => String(p.id) === String(c.poolId))) || {}).name
+    || (c.usedBy || [])[0]?.name || '';
+  const warn = ownerName
+    ? `\n⚠️ 它现在归写手「${ownerName}」（住在它名下的池里）。\n删除后会从那个池里一并移除。`
+    : '\n（它所属的池没有主人 —— 本来就没有写手看得见它。）';
   if (!(await uiConfirm({
     title: '删除角色',
     message: `确定把「${c.name}」从角色池里删除？${warn}\n此操作不可撤销（版本档也会一起删掉）。`,
@@ -1285,10 +1259,11 @@ async function characterDelete(id) {
   }))) return;
   const r = await api(`/api/characters/${encodeURIComponent(id)}`, 'DELETE');
   if (!r.ok) return toast(r.err || '删除失败', 'err');
-  toast(r.prunedBots ? `已删除（同时清理了 ${r.prunedBots} 位写手的引用）` : '已删除', 'ok');
+  toast('已删除', 'ok');
   await loadCharacters();
   // 删角色同样会改变所属池的 count —— 与 saveCharacter 同理，必须连池一起刷
-  if (view.type === 'chars') { await loadPools(); renderMain(); }
+  await loadPools();
+  if (view.type === 'chars' || view.type === 'bot') renderMain();
 }
 
 // 版本档：列出历史版本，任选一版回滚
@@ -1401,18 +1376,30 @@ function switchPool(id) {
   renderCharacterPool();
 }
 
-// 顶部池切换条：点一下换池，末尾是「新建池」
+// 顶部池切换条：点一下换池。
+// ★ 这里**没有「新建池」**（原 poolCreate 已删）：池 ↔ 写手 1:1，每位写手建好时
+//   自动获得一个专属池（见 lib/characters.js 的 syncPoolCharacters）。手动新建等于
+//   凭空造一个「谁都不认」的池 —— 那种无主池里的角色**没有任何写手看得见**，
+//   正是用户要消灭的中间态（旧数据里已经留了一个，池页会标成「无主」等你处理）。
 function poolBarHtml(pools, total) {
-  const chip = (id, name, n, on) => `<button class="pool-chip${on ? ' active' : ''}" onclick="switchPool('${esc(id)}')"
-      title="${on ? '当前池' : '切到这个池'}">${esc(name)}<span class="pool-n">${n}</span></button>`;
+  const chip = (id, name, n, on, tip) => `<button class="pool-chip${on ? ' active' : ''}" onclick="switchPool('${esc(id)}')"
+      title="${esc(tip)}">${esc(name)}<span class="pool-n">${n}</span></button>`;
+  const cur = _curPoolId ? (pools.find((p) => String(p.id) === String(_curPoolId)) || null) : null;
+  const curOwner = poolOwner(cur);
+  // 有主的池删不掉（服务端 400）：它是那位写手的专属池，删掉等于让它突然失去全部角色。
+  const canDel = !!cur && !curOwner;
   return `<div class="pool-bar">
-    ${chip('', '全部', total, !_curPoolId)}
-    ${pools.map((p) => chip(p.id, p.name, p.count, _curPoolId === p.id)).join('')}
-    <button class="pool-chip pool-add" onclick="poolCreate()" title="新建一个角色池">${IC_PLUS}<span class="lb">新建池</span></button>
+    ${chip('', '全部', total, !_curPoolId, '所有池里的角色，一起看（只读总览，不是可以住人的池）')}
+    ${pools.map((p) => {
+      const o = poolOwner(p);
+      return chip(p.id, p.name, p.count || 0, String(_curPoolId) === String(p.id),
+        o ? `写手「${o.name}」的专属池 · ${p.count || 0} 位角色`
+          : `无主池 · ${p.count || 0} 位角色 —— 没有写手看得见，用行尾下拉把角色换到某位写手名下`);
+    }).join('')}
     <span class="spacer"></span>
-    ${_curPoolId
-      ? `<button class="ghost sm" onclick="poolRename('${esc(_curPoolId)}')" title="给这个池改名">改名</button>
-         <button class="ghost sm ghost-del" onclick="poolDelete('${esc(_curPoolId)}')" title="删除这个池（池内角色会移到「全部」里的第一个池）">删除池</button>`
+    ${cur
+      ? `<button class="ghost sm" onclick="poolRename('${esc(cur.id)}')" title="给这个池改名（它是${curOwner ? `写手「${esc(curOwner.name)}」的专属池` : '一个无主池'}）">改名</button>`
+        + (canDel ? `<button class="ghost sm ghost-del" onclick="poolDelete('${esc(cur.id)}')" title="删除这个无主池（池内角色会先搬到别的池，不丢人）">删除池</button>` : '')
       : ''}
   </div>`;
 }
@@ -1429,16 +1416,26 @@ function characterPoolHtml() {
     || String(c.persona || '').toLowerCase().includes(q)
     || (c.tags || []).some(t => String(t).toLowerCase().includes(q))) : inPool;
 
-  // 换池下拉：一位角色只属于一个池，选中即搬过去
+  // 换池下拉：一位角色只属于一个池，选中即搬过去。
+  // ★ 选项里标出每个池归谁 —— 池 ↔ 写手 1:1，用户选池其实是在选「给哪位写手」，
+  //   只列池名（比如「默认池」「测试」）根本看不出那背后是谁，很容易把角色搬进
+  //   一个无主池、于是没有任何写手看得见（这就是原来那个 bug 的观感）。
+  const poolLabel = (p) => {
+    const o = poolOwner(p);
+    return `${p.name}${o ? `（归 ${o.name}）` : '（无主）'}`;
+  };
   const poolSel = (c) => pools.length > 1
     ? `<select class="pool-sel" onchange="poolMoveChar('${esc(c.id)}', this.value)"
-        title="把这个角色移到别的池（一位角色只属于一个池）">
-        ${pools.map(p => `<option value="${esc(p.id)}"${p.id === c.poolId ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}
+        title="把这个角色换到别的池 —— 池归写手，所以选池就是选「给哪位写手」">
+        ${pools.map(p => `<option value="${esc(p.id)}"${p.id === c.poolId ? ' selected' : ''}>${esc(poolLabel(p))}</option>`).join('')}
       </select>`
     : '';
 
   const rows = list.length ? list.map(c => {
-    const usedBy = c.usedBy || [];
+    // ★ 归属以**池的主人**为准（poolOwner），不再读 usedBy —— usedBy 是 /api/characters
+    //   给的旧字段，而 state.characters 常被 /api/state 覆盖成没有 usedBy 的版本，
+    //   结果就是「明明有写手在用」却显示「还没有写手选用」（时灵时不灵的经典症状）。
+    const o = poolOwner(pools.find(p => String(p.id) === String(c.poolId)));
     return `
     <div class="ch-item">
       <div class="ch-avatar">${characterAvatarInner(c)}</div>
@@ -1452,9 +1449,9 @@ function characterPoolHtml() {
         ].filter(Boolean).join(' · ') || '（无更多信息）'}</div>
         ${c.persona ? `<div class="ch-snippet">${esc(snippet(c.persona, 120))}</div>` : ''}
         ${charStateHtml(c, 2)}
-        <div class="ch-usedby">${usedBy.length
-          ? `被 ${usedBy.map(u => esc(u.name)).join('、')} 使用`
-          : '还没有写手选用'}</div>
+        <div class="ch-usedby">${o
+          ? `归写手「${esc(o.name)}」`
+          : '所属池无主 —— 没有写手看得见它（用行尾下拉换到某位写手名下的池）'}</div>
       </div>
       <div class="ch-acts">
         ${poolSel(c)}
@@ -1469,10 +1466,9 @@ function characterPoolHtml() {
       <div class="gal-empty-h">${q
         ? '换个关键词试试'
         : (_curPoolId
-          ? '从这个池里建一位角色，或者把别的池里的角色「换池」搬过来。'
-          : '角色是写手笔下的人物。建一位，然后在写手的「角色」标签页里选它。')}</div>
-      ${q ? '' : `<div class="gal-empty-act"><button class="primary sm" onclick="characterEdit()">${IC_PLUS}<span class="lb">新建角色</span></button>${
-        _curPoolId ? '' : `<button class="ghost sm" onclick="poolCreate()">${IC_PLUS}<span class="lb">新建池</span></button>`}</div>`}
+          ? '从这里建一位角色，或者把别的池里的角色「换池」搬过来。建在这里的角色归这个池的主人。'
+          : '角色是写手笔下的人物，每位写手有自己的专属池。建一位（建在「全部」下会落进第一个池），或者把已有角色换池给某位写手。')}</div>
+      ${q ? '' : `<div class="gal-empty-act"><button class="primary sm" onclick="characterEdit()">${IC_PLUS}<span class="lb">新建角色</span></button></div>`}
     </div>`;
 
   return `
@@ -1485,7 +1481,7 @@ function characterPoolHtml() {
         <button class="primary sm" onclick="characterEdit()">${IC_PLUS}<span class="lb">新建角色</span></button>
       </div>
       ${poolBarHtml(pools, all.length)}
-      <p class="empty-hint" style="margin:0 0 10px">角色池用来把角色分组，再把整个池「批量」绑给写手：绑池后池里的角色会持续同步给写手，往池里新加一位也会自动带过去，解绑则自动撤回。一位角色只属于一个池，可用行尾的下拉「换池」。写手在剧情里改写角色设定时会以「待确认建议」的形式给你，确认后才写入，旧版本自动留档可回滚。</p>
+      <p class="empty-hint" style="margin:0 0 10px"><b>池 ↔ 写手一一对应</b>：每位写手一个专属池，一个池只归一位写手；写手<b>只看得到自己池里</b>的角色，别家写手笔下的人物对它完全不可见。所以「给某位写手加人」= 用行尾下拉把角色<b>换池</b>到它名下的池（角色必须属于某个池，没有「不属于任何人」的中间态）。标着<b>无主</b>的池是旧数据遗留 —— 里面的人没有任何写手看得见，把角色换池给某位写手即可恢复。写手在剧情里改写角色设定 / 新建角色时会以「待确认建议」的形式给你，确认后才写入，旧版本自动留档可回滚。</p>
       <div class="ch-list">${rows}</div>
     </div>`;
 }
@@ -1504,35 +1500,21 @@ function characterSearch(v) {
 }
 
 // ---- 角色池的增删改（角色池页 / 写手标签页共用）----
-// 池变了之后，角色的 usedBy、写手的 activeCharacterIds 都可能跟着变，
+// 池变了之后，角色的归属、写手的派生镜像都可能跟着变，
 // 所以统一走 refreshAfterPoolChange()：池 + 角色 + 写手一起重新拉。
 async function refreshAfterPoolChange() {
   await loadPools();
   await loadCharacters();
-  // 侧栏也要重画：池的增删改 / 计数都反映在那份列表上
+  // 侧栏也要重画：池的增删改 / 计数 / 归属都反映在那份列表上
   renderSidebar();
   if (view.type === 'chars') renderMain();
 }
 
-async function poolCreate() {
-  const name = await uiPrompt({
-    title: '新建角色池',
-    message: '把角色分组，之后可以整个池一次性绑给写手。',
-    placeholder: '例如：校园组 / 都市组 / 古风组',
-    okText: '创建',
-  });
-  if (name === null) return;
-  const nm = String(name).trim();
-  if (!nm) return toast('池名不能为空', 'err');
-  const r = await api('/api/pools', 'POST', { name: nm });
-  if (!r.ok) return toast(r.err || '创建失败', 'err');
-  _curPoolId = r.pool ? r.pool.id : _curPoolId;
-  toast(`已创建角色池「${nm}」，先往里面放角色吧`, 'ok');
-  // 从侧栏的「新建池」进来时视图还停在别处 —— 顺手跳到刚建的这个池：
-  // 新池必然空着，下一步一定是往里放角色（不然点了个寂寞）。
-  if (view.type !== 'chars') view = { type: 'chars' };
-  await refreshAfterPoolChange();
-}
+// ★ 原来这里有个 poolCreate()（POST /api/pools {name}），已删：
+//   池 ↔ 写手 1:1 之后**池是跟着写手生的**，不跟着用户点按钮生。服务端
+//   POST /api/pools 现在必须带 botId，而且那位写手还得**没有**池才让建。
+//   面板上给不出这个入口（写手一建好就自动有池），留着只会让用户点出一个 400。
+//   要新建池请先新建写手；要给人就把角色换池过去。
 
 async function poolRename(id) {
   const p = (state.pools || []).find(x => x.id === id);
@@ -1551,8 +1533,9 @@ async function poolRename(id) {
   await refreshAfterPoolChange();
 }
 
-// 删除池：池里还有角色时必须让用户明确选「搬走」还是「一起删」，
-// 默认走安全的那条（搬到第一个池），不做静默销毁。
+// 删除池（★ 只有**无主**的池删得掉）。
+// 池里还有角色时必须让用户明确选「搬走」还是「一起删」，默认走安全的那条
+// （搬到别的池），不做静默销毁。
 async function poolDelete(id) {
   // ★ 先拉一次权威数据再判断「池里有没有角色」。
   //   count 是决定走「确认框」还是「三选一」的依据；用 state 里可能过期的 count，
@@ -1560,10 +1543,20 @@ async function poolDelete(id) {
   await loadPools();
   const p = (state.pools || []).find(x => x.id === id);
   if (!p) return toast('角色池不存在', 'err');
+  // ★ 有主的池不能删：它是某位写手的专属池（1:1）。删掉等于让那位写手突然
+  //   失去全部角色，那是「删角色」该干的事，不该藏在「删池」里顺手做掉。
+  //   服务端也会 400（lib/routes/pools.js），这里先拦一道 —— 直接报服务端的话
+  //   用户看到的是一句技术措辞，不如说清「为什么」。
+  const owner = poolOwner(p);
+  if (owner) {
+    return toast(`「${p.name}」是写手「${owner.name}」的专属池，不能删。`
+      + '池 ↔ 写手一一对应 —— 不想让它用这些人，就把角色换池到别的池里去。', 'err');
+  }
   const n = (p.count || 0);
   const others = (state.pools || []).filter(x => x.id !== id);
   if (!others.length) return toast('至少得留一个角色池 —— 角色总得有个地方放', 'err');
-  const target = others[0];
+  // 搬去哪：优先挑一个**有主**的池（搬过去至少有人看得见）。全是无主池就只能随便挑。
+  const target = others.find(x => poolOwner(x)) || others[0];
 
   // 池空 → 直接 confirm
   if (!n) {
@@ -1575,18 +1568,22 @@ async function poolDelete(id) {
     return refreshAfterPoolChange();
   }
 
-  // 池非空 → 三选一
+  // 池非空 → 二选一
   const drop = await poolDeleteAsk(p, n, target);
   if (drop === null) return;
   const r = await api(`/api/pools/${encodeURIComponent(id)}`, 'DELETE', drop ? { drop: true } : {});
   if (!r.ok) return toast(r.err || '删除失败', 'err');
-  toast(drop ? `已删除池「${p.name}」及其中 ${n} 位角色` : `已删除池「${p.name}」，${n} 位角色已移到「${target.name}」`, 'ok');
+  const toOwner = poolOwner(target);
+  toast(drop
+    ? `已删除池「${p.name}」及其中 ${n} 位角色`
+    : `已删除池「${p.name}」，${n} 位角色已搬到「${target.name}」${toOwner ? `（归 ${toOwner.name}）` : ''}`, 'ok');
   _curPoolId = '';
   await refreshAfterPoolChange();
 }
 
 // 返回 true=连角色一起删；false=角色搬到别的池；null=取消
 function poolDeleteAsk(p, n, target) {
+  const to = poolOwner(target);
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -1598,7 +1595,7 @@ function poolDeleteAsk(p, n, target) {
           <div class="confirm-text">这个池里还有 <b>${n}</b> 位角色，得先决定它们怎么办：</div>
           <label class="pool-del-opt">
             <input type="radio" name="pool-del-way" value="move" checked>
-            <span><b>搬到「${esc(target.name)}」</b><span class="pool-del-h">角色本身保留，只是换个池放</span></span>
+            <span><b>搬到「${esc(target.name)}」${to ? `（归 ${esc(to.name)}）` : '（无主）'}</b><span class="pool-del-h">角色本身保留，只是换个池放${to ? '' : ' —— 但那个池也没主人，搬过去仍然没有写手看得见'}</span></span>
           </label>
           <label class="pool-del-opt danger">
             <input type="radio" name="pool-del-way" value="drop">
@@ -1621,15 +1618,17 @@ function poolDeleteAsk(p, n, target) {
   });
 }
 
-// 把一位角色搬到别的池。注意：如果这位角色正被绑了源池的写手用着，
-// 服务端会同步把他的 activeCharacterIds 更新掉（角色池是「持续同步」的）。
+// 把一位角色换到别的池 —— 池 ↔ 写手 1:1，所以这同时就是「把它交给另一位写手」
+// （池归谁，池里的角色就归谁；服务端会同步重算写手身上的派生镜像）。
 async function poolMoveChar(charId, toPoolId) {
   if (!toPoolId) return;
   const c = (state.characters || []).find(x => x.id === charId);
   const r = await api('/api/pools/move', 'POST', { characterId: charId, toPoolId });
   if (!r.ok) { toast(r.err || '换池失败', 'err'); return renderCharacterPool(); }
   const p = (state.pools || []).find(x => x.id === toPoolId);
-  toast(`「${(c && c.name) || charId}」已换到「${(p && p.name) || toPoolId}」`, 'ok');
+  const o = poolOwner(p);
+  toast(`「${(c && c.name) || charId}」已换到「${(p && p.name) || toPoolId}」`
+    + (o ? `，现在归「${o.name}」` : '（那是无主池，暂时没有写手看得见它）'), 'ok');
   await refreshAfterPoolChange();
 }
 
@@ -2040,51 +2039,49 @@ function closeBotSettings() {
   if (m) m.remove();
 }
 
-// 写手设置里的「这位写手的角色池」区块：勾选 = 这位写手能写他。
-// ★ 角色本体存在**全局共享角色池**里，勾选只改 bot.activeCharacterIds（引用），
-//   不动角色本身 —— 同一位角色可以被多位写手同时选用。
+// 写手设置里的「这位写手的角色池」区块。
+// ★★ 1:1 之后这里**不再有勾选**：写手的角色就是它专属池里的成员，
+//   归属由「角色住在哪个池」决定，不由这张表单决定。
+//   以前这里是「勾选 = 把它交给这位写手」并把 activeCharacterIds 一起提交，
+//   现在 activeCharacterIds 是服务端按池派生的镜像，前端提交它只会制造冲突。
+//   给人 = 到角色池页把角色**换池**到它的池。
 function botPoolHtml(b) {
   const all = state.characters || [];
-  const activeIds = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : []).map(String);
-  const boundPools = (Array.isArray(b.poolIds) ? b.poolIds : []).map(String);
-  const rows = all.map((c) => {
-    // 池给的这几位在这里锁死：勾选 + 禁用。否则用户取消勾选保存后，
-    // 下一轮同步又会把它们加回来 —— 看起来像「取消勾选没用」。
-    const fromPool = !!c.poolId && boundPools.includes(String(c.poolId));
-    const on = activeIds.includes(String(c.id));
+  const ownPools = (Array.isArray(b.poolIds) ? b.poolIds : []).map(String);
+  const pool = (state.pools || []).find(p => ownPools.includes(String(p.id))) || null;
+  const mine = all.filter(c => c.poolId && ownPools.includes(String(c.poolId)));
+  const rows = mine.map((c) => {
     const meta = [String(c.id), c.age || '', (c.tags || []).join(' / '),
       c.experienceCount ? `${c.experienceCount} 条经历` : ''].filter(Boolean).join(' · ');
-    return `<label class="chr-pick${on ? ' on' : ''}${fromPool ? ' locked' : ''}" title="${esc(c.id)}${fromPool ? `\n来自绑定的角色池「${c.poolName || c.poolId}」，持续同步中（想撤掉请解绑这个池）` : ''}">
-        <input type="checkbox" class="chr-pick-box" value="${esc(c.id)}"${on || fromPool ? ' checked' : ''}${fromPool ? ' disabled' : ''}>
+    return `<div class="chr-pick on locked" title="${esc(c.id)}\n住在它的专属池「${esc(c.poolName || '')}」里">
         <span class="ch-avatar">${characterAvatarInner(c)}</span>
-        <span class="chr-pick-n">${esc(c.name)}${fromPool ? `<span class="ch-pool-src" title="来自绑定的角色池">池</span>` : ''}</span>
+        <span class="chr-pick-n">${esc(c.name)}</span>
         <span class="chr-pick-m">${esc(meta)}</span>
-      </label>`;
+      </div>`;
   }).join('');
   return `<div class="chr-pool">
-      <div class="chr-pool-head">${IC_USERS}<span class="lb">这位写手的角色池</span>
+      <div class="chr-pool-head">${IC_USERS}<span class="lb">它的专属角色池</span>
         <span class="spacer"></span>
-        <span class="ch-count">已选 ${activeIds.length} / 池中 ${all.length}</span>
-        <button class="ghost sm" type="button" onclick="newCharForWriter('${b.id}')" title="新建一位角色，并自动加进这位写手的角色池">${IC_PLUS}<span class="lb">新建角色</span></button>
+        <span class="ch-count">${mine.length} 位${pool ? ` · 「${esc(pool.name)}」` : ''}</span>
+        <button class="ghost sm" type="button" onclick="newCharForWriter('${b.id}')" title="新建一位角色，直接建进它的专属池">${IC_PLUS}<span class="lb">新建角色</span></button>
+        <button class="ghost sm" type="button" onclick="openCharacterPool()" title="打开角色池页：把已有角色换池到它名下">${IC_LAYERS}<span class="lb">换池</span></button>
       </div>
-      ${writerPoolBindHtml(b)}
-      ${all.length
+      ${writerOwnPoolHtml(b)}
+      ${mine.length
       ? `<div class="chr-pool-list">${rows}</div>`
-      : `<div class="chr-pool-empty">角色池还是空的。点「新建角色」建一位，或者直接跟这位写手聊 —— 它可以在剧情里提议新建人物。</div>`}
-      <div class="chr-pool-note">勾选的角色会写进它的提示词（【你的角色池】），它只能改自己池里的角色、也只能给池里的角色沉淀经历。角色本体在全局角色池，所有写手共用。带「池」标记的是绑定的角色池给的，会持续同步，不能在这里单独取消。</div>
+      : `<div class="chr-pool-empty">它的角色池还是空的。点「新建角色」直接建一位，或者直接跟这位写手聊 —— 它可以在剧情里提议新建人物（确认后直接进它的池）。</div>`}
+      <div class="chr-pool-note">池 ↔ 写手<b>一一对应</b>：下面这些就是它的全部角色，它也只看得见这些 —— 别家写手笔下的角色对它完全不可见。
+        要给它加人请到角色池页把角色<b>换池</b>过来；想拿走就换池到别的池（角色必须属于某个池，所以这里没有「移除」）。</div>
     </div>`;
 }
 
-// 从写手设置里新建角色：建完自动挂进这位写手的池子（否则建完它自己也写不了）
+// 从写手设置里新建角色：直接建进它的专属池（POST 时带 botId）
 function newCharForWriter(botId) {
   _chrNewWriter = botId;
   openCharacterEditModal(null);
 }
 
 // 重绘写手设置里那块角色池（只换这一块，不动用户正在填的其他表单项）。
-// ★ 不加这个会有静默 bug：在设置里「新建角色」后新角色已经进池子了，
-//   但勾选列表还是旧的（没有它）—— 用户再点保存，saveBot 按可见勾选框写
-//   activeCharacterIds，就把刚建的角色又踢出去了。
 function refreshBotPool(botId) {
   const wrap = document.querySelector('#bot-settings-modal .chr-pool');
   if (!wrap) return;
@@ -2094,21 +2091,6 @@ function refreshBotPool(botId) {
   tmp.innerHTML = botPoolHtml(b);
   const nu = tmp.querySelector('.chr-pool');
   if (nu) wrap.replaceWith(nu);
-}
-
-// 把角色挂进某位写手的角色池（追加式，不动已有引用）
-async function attachCharToWriter(botId, charId) {
-  const b = (state.bots || []).find((x) => x.id === botId);
-  if (!b) return false;
-  const ids = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : []).slice();
-  if (!ids.includes(charId)) ids.push(charId);
-  const r = await api(`/api/bots/${encodeURIComponent(botId)}/characters`, 'PUT', { characterIds: ids });
-  if (!r.ok) {
-    toast(`已创建，但没能加进写手的角色池：${r.err || '未知错误'}`, 'err');
-    return false;
-  }
-  if (r.activeCharacterIds) b.activeCharacterIds = r.activeCharacterIds;
-  return true;
 }
 
 let _scene = 'c2c';
@@ -3506,7 +3488,8 @@ let _pendingEdits = {};
 //
 // 数据来源分两处（刻意如此）：
 //   · 世界：世界卡（memory/world.md）里的 `## 世界：名字` 小节 + bot.activeWorld → 走接口取。
-//   · 角色：全局角色池 + bot.activeCharacterIds → state 里就有，不用额外请求。
+//   · 角色：这位写手**自己池里**的角色 → state.characters 里按 poolId 筛（charsInPools），
+//     不用额外请求。★ 别退回 bot.activeCharacterIds / 全局名单 —— 见 charsInPools 的说明。
 let _worlds = {};   // { botId: { worlds:[{name,body}], active, effective, changeCount } }
 
 async function loadWorlds(id) {
@@ -3529,9 +3512,9 @@ function renderChatCaps(id) {
        </button>`
     : '';
 
-  const chars = (Array.isArray(b.activeCharacterIds) ? b.activeCharacterIds : [])
-    .map(cid => (state.characters || []).find(c => c.id === cid))
-    .filter(Boolean);
+  // ★ 只列它自己池里的角色（charsInPools）—— 右侧胶囊上出现别家写手的人物，
+  //   就是「角色池中的角色会干扰写手」在界面上的样子。
+  const chars = charsInPools(b.poolIds);
   const MAXC = 6;
   const charPills = chars.slice(0, MAXC).map(c => `
     <button class="cap-pill cap-char" onclick="characterEdit('${esc(c.id)}')" title="编辑角色卡：${esc(c.name)}">
@@ -4146,7 +4129,7 @@ function adminQuick(type) {
   if (type === 'model') prompt = '请帮我创建/接入一个新模型：先用 get_panel_state 查看现有模型避免重复；信息不足时用 web_search 查官方 API 地址与模型 ID，再用 create_model 工具直接添加（无需确认）。';
   else if (type === 'edit') prompt = botName ? `请使用工具完整读取写手「${botName}」的记忆库文件与最近会话，诊断人设/表述/设定问题。如需修改，用 propose_memory_edit / propose_global_edit / propose_bot_config_edit 提交修改建议（我会确认后才会真正写入）。` : '请使用工具读取当前写手记忆库与最近会话进行诊断；需要修改时用 propose_* 工具提交建议（用户确认后才写入）。';
   else if (type === 'cfg') prompt = '请先调用 get_panel_state / list_robots 了解现状，再评估模型与全局配置并给出具体建议（选型、参数、联网）。';
-  else if (type === 'chars') prompt = '请先调用 list_characters 查看当前角色池，然后告诉我池子里有哪些角色、各自被哪些写手选用，并指出哪些角色的设定还比较单薄、值得补充。如需调整或新增角色，用 propose_character_edit / propose_character_create 提交建议（我会确认后才会真正写入）。';
+  else if (type === 'chars') prompt = '请先调用 list_characters 查看当前角色池，然后告诉我池子里有哪些角色、各自归哪位写手（池 ↔ 写手一一对应），并指出哪些角色的设定还比较单薄、值得补充。如需调整或新增角色，用 propose_character_edit / propose_character_create 提交建议（我会确认后才会真正写入）。';
   else if (type === 'prompt') prompt = '请为写手写一份高质量的人设提示词（Markdown，含角色背景、性格、说话风格、行为准则）；如你想基于现有记忆库改写，请先用 read_memory_file 读取原文再产出，并可用 propose_global_edit 提供全局提示词修改建议。';
   else if (type === 'summary') prompt = botName ? `请使用 read_sessions 读取写手「${botName}」最近的会话记录并总结，提炼关键信息与后续建议。` : '请使用 read_sessions 读取当前写手最近会话并总结。';
   else if (type === 'mem') prompt = botName ? `请使用 list_memory_files / read_memory_file 浏览写手「${botName}」的记忆库，总结当前设定并指出可优化处。` : '请使用工具读取当前写手的记忆库并总结设定。';
@@ -4778,15 +4761,16 @@ async function confirmEdit(btn) {
   } else if (ed.type === 'character_create') {
     if (!p.name) return toast('缺少角色名', 'err');
     // POST /api/characters 内部调 characters.create()，首版会自动进历史档
-    r = await api('/api/characters', 'POST', {
+    // ★ 带 botId 直落这位写手的**专属池**（池 ↔ 写手 1:1）。写手提议的新角色
+    //   payload 里有 writerId（server.js 的 propose_character_create 写的），
+    //   不给的话角色会掉进「第一个池」—— 那多半是别人的池，写手反而看不见自己刚建的人。
+    const createBody = {
       name: p.name, persona: p.persona, traits: p.traits, age: p.age,
       appearance: p.appearance, background: p.background, tags: p.tags,
       source: p.source || 'admin',
-    });
-    // ★ 写手提议的新角色：建完挂进它的角色池，否则它自己也写不了（它只能写自己池里的角色）
-    if (r.ok && p.writerId && r.character && r.character.id) {
-      await attachCharToWriter(p.writerId, r.character.id);
-    }
+    };
+    if (p.writerId) createBody.botId = p.writerId;
+    r = await api('/api/characters', 'POST', createBody);
   } else if (ed.type === 'world_change') {
     if (!p.text) return toast('缺少改变内容', 'err');
     const wid = p.botId || (view.type === 'bot' ? view.id : '');
@@ -5119,12 +5103,11 @@ async function saveBot(id) {
     // 长度自主权：空 = 跟随全局；三档之一 = 单独覆盖
     lengthPerm: $('#f-length-perm') && $('#f-length-perm').value ? $('#f-length-perm').value : undefined,
   };
-  // 角色池勾选（写手设置里的「这位写手的角色池」）。
-  // ★ 只在弹窗里真有这块时才写 —— 没有就保持原值，别把池子清成空。
-  const boxes = [...document.querySelectorAll('#bot-settings-modal .chr-pick-box')];
-  if (boxes.length) {
-    bots[i].activeCharacterIds = boxes.filter((x) => x.checked).map((x) => x.value);
-  }
+  // ★★ 这里原先会把写手设置弹窗里的「角色勾选框」收集成 activeCharacterIds 一起提交。
+  //   池 ↔ 写手 1:1 之后没有勾选框了（写手的角色 = 它池里的角色），也**不能再提交
+  //   这个字段**：它是 syncPoolCharacters 派生出来的镜像，客户端塞进来的值只会在
+  //   服务端被重算掉 —— 表面上「保存成功」，实际什么都没发生（最难查的那种）。
+  //   想改角色归属请走 POST /api/pools/move（面板：角色池页行尾的下拉）。
   const r = await api('/api/config', 'PUT', { bots });
   r.ok ? toast('已保存', 'ok') : toast(r.err, 'err');
   // 保存成功后关掉设置弹窗并刷新（角色卡上的名称/模型/状态会随之更新）
@@ -6305,8 +6288,8 @@ function hexA(hex, a) {
 $('#btn-add-bot').addEventListener('click', () => { view = { type: 'bot-form' }; renderMain(); });
 // 侧栏「角色池」分组的新建按钮：直接开新建角色弹窗（不必先跳进角色池页）
 $('#btn-add-char').addEventListener('click', () => openCharacterEditModal());
-// 侧栏「角色池」分组的新建池按钮
-$('#btn-add-pool').addEventListener('click', () => poolCreate());
+// ★ 这里原先还绑着侧栏的「新建池」按钮（#btn-add-pool）—— 已随按钮一起删：
+//   池 ↔ 写手 1:1，池是跟着写手生的，不跟着按钮生。见 poolCreate 原址的说明。
 
 // ---------- 内联 onclick 依赖的角色工作区函数 ----------
 // 顶层 function 声明在当前（非模块）脚本里本就在全局作用域，内联 onclick 可以直接调到；
@@ -6320,12 +6303,16 @@ Object.assign(window, {
   // 输出设置弹层（发送按钮旁）
   openOutputSheet, closeOutputSheet, saveOutputSheet,
   // 角色池 / 角色标签页（内联 onclick 引用；顶层 function 声明才会挂 window）
+  // ★ characterAttach / characterDetach / saveWriterCharacters 已删（池 ↔ 写手 1:1
+  //   之后「给写手勾角色」不存在了），别再加回来 —— 挂 window 时引用一个不存在的
+  //   标识符会直接抛 ReferenceError，整个面板白屏。
   openCharacterPool, characterEdit, saveCharacter, characterDelete,
-  characterHistory, characterRollback, characterAttach, characterDetach,
+  characterHistory, characterRollback,
   characterSearch, loadCharacters, newCharForWriter,
-  // 多角色池（顶部池切换条 / 写手绑池；内联 onclick 引用）
-  switchPool, poolCreate, poolRename, poolDelete, poolMoveChar,
-  toggleWriterPool, loadPools, refreshBotPool,
+  // 多角色池（顶部池切换条 / 行尾换池下拉 / 池改名删池；内联 onclick 引用）
+  // ★ poolCreate 与 toggleWriterPool 已删（池跟着写手生；写手只有一个池，没有「绑/解绑」）
+  switchPool, poolRename, poolDelete, poolMoveChar,
+  loadPools, refreshBotPool,
   // 侧栏池列表（内联 onclick 引用）
   openPoolFromSide,
   // 设置页「角色卡」模板（内联 onclick 引用）

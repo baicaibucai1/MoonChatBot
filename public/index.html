@@ -37,13 +37,12 @@
     <div class="side-group">
       <div class="side-label">
         <span>角色池</span>
-        <!-- 两个按钮要成组靠右：.side-label 是 space-between，三个直接子元素会被摊开 -->
+        <!-- 只有一个 ＋：新建角色（建在当前选中的池里）。
+             ★ 原来的「新建池」按钮已删 —— 池 ↔ 写手 1:1，每位写手建好时自动带一个
+             专属池，手动新建只会造出「谁都不认」的无主池（里面的人没有写手看得见）。 -->
         <span class="side-label-acts">
           <button class="add-btn" id="btn-add-char" title="新建角色（建在当前选中的池里）">
             <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.4v9.2M3.4 8h9.2"/></svg>
-          </button>
-          <button class="add-btn" id="btn-add-pool" title="新建角色池">
-            <svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 2.4 5.4 8 8.6l5.6-3.2z"/><path d="M2.4 8.2 8 11.4l5.6-3.2"/><path d="M2.4 11 8 14.2 13.6 11"/></svg>
           </button>
         </span>
       </div>

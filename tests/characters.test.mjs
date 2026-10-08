@@ -303,13 +303,47 @@ test('★ 已迁过写手卡时：单池→多池仍要报告 persist（否则�
 });
 
 test('★ 配置已经齐备时 persist=false（别每次启动都白写一遍盘）', () => {
+  // ★ 2026-10-08：夹具必须已是 **1:1 形态**（池带 botId、写手只绑自己那一个池），
+  //   否则迁移会去「认领历史无主池」——那是正常动作，persist=true 也就不是 bug。
+  const cfg = {
+    bots: [{ id: 'BOT1', name: '归云', kind: 'writer', activeCharacterIds: ['CHR1'], poolIds: ['POOLdefault'], poolCharacterIds: ['CHR1'] }],
+    characterPools: [{ id: 'POOLdefault', name: '归云的池', botId: 'BOT1', characters: [{ id: 'CHR1', name: '银' }] }],
+  };
+  const r = migrate.migrate(cfg, { memoryDirOf: () => '/nonexistent' });
+  assert.equal(r.ran, false);
+  assert.equal(r.persist, false);
+});
+
+// ★★ 回归（2026-10-08）：1:1 之前的历史配置（池无主、写手 poolIds 为空）
+//   必须被「认领」并落盘 —— 否则写手会突然看不见自己的角色（数据没丢，但不可见）。
+test('★ 1:1 之前的历史配置：无主池被认领给唯一匹配的写手，且报告 persist', () => {
   const cfg = {
     bots: [{ id: 'BOT1', name: '归云', kind: 'writer', activeCharacterIds: ['CHR1'], poolIds: [], poolCharacterIds: [] }],
     characterPools: [{ id: 'POOLdefault', name: '默认池', characters: [{ id: 'CHR1', name: '银' }] }],
   };
   const r = migrate.migrate(cfg, { memoryDirOf: () => '/nonexistent' });
-  assert.equal(r.ran, false);
-  assert.equal(r.persist, false);
+  assert.equal(r.persist, true, '认领改动了配置 → 必须落盘');
+  const p = characters.listPools(cfg)[0];
+  assert.equal(p.botId, 'BOT1', '池判给了唯一匹配的写手');
+  assert.deepEqual(cfg.bots[0].poolIds, ['POOLdefault'], '派生镜像跟着更新');
+  assert.deepEqual(cfg.bots[0].activeCharacterIds, ['CHR1'], '角色仍然看得见（没丢）');
+  assert.match(r.details.join('\n'), /判给它/, '细节里要说清发生了什么');
+});
+
+// ★★ 「不能乱猜」：无主池里的角色如果没有任何写手选过 → 保持无主并告警，
+//    绝不随手指给某位写手（那会制造「谁改的说不清」）。
+test('★ 无主池没人选过 → 不猜，保持无主并给出告警', () => {
+  const cfg = {
+    bots: [{ id: 'BOT1', name: '归云', kind: 'writer', activeCharacterIds: [], poolIds: [], poolCharacterIds: [] }],
+    characterPools: [
+      { id: 'POOLa', name: '无主池', characters: [{ id: 'CHR9', name: '孤儿' }] },
+      { id: 'POOLb', name: '归云的池', botId: 'BOT1', characters: [] },
+    ],
+  };
+  const r = migrate.migrate(cfg, { memoryDirOf: () => '/nonexistent' });
+  assert.equal(characters.findPool(cfg, 'POOLa').botId, '', '保持无主');
+  assert.match(r.details.join('\n'), /没有任何写手/, '要告警，别静默');
+  assert.equal(characters.allOf(cfg).length, 1, '角色没丢');
 });
 
 // ★★ 回归（2026-10-08）：早退分支里「收编残留旧字段」也必须报告 persist，

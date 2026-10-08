@@ -197,7 +197,8 @@ async function main() {
     //   ② 工具结果真的回到了模型手里（假模型把结果转述进了气泡文本）。
     const body1 = await page.textContent('#admin-msgs').catch(() => '');
     check('气泡里带出探针角色名「探针角色」', /探针角色/.test(body1), body1.slice(0, 120));
-    check('气泡点出该角色被哪位写手选用（或未被选用）', /选用|暂未被/.test(body1));
+    // ★ 1:1 之后「谁在用」= 「住在谁的专属池里」，措辞从「选用」改成了「归写手 X / 无主」
+    check('气泡点出该角色归哪位写手（或标注无主）', /归写手|无主|选用|暂未被/.test(body1));
     const toolChip = await page.evaluate(() =>
       [...document.querySelectorAll('#admin-msgs [class*="chip"], #admin-msgs [class*="tool"]')]
         .map((el) => el.textContent || '').join('|'));

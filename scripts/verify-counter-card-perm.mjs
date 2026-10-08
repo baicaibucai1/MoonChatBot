@@ -19,7 +19,7 @@
 //   ② ★ 模型给的增量**没有被丢**：确认条出现且写 +10（旧代码会丢掉 → 数值不出现）
 //   ③ ★ 确认后角色卡 counters.好感度 === 10（旧代码会一个数都不写）
 //   ④ 范围以角色卡为准（[0,10] 赢过默认 0–100）
-//   ⑤ ★★ 不越权：同名池里「别人选定的角色」卡上的计数器（秘密）不出现、也改不动
+//   ⑤ ★★ 不越权：**别的池**里的角色卡上的计数器（秘密）不出现、也改不动
 //   ⑥ 全程无 JS 错误
 //
 // 用法：node scripts/verify-counter-card-perm.mjs
@@ -39,7 +39,8 @@ const SHOT = path.join(HERE, 'shots');
 const CHROME = path.join(REPO_ROOT, 'playwright-browsers', 'chromium-1234', 'chrome-win64', 'chrome.exe');
 
 const CHAR_ID = 'CHRprobe0001';            // 写手选定的角色：卡上声明了「好感度」
-const OTHER_ID = 'CHRprobe0077';           // 同池但**没被选定**的角色：卡上声明了「秘密」
+const OTHER_ID = 'CHRprobe0077';           // **别的池**里的角色：卡上声明了「秘密」
+const OTHER_POOL = 'POOLother';            // 一个无主的池（谁都不该看见它里面的人）
 const EXP_TEXT = '在渡口替老张挡了一刀';
 const DELTA = 50;                          // 模型想加这么多
 const MAXV = 10;                           // 角色卡上的上限
@@ -156,7 +157,9 @@ async function main() {
     // ★ 角色卡正文写死 `##Counter：好感度[0,10]` —— 这才是本次要认的那处声明
     const chr = findProbeCharacter(cfg, CHAR_ID);
     if (chr) chr.persona = `沙箱探针用的角色设定。\n\n##Counter：好感度[0,${MAXV}]\n`;
-    // ★ 同池第二位角色：卡上声明了「秘密」，但它**没被选定** → 写手不该看得见
+    // ★ 另一位角色（不属于探针写手）：卡上声明了「秘密」，但它在**别的池**里
+    //   → 写手不该看得见。1:1 之后「看不见」的判据是**池的归属**（不再是「有没有被选定」），
+    //   所以这里必须真的放进另一个池 —— 扔在同一个池里就等于它的角色，会被看见。
     putProbeCharacter(cfg, {
       id: OTHER_ID, ts: 1700000000099, name: '隔壁角色',
       persona: `别的角色。\n\n##Counter：${SECRET}[0,100]\n`,
@@ -167,7 +170,7 @@ async function main() {
         persona: `别的角色。\n\n##Counter：${SECRET}[0,100]\n`,
         traits: '', age: '', appearance: '', background: '', tags: ['探针'], avatar: '',
       }],
-    });
+    }, OTHER_POOL);
     fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
 
     for (const f of ['app.js', 'style.css', 'design.css', 'index.html']) {
@@ -210,7 +213,7 @@ async function main() {
       counterLines.some((l) => l.includes('好感度') && l.includes('0~10')),
       `共 ${allSystems.length} 份 system 提示词、${counterLines.length} 行【计数器】：`
       + (counterLines.join(' ／ ').slice(0, 200) || '（一行都没有）'));
-    check('①b ★★ 不越权：同池「没被选定」的卡上的「秘密」不出现在任何提示词里',
+    check('①b ★★ 不越权：**别的池**里的卡上的「秘密」不出现在任何提示词里',
       !allSystems.some((s) => s.includes(SECRET)),
       '提示词里出现了别人的「秘密」—— 隔离被放开了');
 

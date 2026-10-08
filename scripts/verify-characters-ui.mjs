@@ -1,7 +1,7 @@
 // 真机验证：写手卡 / 角色池 UI 阶段
 //   ① 侧栏措辞已改成「写手」（不再叫「角色」）
-//   ② 写手卡的「角色」标签页：显示已选角色 + 能增删
-//   ③ 全局角色池页：搜索 / 新建 / 被谁使用
+//   ② 写手卡的「角色」标签页：显示自己池里的人（只读，改归属走换池）
+//   ③ 全局角色池页：搜索 / 新建 / 归谁（池 ↔ 写手 1:1）
 //   ④ 版本档弹窗 + 回滚（回滚后角色设定真的变回去，且回滚本身也留档）
 //   ⑤ 全程无 JS 错误
 //
@@ -67,7 +67,12 @@ console.log('\n[2] 写手卡的「角色」标签页');
   await page.waitForTimeout(900);
   const body = await page.textContent('#main');
   ok(/写手的角色/.test(body), '标题 = 「写手的角色」');
-  ok(charId ? body.includes('已选') : true, '显示已选角色计数');
+  // ★ 1:1 之后这里报的是「自己池里 N 位 · 池「…」」——不再有「已选 x / 池中 y」
+  //   （「池中」那个数是**全局**角色总数，等于告诉写手「你池子外还有别人的人物」）。
+  ok(charId ? /\d+\s*位[\s\S]{0,6}池「/.test(body) : true,
+    '显示角色计数（N 位 · 池「…」）');
+  ok(charId ? !/已选|池中/.test(body) : true,
+    '★ 不再出现「已选 / 池中」这类全局口径');
   // ★ 摘要里不该再出现 Markdown 井号（persona 常以 `# 人格` 开头）
   const snip = await page.$('.ch-snippet');
   if (snip) {
@@ -86,12 +91,14 @@ console.log('\n[3] 全局角色池页');
   ok(!!(await page.$('#chr-search')), '有搜索框');
   ok(/写手/.test(body), '文案里说明了它跟写手的关系');
 
-  // ★★ 回归（2026-10-08 实机抓到的 bug）：角色卡上的「被谁使用」必须对得上接口。
+  // ★★ 回归（2026-10-08 实机抓到的 bug）：角色卡上的「归谁」必须对得上接口。
   //   成因：openCharacterPool() 只 loadPools() 却不 loadCharacters()，而 /api/state 那份
-  //   characters **不带 usedBy**（usedBy 只在 /api/characters 里）→ 每张卡都写
+  //   characters **不带归属**（ownerName 只在 /api/characters 里）→ 每张卡都写
   //   「还没有写手选用」；更糟的是删一位正被写手用着的角色不弹警告，但接口照样会
-  //   把它从写手身上摘掉。
-  //   ⚠ 本文件顶部的注释一直宣称覆盖「被谁使用」，可此前**一条断言都没有** ——
+  //   把它从池里摘掉。
+  //   ★ 1:1 之后措辞从「被 X 使用」改成「归写手「X」」—— 每个角色只归一位写手，
+  //     UI 读的是**池的主人**（不再读 usedBy，那是会被 /api/state 覆盖掉的旧字段）。
+  //   ⚠ 本文件顶部的注释一直宣称覆盖「归谁」，可此前**一条断言都没有** ——
   //     空喊覆盖比不覆盖更坏。这里改成拿接口的值逐卡比对。
   const rich = await (await fetch(`${BASE}/api/characters`)).json();
   const wantUse = new Map((rich.characters || []).map((c) => [c.id, (c.usedBy || []).map((u) => u.name)]));
@@ -102,18 +109,18 @@ console.log('\n[3] 全局角色池页');
   ok(cards.length > 0, `渲染出 ${cards.length} 张角色卡`);
   const usedCards = cards.filter((c) => (wantUse.get(c.id) || []).length);
   if (!usedCards.length) {
-    console.log('  · 没有被写手使用的角色，跳过比对（先给写手选一位再跑）');
+    console.log('  · 没有归写手的角色，跳过比对（先把角色换池给某位写手再跑）');
   } else {
-    ok(usedCards.every((c) => /^被 .+ 使用$/.test(c.used)),
-      `被使用的角色卡写着「被 … 使用」（实际：${usedCards.map((c) => c.used).join(' / ')}）`);
+    ok(usedCards.every((c) => /^归写手「.+」$/.test(c.used)),
+      `归写手的角色卡写着「归写手「…」」（实际：${usedCards.map((c) => c.used).join(' / ')}）`);
     ok(usedCards.every((c) => (wantUse.get(c.id) || []).every((n) => c.used.includes(n))),
       '卡上列出的写手名与接口一致');
     const idle = cards.find((c) => !(wantUse.get(c.id) || []).length);
-    if (idle) ok(/还没有写手选用/.test(idle.used), '没被使用的角色写「还没有写手选用」');
+    if (idle) ok(/无主|没有写手看得见/.test(idle.used), `无主的角色标成「所属池无主」（实际：${idle.used}）`);
 
-    // ★ 同一个根因的第二个症状，也是更危险的那个：删一位**正被写手用着**的角色，
-    //   确认框必须点出是哪几位写手 —— 否则用户以为删了就删了，实际写手身上的引用
-    //   也被一并摘掉（接口会 prunedBots）。这里只打开确认框看一眼再取消，不真删。
+    // ★ 同一个根因的第二个症状，也是更危险的那个：删一位**归某位写手**的角色，
+    //   确认框必须点出那位写手 —— 否则用户以为删了就删了，实际那个池里也被摘掉了。
+    //   这里只打开确认框看一眼再取消，不真删。
     // ⚠ characterDelete() 返回的 Promise 要等用户点按钮才 resolve，所以这里
     //   绝不能把它的返回值交给 page.evaluate（那样会一直等下去 → 探针卡死）。
     //   用带花括号的箭头函数不返回任何东西，evaluate 立刻收工。
@@ -121,7 +128,7 @@ console.log('\n[3] 全局角色池页');
     await page.waitForSelector('#ui-confirm', { timeout: 3000 }).catch(() => {});
     const dlg = ((await page.textContent('#ui-confirm').catch(() => '')) || '')
       .replace(/\s+/g, ' ');
-    ok(/位写手正在用它/.test(dlg), `删除确认框点出了在用它的写手（实际：${dlg.slice(0, 90)}）`);
+    ok(/归写手/.test(dlg), `删除确认框点出了它的主人（实际：${dlg.slice(0, 90)}）`);
     const names = wantUse.get(usedCards[0].id) || [];
     ok(names.every((n) => dlg.includes(n)), `确认框列出的写手名与接口一致（${names.join('、')}）`);
     await page.click('#ui-confirm #cf-no').catch(() => {});
