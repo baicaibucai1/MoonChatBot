@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -160,13 +160,27 @@ let charUi = { name: 'node scripts/verify-characters-ui.mjs', code: -1, out: '',
   //   只 kill('SIGKILL') 的话 dev-sandbox 的 process.on('exit') 里的 cleanup() 不会跑，
   //   于是每跑一次全量就在 %TEMP% 留一份完整副本（约 5MB）。
   //   2026-10-08 攒到 25 个 / 97MB 才发现 —— 因为它是「慢慢漏」的，谁也不看 %TEMP%。
-  srv.kill('SIGKILL');
+  //
+  //   三步缺一不可（第一版只做了第 3 步，实测**整个目录一个都没删掉**）：
+  //     ① 杀**进程树**：shell:true 起的话 srv.pid 是 cmd.exe，光 kill 那个 pid
+  //        未必带走真正在跑的 node server。
+  //     ② 等端口真的不响应：进程没完全退出时，config.json 之类的句柄还锁着。
+  //     ③ 才轮到删目录（带重试）。
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(srv.pid), '/T', '/F'], { stdio: 'ignore' });
+  } else {
+    srv.kill('SIGKILL');
+  }
+  for (let i = 0; i < 20; i++) {
+    if ((await httpGet(PORT, '/api/state')) !== 200) break;
+    await sleep(250);
+  }
   const m = /沙箱目录\s+(\S+)/.exec(srvOut);
   if (m) {
-    for (let i = 0; i < 3; i++) {
-      try { fs.rmSync(m[1], { recursive: true, force: true }); } catch { /* 句柄还没释放，重试 */ }
+    for (let i = 0; i < 8; i++) {
+      try { fs.rmSync(m[1], { recursive: true, force: true }); } catch { /* 句柄没释放完，重试 */ }
       if (!fs.existsSync(m[1])) break;
-      await sleep(400);
+      await sleep(500);
     }
     if (fs.existsSync(m[1])) console.log(`  ⚠ 沙箱临时目录未能删除，请手动清理：${m[1]}`);
   } else {
