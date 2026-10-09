@@ -3,10 +3,14 @@
 // ★★ 2026-10-08 语义变更（用户：「角色池中的角色会干扰写手，应该改为角色池对应写手」）：
 //   池 ↔ 写手 **一一对应**，写手只看得到自己池里的角色。
 //   于是这份脚本原先验证的三样东西**已经不存在**，整段换掉：
-//     · 「新建池」按钮（池跟着写手生，不跟着按钮生）
 //     · 写手标签页的「绑定条」+ 点一下批量绑池
 //     · 写手设置里「池给的勾选项锁死」（勾选框本身没了；池给的 = 全部，只读展示）
-//   换成了：池归谁的展示、只读的专属池、换池是唯一改归属的入口、有主的池删不掉。
+//   换成了：池归谁的展示、只读的专属池、换池是唯一改归属的入口。
+//
+// ★★ 2026-10-08 追加语义（用户：「删除角色池的功能没有做」→「删了就真没了」）：
+//   · 写手**可以没有池** —— 删掉它的池就是真删了，服务端**不会**再自动补一个；
+//     新写手也不再自动获得池，要建池得显式点「新建池」（会给没池的写手建）。
+//   · 有了「新建池」按钮，且有主池**也画**「删除池」按钮（以前只有无主池才画）。
 //
 // 为什么必须用真浏览器：
 //   本轮前端改的是**模板字符串 + 内联 onclick**，语法检查（node --check）只能证明
@@ -15,18 +19,19 @@
 //     · 侧栏 / 池 chip 真的标出了「归谁 / 无主」（用错数据源就会全写「无主」）
 //     · 写手「角色」页真的只渲染自己池里的人（这是用户报的那个 bug 的界面侧）
 //     · 行尾「换池」下拉真的把角色搬过去了（POST /api/pools/move 走了没）
-//     · 有主的池 UI 上真的没有「删除池」按钮（服务端 400 只是兜底）
+//     · 有主的池 UI 上真的画出了「删除池」按钮、点了真能删掉
 //   这些只有真机点一遍才知道。
 //
 // 验证点：
-//   ① 角色栏顶部池切换条：全部 / 每个池（带归属）/ **没有**「新建池」
-//   ①b 侧栏池列表：每池一条 + 「归 X / 无主」+ 没有 #btn-add-pool
-//   ② 加一位写手后，它自动有池，侧栏与切换条都跟着长出「归 阿雪」那条
+//   ① 角色栏顶部池切换条：全部 / 每个池（带归属）/ **有**「新建池」
+//   ①b 侧栏池列表：每池一条 + 「归 X / 无主」+ 有 #btn-add-pool
+//   ② 加一位写手后它**没有池**；点「新建池」→ 弹名字输入 → 池归阿雪，侧栏与切换条跟着长出那条
 //   ③ 池空时的空状态文案 + 「新建角色」落在**当前池**（不是第一个池）
 //   ④ 行尾「换池」下拉：选项标出每个池归谁；换池后两边计数同步
 //   ⑤ 写手「角色」标签页：只列自己池里的人、只有一块只读的专属池、没有可点绑定条 / 移除按钮
 //   ⑥ 写手设置弹窗：专属池只读展示，**没有勾选框**
-//   ⑦ 删池：有主的池没有「删除池」按钮；无主池有，非空时走二选一（搬走 / 一起删）
+//   ⑦ 删池：有主池**也有**「删除池」按钮，确认框点名写手 + 说明删完它就「没有角色池」；
+//      无主池非空时走二选一（搬走 / 一起删）；★ 真删一个有主池 → 写手变「还没有角色池」
 //   ⑧ 全程无 JS 错误
 //
 // 用法：node scripts/verify-pools-ui.mjs
@@ -90,7 +95,7 @@ async function main() {
     check('出现了池切换条 .pool-bar', !!(await page.$('.pool-bar')));
     check('有「全部」chip', /全部/.test(await page.textContent('.pool-bar')));
     check('有「默认池」chip', /默认池/.test(await page.textContent('.pool-bar')));
-    check('★★ 没有「新建池」按钮（池跟着写手生，不跟着按钮生）', !(await page.$('.pool-chip.pool-add')));
+    check('★ 有「新建池」按钮（给**还没有池**的写手建；写手可以没有池）', !!(await page.$('.pool-chip.pool-add')));
     const defChip = await page.locator('.pool-chip', { hasText: '默认池' }).first();
     check('默认池 chip 带计数 1', /1/.test(await defChip.textContent()), (await defChip.textContent()).trim());
     check('★ 默认池 chip 的 title 标出归谁',
@@ -112,11 +117,11 @@ async function main() {
     check('侧栏列出「默认池」', /默认池/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
     check('侧栏条目带角色数', /1 位角色/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
     check('★★ 侧栏条目标出「归 探针写手」', /归\s*探针写手/.test(sideTxt), sideTxt.replace(/\s+/g, ' ').trim());
-    check('★★ 没有「新建池」按钮 #btn-add-pool', !(await page.$('#btn-add-pool')));
+    check('★ 侧栏也有「新建池」按钮 #btn-add-pool（和切换条上那个同一个入口）', !!(await page.$('#btn-add-pool')));
     check('侧栏仍有「新建角色」按钮 #btn-add-char', !!(await page.$('#btn-add-char')));
 
-    // ───────────────────── ② 加一位写手 → 自动有池 ─────────────────────
-    console.log('\n[2] 加一位写手（走 API）→ 它自动获得专属池');
+    // ───────────────────── ② 加一位写手 → **没有池** → 用「新建池」显式建 ─────────────────────
+    console.log('\n[2] 加一位写手（走 API）→ 它**不会**自动有池 → 点「新建池」给它建');
     const rawCfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     const b2 = {
       ...JSON.parse(JSON.stringify(rawCfg.bots[0])),
@@ -125,8 +130,29 @@ async function main() {
     await put('/api/config', { bots: [rawCfg.bots[0], b2] });
     await page.evaluate(() => window.loadState && window.loadState());
     await page.waitForTimeout(1000);
+    // ★ 2026-10-08 用户：「删除角色池 → 删了就真没了」。补池已取消，所以新写手**没有池**。
+    check('★★ 新写手不会自动获得池（池由用户显式建）',
+      !(await getPools()).some((p) => p.botName === '阿雪'),
+      JSON.stringify((await getPools()).map((p) => [p.id, p.botName])));
+
+    // 点「新建池」：只有一位没池的写手 → 跳过挑写手，直接弹池名输入
+    await page.evaluate(() => window.openCharacterPool());
+    await page.waitForTimeout(800);
+    await page.locator('.pool-chip.pool-add').click();
+    await page.waitForTimeout(700);
+    check('★ 弹出池名输入框 #ui-prompt', !!(await page.$('#ui-prompt')));
+    const promptTxt = ((await page.textContent('#ui-prompt')) || '').replace(/\s+/g, ' ');
+    check('★★ 提示里点名是给「阿雪」建的（用户知道池会归谁）',
+      /阿雪/.test(promptTxt), promptTxt.slice(0, 160));
+    await page.fill('#pf-input', '阿雪的池');
+    await page.click('#pf-ok');
+    await page.waitForTimeout(1600);
     const P2 = ((await getPools()).find((p) => p.botName === '阿雪') || {}).id;
-    check('★ 新写手自动有池（用户不用手点）', !!P2, JSON.stringify((await getPools()).map((p) => [p.id, p.botName])));
+    check('★★ 建池成功且归阿雪（写手可以没有池，但也能随时被给一个）', !!P2,
+      JSON.stringify((await getPools()).map((p) => [p.name, p.botName])));
+    check('★ 阿雪身上也有 poolIds 了（派生镜像跟着权威走）',
+      JSON.stringify(((await getState()).bots.find((b) => b.id === 'BOT2') || {}).poolIds || [])
+      === JSON.stringify([P2]));
     // 切到「全部」再检查两处列表
     await page.evaluate(() => window.openCharacterPool());
     await page.waitForTimeout(800);
@@ -239,14 +265,27 @@ async function main() {
     await page.waitForTimeout(500);
 
     // ───────────────────── ⑦ 删池 ─────────────────────
-    console.log('\n[7] 删池：有主的删不掉 / 无主的能删');
+    console.log('\n[7] 删池：有主的**也**删得掉（「删了就真没了」）/ 无主的也能删');
     await page.evaluate(() => window.openCharacterPool());
     await page.waitForTimeout(900);
     await page.locator('.pool-chip', { hasText: '默认池' }).first().click();
     await page.waitForTimeout(700);
     const barOwned = await page.textContent('.pool-bar');
-    check('★ 有主的池：有「改名」但没有「删除池」', /改名/.test(barOwned) && !/删除池/.test(barOwned),
-      barOwned.replace(/\s+/g, ' ').trim());
+    check('★★ 有主的池：有「改名」**也有**「删除池」（曾经只有无主池才画删除按钮）',
+      /改名/.test(barOwned) && /删除池/.test(barOwned), barOwned.replace(/\s+/g, ' ').trim());
+    // 点一下看确认框：有主 + 非空 → 二选一 + 一行点名写手的警告
+    await page.locator('.pool-bar button', { hasText: '删除池' }).first().click();
+    await page.waitForTimeout(600);
+    check('★ 有主非空池也走二选一 #pool-del-modal', !!(await page.$('#pool-del-modal')));
+    const ownedModal = ((await page.textContent('#pool-del-modal')) || '').replace(/\s+/g, ' ');
+    check('★★ 确认框点名写手，并说明删掉后它会「没有角色池」',
+      /探针写手/.test(ownedModal) && /没有角色池/.test(ownedModal), ownedModal.slice(0, 220));
+    check('两个选项都在（搬走 / 一起删）',
+      (await page.$$('#pool-del-modal .pool-del-opt')).length === 2);
+    await page.screenshot({ path: path.join(SHOT, 'verify-pools-5-delmodal.png') });
+    await page.click('#pd-no');                 // 先取消，别把后面的用例状态弄乱
+    await page.waitForTimeout(500);
+    check('取消后池还在', (await getPools()).some((p) => p.name === '默认池'));
 
     // 造一个无主池：让 BOT2 释放它的池，并往池里放一位角色
     const P2b = (await getPools()).find((p) => p.name === '阿雪的池');
@@ -281,6 +320,43 @@ async function main() {
     check('★ 角色被搬到别的池（没丢）',
       (await getState()).characters.some((c) => c.name === '待搬角色'),
       JSON.stringify((await getState()).characters.map((c) => c.name)));
+
+    // ── ⑦c ★★ 真的把一个**有主**的池删掉：用户报的原话就是「删除角色池的功能没有做」──
+    //   此刻只剩「默认池」一个（最后一个池删不掉），先给没有池的阿雪建一个，让池数回到 2。
+    console.log('\n[7c] ★★ 删一个有主的池：从头走完（用户报的那个 bug）');
+    // ⚠️ 必须用「不返回 promise」的写法：poolCreate 会 await 用户输入，
+    //    把 promise 交回给 Playwright 会一直挂着（整条探针被拖死）。
+    await page.evaluate(() => { window.poolCreate('BOT2'); });
+    await page.waitForTimeout(700);
+    if (await page.$('#ui-prompt')) {
+      await page.fill('#pf-input', '回收站');
+      await page.click('#pf-ok');
+      await page.waitForTimeout(1500);
+    }
+    check('★ 又给阿雪建了个池（池数回到 2，最后一个池才删不掉）',
+      (await getPools()).length === 2, JSON.stringify((await getPools()).map((p) => p.name)));
+    await page.evaluate(() => window.openCharacterPool());
+    await page.waitForTimeout(800);
+    await page.locator('.pool-chip', { hasText: '默认池' }).first().click();
+    await page.waitForTimeout(700);
+    await page.locator('.pool-bar button', { hasText: '删除池' }).first().click();
+    await page.waitForTimeout(600);
+    await page.click('#pd-ok');                  // 默认「搬走」那条
+    await page.waitForTimeout(1800);
+    const afterOwned = await getPools();
+    check('★★ 有主的池真的删掉了（曾经服务端 400 + 前端连按钮都没有）',
+      !afterOwned.some((p) => p.name === '默认池'), JSON.stringify(afterOwned.map((p) => p.name)));
+    const stB1 = (await getState()).bots.find((b) => b.id === botId) || {};
+    check('★★ 那位写手变成「没有池」（poolIds 空、名单空）',
+      (stB1.poolIds || []).length === 0 && (stB1.activeCharacterIds || []).length === 0,
+      JSON.stringify({ poolIds: stB1.poolIds, active: stB1.activeCharacterIds }));
+    // 写手页要显式呈现「没有池」并给出出路（而不是空白）
+    await page.evaluate((id) => { window.selectBot(id); window.switchBotTab('characters'); }, botId);
+    await page.waitForTimeout(1200);
+    const bindTxt = ((await page.textContent('.pool-bind')) || '').replace(/\s+/g, ' ');
+    check('★★ 写手页显示「它还没有角色池」并给出「新建一个空池」这条路',
+      /它还没有角色池/.test(bindTxt) && /新建一个空池/.test(bindTxt), bindTxt.slice(0, 220));
+    await page.screenshot({ path: path.join(SHOT, 'verify-pools-6-nopool.png') });
 
     // ───────────────────── ⑧ JS 错误 ─────────────────────
     console.log('\n[8] JS 错误');

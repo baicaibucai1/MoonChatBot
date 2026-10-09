@@ -220,27 +220,79 @@ test('换池到不存在的池 / 不存在的角色都要报错而不是静默',
 // ★ 权威是 `pool.botId`；bot.poolIds / activeCharacterIds 都是**派生镜像**，
 //   由 syncPoolCharacters 重算。所以下面每个用例都断言「同步之后」的值。
 
-test('★ 每位写手自动获得一个专属池（没有任何池的写手会被补一个）', () => {
+test('★ 写手**不会**被自动补池 —— 没有池就是没有池', () => {
+  // 2026-10-08 用户决策：「删除角色池 → 删了就真没了」。这条正是那次 bug 的根因：
+  // 旧的 syncPoolCharacters 会给没有池的写手补一个空池，于是删完立刻又长出来，
+  // 用户看到的是「删除按钮彻底失灵」。所以这里**反向**断言：不许补。
   const cfg = fresh([{ id: 'BOT1', name: '归云' }, { id: 'BOT2', name: '洛天' }]);
   C.ensurePools(cfg);
   C.syncPoolCharacters(cfg);
 
-  const p1 = C.poolOfBot(cfg, 'BOT1');
-  const p2 = C.poolOfBot(cfg, 'BOT2');
-  assert.ok(p1 && p2, '两位写手都有池');
-  assert.notEqual(p1.id, p2.id, '各是各的池，不共用');
-  assert.equal(p1.name, '归云的池');
-  assert.deepEqual(cfg.bots[0].poolIds, [p1.id]);
-  assert.deepEqual(cfg.bots[1].poolIds, [p2.id]);
-  // 幂等：再同步一次不该再造池
-  const n = C.syncPoolCharacters(cfg);
-  assert.equal(n, 0, '第二次同步无事可做');
-  // 3 个 = ensurePools 兜底的「默认池」（固定 id、无主、空）+ 两位写手各一个。
-  // 兜底池留着是有意的：它保「至少有一个池」这条不变量（removePool / 整份 PUT 都靠它），
-  // 也是历史角色迁入的落点 —— 无主池对写手不可见，所以留着没有副作用。
-  assert.equal(C.listPools(cfg).length, 3);
+  assert.equal(C.poolOfBot(cfg, 'BOT1'), null, '归云没有池');
+  assert.equal(C.poolOfBot(cfg, 'BOT2'), null, '洛天没有池');
+  assert.deepEqual(cfg.bots[0].poolIds, [], '派生镜像也是空');
+  assert.deepEqual(cfg.bots[1].poolIds, []);
+  assert.deepEqual(cfg.bots[0].activeCharacterIds, [], '没有池 = 看不见任何角色');
+  // 只剩 ensurePools 兜底的「默认池」（固定 id、无主、空）——它保「至少有一个池」
+  // 这条不变量（removePool / 整份 PUT 都靠它），也是历史角色迁入的落点。
+  assert.equal(C.listPools(cfg).length, 1);
   assert.equal(C.findPool(cfg, C.DEFAULT_POOL_ID).botId, '', '兜底池无主');
   assert.equal(C.charactersOfBot(cfg, cfg.bots[0]).length, 0, '写手看不到兜底池里的东西');
+});
+
+test('★ 删掉写手的专属池后，同步**不会**把它补回来', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }]);
+  C.ensurePools(cfg);
+  const own = C.createPool(cfg, { name: '归云的池', botId: 'BOT1' });
+  C.create(own.characters, { name: '银' }, 'user');
+  C.syncPoolCharacters(cfg);
+  assert.deepEqual(cfg.bots[0].poolIds, [own.id], '先有池');
+  assert.equal(cfg.bots[0].activeCharacterIds.length, 1);
+
+  const r = C.removePool(cfg, own.id, { dropCharacters: true });
+  assert.equal(r.ok, true, '有主池也删得掉');
+  C.syncPoolCharacters(cfg);
+  C.syncPoolCharacters(cfg);      // 连同步两次，看它会不会「长出来」
+  assert.equal(C.poolOfBot(cfg, 'BOT1'), null, '删了就真没了');
+  assert.deepEqual(cfg.bots[0].poolIds, []);
+  assert.deepEqual(cfg.bots[0].activeCharacterIds, []);
+  assert.equal(C.listPools(cfg).length, 1, '只剩兜底池');
+});
+
+test('★ ensurePoolForBot：按需建池（幂等；已有池原样返回；没这位写手返回 null）', () => {
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }, { id: 'BOT2', name: '归云' }]);
+  C.ensurePools(cfg);
+
+  const p = C.ensurePoolForBot(cfg, 'BOT1');
+  assert.ok(p, '建出来了');
+  assert.equal(p.botId, 'BOT1');
+  assert.equal(p.name, '归云的池');
+  assert.equal(p.characters.length, 0, '是空池');
+
+  assert.equal(C.ensurePoolForBot(cfg, 'BOT1').id, p.id, '幂等：已有池就原样返回');
+  assert.equal(C.listPools(cfg).length, 2, '没有多建');
+
+  // 同名写手：第二个不能顶掉第一个，名字要避重
+  const p2 = C.ensurePoolForBot(cfg, 'BOT2');
+  assert.notEqual(p2.name, p.name, '同名写手也不撞名');
+  assert.equal(p2.botId, 'BOT2');
+
+  assert.equal(C.ensurePoolForBot(cfg, ''), null, '空 botId 不建池');
+  assert.equal(C.ensurePoolForBot(cfg, 'BOT没有'), null, '写手不存在不建池');
+});
+
+test('★ 给没有池的写手建第一个角色：懒建池（ensurePoolForBot）+ 落进那个池', () => {
+  // 这条是「按需建池」的实际用法：写手可以没有池，但既然要往里放角色，它非有池不可。
+  const cfg = fresh([{ id: 'BOT1', name: '归云' }]);
+  C.ensurePools(cfg);
+  assert.equal(C.poolOfBot(cfg, 'BOT1'), null);
+
+  const p = C.ensurePoolForBot(cfg, 'BOT1');
+  C.create(p.characters, { name: '银' }, 'user');
+  C.syncPoolCharacters(cfg);
+
+  assert.equal(C.charactersOfBot(cfg, cfg.bots[0]).length, 1, '写手看到了');
+  assert.equal(C.charactersOfBot(cfg, cfg.bots[0])[0].name, '银');
 });
 
 test('★ 专属池即批量：池内角色自动进 activeCharacterIds', () => {

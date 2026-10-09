@@ -383,8 +383,28 @@ async function main() {
     check('⑧e 不带 botId 的「新建池」被拒（池没有"公共"这一说）', mkPool.status === 400, String(mkPool.status));
     const mkPool2 = await json('/api/pools', 'POST', { name: '重复的池', botId: BOTA });
     check('⑧f 已经有池的写手再建池被拒（一位写手一个池）', mkPool2.status === 400, String(mkPool2.status));
-    const delOwned = await json(`/api/pools/${POOL_A}`, 'DELETE', {});
-    check('⑧g 有主的池不能删', delOwned.status === 400, String(delOwned.status));
+    // ★★ 语义变更（2026-10-08 用户：「删除角色池的功能没有做」→「删了就真没了」）：
+    //   有主的池现在**删得掉**了 —— 以前服务端 400、前端连按钮都不画，用户点删除毫无反应。
+    //   这里拿阿空的**空池**试（删它不会牵连别的用例），删完那位写手变成「没有池」。
+    const delOwned = await json(`/api/pools/${POOL_EMPTY}`, 'DELETE', {});
+    check('⑧g ★★ 有主的池现在删得掉（曾经 400）',
+      delOwned.status === 200 && delOwned.body.ok,
+      `${delOwned.status} ${JSON.stringify(delOwned.body).slice(0, 120)}`);
+    const c0 = await state();
+    const bC0 = c0.bots.find((b) => b.id === BOTC) || {};
+    check('⑧h ★ 删完那位写手变成「没有池」（poolIds 空、看不见任何角色）',
+      (bC0.poolIds || []).length === 0 && (bC0.activeCharacterIds || []).length === 0,
+      JSON.stringify({ poolIds: bC0.poolIds, active: bC0.activeCharacterIds }));
+    // ★★ 关键回归：走一遍**写路径**（PUT /api/config 内部会 syncPoolCharacters），
+    //    确认池**不会**被自动补回来 —— 旧实现就是在这里补的，所以用户以为按钮失灵。
+    const cfgBack = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    await json('/api/config', 'PUT', { bots: cfgBack.bots });
+    const c1 = await state();
+    check('⑧i ★★ 走完写路径后仍然没有池（不会自动长出来）',
+      (((c1.bots.find((b) => b.id === BOTC)) || {}).poolIds || []).length === 0,
+      JSON.stringify(((c1.bots.find((b) => b.id === BOTC)) || {}).poolIds));
+    check('⑧j ★ 想再给它一个池，就得**显式**建（面板「新建池」走的就是这条）',
+      (await json('/api/pools', 'POST', { name: '阿空的新池', botId: BOTC })).status === 200);
 
     // ───────────────── ⑥ 写手可以写进角色池 ─────────────────
     console.log('\n[6] 把「雪见」换池给阿岩 → 下一轮阿岩就看得见他');
