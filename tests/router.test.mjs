@@ -56,8 +56,10 @@ before(() => { router = buildRouter(); });
 
 describe('路由表结构', () => {
   // ★ 这个数字随路由增删而变，改动时也要改它 —— 断言的意义是「别有人悄悄加了路由却没想清楚顺序」
-  test('条目总数稳定在 84（... + 角色池 13 条 + 多角色池 7 条 + 世界卡 5 条：改变列表/追加/删除 + 多世界列表/切换活跃）', () => {
-    assert.equal(router.routes.length, 84);
+  // 84 → 87：图床域（GET/POST /api/images + DELETE /api/images/:name）3 条
+  // 87 → 88：POST /api/bots/:id/chat/abort —— 终止正在跑的那一轮面板对话
+  test('条目总数稳定在 88（... + 角色池 13 条 + 多角色池 7 条 + 世界卡 5 条 + 图床 3 条 + 终止对话 1 条：改变列表/追加/删除 + 多世界列表/切换活跃 + 图片上传/列表/删除 + 终止面板对话）', () => {
+    assert.equal(router.routes.length, 88);
   });
 
   test('★ pools 域守「先具体后通配」：/move 与 /:id/characters 必须排在 /:id 之前', () => {
@@ -96,6 +98,23 @@ describe('路由表结构', () => {
       assert.ok(i >= 0, `应存在 /api/characters/:id/${name} 条目`);
       assert.ok(i < iDetail, `${name} 必须排在 :id 之前（当前 ${i} vs ${iDetail}）`);
     }
+  });
+
+  test('★ images 域守「先具体后通配」：/api/images 的 GET/POST 必须排在 /:name 之前', () => {
+    // 图床的三条：两个 exact（列表 / 上传）+ 一个正则（删除）。
+    // exact 与正则在同一个数组里按序下探，所以只要顺序对了，
+    // GET /api/images 就不会被「删除」那条吞掉（虽然那条是 DELETE，方法不同也拦得住，
+    // 但顺序钉死后即使以后加了 DELETE 集合接口也不会踩坑）。
+    const iList = router.routes.findIndex((r) => r.exact === '/api/images' && r.m === 'GET');
+    const iPost = router.routes.findIndex((r) => r.exact === '/api/images' && r.m === 'POST');
+    const iDel = router.routes.findIndex((r) => r.re && r.re.source.includes('images'));
+    assert.ok(iList >= 0, 'GET /api/images 必须存在');
+    assert.ok(iPost >= 0, 'POST /api/images 必须存在');
+    assert.ok(iDel >= 0, 'DELETE /api/images/:name 必须存在');
+    assert.ok(iList < iDel && iPost < iDel, `列表(${iList})/上传(${iPost}) 必须排在删除(${iDel}) 之前`);
+    // 真正要防的是「名字里带点也被当成一个文件」：/api/images/a.png 必须命中删除条目
+    const e = router.matchEntry('DELETE', '/api/images/a.png');
+    assert.ok(e && e === router.routes[iDel], 'DELETE /api/images/a.png 应命中删除条目');
   });
 
   test('★ characters 域能正确提取捕获组（不因多包方括号而永不匹配）', () => {

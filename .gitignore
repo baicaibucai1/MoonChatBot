@@ -38,3 +38,15 @@ scripts/shots/
 优化建议.md
 打包exe可行性评估.md
 重构评估结论.md
+
+# ★★ config.json 的**备份**：里面是明文 API Key，绝不能进版本库（2026-10-10）
+#   config.json 本身早就在上面忽略了，但 `config.json.bak-<时间戳>` 这种带后缀的名字
+#   不会被 `config.json` 这条规则覆盖 —— 差点因此把 3 个备份（共 9 处明文 Key）
+#   提交进**公开**仓库。这里单独收口，两边都堵上。
+config.json.bak*
+config.json.*.bak*
+*.config.json.bak*
+
+# ★ Android 安装包（每个 ~18MB）：属编译产物，走 GitHub Releases，不进版本库
+#   （与上面 dist-setup/ 同一条理由 —— 别让 55MB 二进制把仓库撑肿）
+*.apk

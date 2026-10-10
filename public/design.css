@@ -212,6 +212,12 @@ button.primary:hover { background: var(--primary-hover); color: var(--on-primary
 button.primary:active { box-shadow: var(--el-1); }
 button.primary:disabled { background: var(--surface-3); color: var(--on-surface-faint); box-shadow: none; }
 
+/* 流式输出期间，「发送」就地变成「停止」——用错误色把它和「再发一条」区分开。
+   ★ 只换皮不换位置：长文写作时用户手就停在那个位置，弹出一个新按钮反而更容易点错。
+     但颜色必须明显不同，否则「本来想停却把半句话又发出去」是迟早的事。 */
+button.primary.stop { background: var(--error); color: #fff; }
+button.primary.stop:hover { background: color-mix(in srgb, var(--error) 86%, #000); color: #fff; }
+
 /* 危险：红色文字 + 悬停淡底 */
 button.danger { color: var(--error); border-color: var(--outline); }
 button.danger:hover { background: var(--error-container); color: var(--on-error-container); border-color: transparent; }
@@ -361,7 +367,13 @@ button.ghost.hb-del:hover, button.hb-del:hover {
 .side-empty { font-size: 11.5px; color: var(--on-surface-faint); padding: 8px 10px; }
 .side-group + .side-group { padding-top: 4px; }
 
-.side-btns { display: flex; gap: 8px; margin: auto 12px 8px; }
+/* ★ 4 个入口排成 2×2，而不是一行 4 个：
+   一行 4 个时侧栏 256px 平摊下来每个只有 52px 宽，图标 14px + 间距 6px 后
+   只剩 30px 给文字 ——「工作区」三个字几乎贴着图标挤死。
+   两列后每个约 112px，字和图标都有呼吸空间；代价只是多占一行（+40px），
+   底部「贴地」的观感不变。以后再加第五、第六个入口也不会回到挤死的状态。
+   ★ 顺序刻意按语义分行：上排「设置 / 模型」是配置，下排「图库 / 工作区」是内容与草稿。 */
+.side-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: auto 12px 8px; }
 /* 侧栏底部导航钮：走标准按钮刻度（32 / 药丸 / 500），选中态用 tonal 底 */
 .settings-btn {
   flex: 1; height: var(--btn-h); padding: 0 var(--btn-pad);
@@ -808,8 +820,10 @@ label.frm { display: block; font-size: 11.5px; color: var(--on-surface-variant);
   display: flex; flex-direction: column; gap: 2px; padding: 4px 2px;
   scrollbar-width: thin; scrollbar-color: var(--outline) transparent;
 }
-.session { display: flex; gap: 10px; align-items: flex-end; font-size: 13.5px; line-height: 1.68; animation: bubbleIn var(--d-4) var(--e-out) both; }
+.session { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; line-height: 1.68; animation: bubbleIn var(--d-4) var(--e-out) both; }
 .session + .session { margin-top: 8px; }
+/* 写手输出是**一整块正文**，和上一条之间要留出段间距，否则两条稿子会糊在一起 */
+.session.bot + .session { margin-top: 18px; }
 .session .who {
   flex-shrink: 0; width: 30px; height: 30px; border-radius: var(--r-full);
   display: flex; align-items: center; justify-content: center; font-size: 14px;
@@ -825,6 +839,8 @@ label.frm { display: block; font-size: 11.5px; color: var(--on-surface-variant);
   background: var(--surface-2); color: var(--on-surface);
   border: none; border-radius: var(--r-xl); border-bottom-left-radius: 6px;
   word-break: break-word;
+  /* 复制按钮浮在本气泡右上角（见下面的 .bubble-copy），所以这里必须是定位上下文 */
+  position: relative;
   /* 内容已由 md() 转为块级标签，严禁改回 pre-wrap（模板缩进会渲染成空行） */
   white-space: normal;
   box-shadow: none;
@@ -837,6 +853,70 @@ label.frm { display: block; font-size: 11.5px; color: var(--on-surface-variant);
   border-bottom-left-radius: var(--r-xl); border-bottom-right-radius: 6px;
 }
 .session .bubble.streaming { box-shadow: 0 0 0 2px var(--primary-ring); }
+
+/* ─── 写手的输出不是「聊天气泡」，而是一篇稿子（2026-10-10）─────────────────
+   这个面板是**写作工具**：写手在写正文，用户是在旁边下指令的人。
+   把写手的产出画成聊天气泡有三个很实际的坏处：
+     · max-width 70% 逼着长文在半栏里反复折行，行长忽长忽短，读起来很累；
+     · 灰底 + 圆角 + 左边 40px 头像列，把「正文」压成了附属品的样子；
+     · 一屏十几个灰块，视觉噪音盖过了文字本身。
+   所以写手的输出改为**通栏正文**：底色 / 描边 / 圆角 / 内边距全部去掉，
+   段落间距交给 .bubble p 的 margin，读起来就是一份稿子。
+   ★ 用户的输入**保留气泡**（右对齐 + 主题色）—— 去掉气泡是为了让「正文」像正文，
+     不是为了把「谁在说话」这条线索也一起抹掉。 */
+.session.bot .bubble {
+  flex: 1 1 auto; max-width: none;          /* 通栏：把气泡让出来的宽度还给正文 */
+  padding: 0; background: none; border: none; border-radius: 0;
+  color: var(--on-surface);
+  /* 左边留一条 12px 的 gutter，平时是透明的，流式时才上色。
+     ★ 刻意**不用**负 margin 把它挪到列表外面去：.session-list 有 overflow-y:auto，
+       按规范另一轴的 visible 会变成 auto，负 margin 溢出的部分会被直接裁掉 ——
+       竖线会看不见，而且左溢出在 LTR 下不产生滚动条，属于「静默失效」。
+       常驻 border + padding（而不是只在 .streaming 时加），是为了让「开始写」到
+       「写完」之间一个像素都不跳。 */
+  padding-left: 10px;
+  border-left: 2px solid transparent;
+  /* ★ 必须留出按钮的位置：复制按钮是绝对定位在右上角（24px + right:4px = 占右侧 28px），
+     而这里 padding 归零后正文会一直折行到右边框 —— 实测第一行会被盖住 3 行（见
+     scripts/verify-writer-paragraph-live.mjs 的相交检测）。气泡时代是那 14px 右内边距
+     在兜着，去掉内边距等于把这层缓冲也去掉了。右边缘空 30px 对阅读几乎无感
+     （中文本来就在右侧参差换行），左边那条阅读基准线则必须保持齐平。 */
+  padding-right: 30px;
+}
+.session.bot .bubble:hover { box-shadow: none; }
+/* 头像列一起去掉：它就是「对话」的那部分形态。留着的话，通栏正文会永远
+   顶着 40px 悬挂缩进，一篇文章的左边缘参差不齐；写手身份在顶栏和侧栏都写着。 */
+.session.bot .who { display: none; }
+/* 流式进行中：把 gutter 那条线点亮（替代原先的气泡描边 ring）。
+   正文位置不变，只是左边多一条主题色竖线，读起来像「光标停在这一段」。 */
+.session.bot .bubble.streaming { box-shadow: none; border-left-color: var(--primary-ring); }
+/* 暗色主题在 style.css 里有一条 `[data-theme="dark"] .session .bubble{background:…}`。
+   它的特异性(0,3,0)和上面那条相同、排在前面，所以本来就被压住了；
+   这条显式再压一次 —— 免得将来有人调整样式表顺序，写手的正文又悄悄长出灰底。 */
+[data-theme="dark"] .session.bot .bubble { background: none; border-color: transparent; border-left-color: transparent; }
+[data-theme="dark"] .session.bot .bubble.streaming { border-left-color: var(--primary-ring); }
+
+/* ---- 气泡上的「复制」按钮（2026-10-09）----
+   悬停这条消息时才浮出来，位置固定在气泡右上角。
+   ★ 为什么不做进 .s-ops（时间行里那组小图标）：那组是「删除 / 派生」这类**破坏性**操作，
+     复制是纯读取，混在一起会让用户在点之前先犹豫一下 —— 而这恰恰是「快速复制」最不该有的摩擦。
+   半透明底 + 边框，保证浮在正文上也能看清它是个按钮，而不是被截断的文字。 */
+.bubble-copy {
+  position: absolute; top: 4px; right: 4px;
+  width: var(--btn-icon-xs); height: var(--btn-icon-xs); padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--outline); border-radius: var(--r-s);
+  background: var(--surface); color: var(--on-surface-faint);
+  cursor: pointer; opacity: 0;
+  transition: opacity .18s ease, color .18s ease, border-color .18s ease, transform .15s ease;
+}
+.bubble-copy .ic { width: 13px; height: 13px; }
+.session:hover .bubble-copy, .bubble:hover .bubble-copy { opacity: 1; }
+.bubble-copy:hover { color: var(--primary); border-color: var(--primary); }
+.bubble-copy:active { transform: scale(.92); }
+/* 触摸屏 / 无悬停设备：常驻显示，否则这个按钮永远点不到 */
+@media (hover: none) { .bubble-copy { opacity: 1; } }
+
 .session .time { font-family: var(--font); font-size: 10.5px; color: var(--on-surface-faint); margin-top: 6px; }
 .session .time .s-ops { display: inline-flex; gap: 2px; margin-left: 8px; vertical-align: middle; opacity: 0; transition: opacity var(--d-2) var(--e-std); }
 .session:hover .time .s-ops { opacity: 1; }

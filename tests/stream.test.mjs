@@ -359,3 +359,148 @@ test('SSE 被掐断 → 自动回落一次性 /chat，且 user 消息只写一�
     await page.unroute('**/chat/stream');
   }
 });
+
+// ─────────────────────────────────────────────────────────────
+// 终止输出：runId → 服务端 chatRuns → AbortController → 掐断模型连接
+// ─────────────────────────────────────────────────────────────
+//
+// 为什么必须端到端测，而不是只断言「按钮变了样」：
+// 用户点「停止」时，**只在前端 abort 只能让自己不再收字** —— 模型那头还在接着吐，
+// 服务端照样会把这一轮的回复写进记录、照样推给 QQ。用户看到的「停了」是假的。
+// 所以这条链路真正要守的断言是两件：「流确实在半途断了」+「半截正文没落库」。
+// 前端那半（按钮变「停止」、再点变回「发送」）单独一条用例守。
+
+/** 打一次流式接口，中途用 runId 发终止请求；返回事件数组与终止接口的应答 */
+async function streamThenAbort(content, abortAfterMs = 420) {
+  const runId = 'run-' + Math.random().toString(36).slice(2, 8);
+  const res = await fetch(`${srv.base}/api/bots/${botId}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify({ content, runId }),
+  });
+  assert.equal(res.status, 200, '流式接口应先回 200 再吐字节');
+
+  let abortRes = null, abortErr = null;
+  const abortP = (async () => {
+    await sleep(abortAfterMs);
+    try {
+      const r = await fetch(`${srv.base}/api/bots/${botId}/chat/abort`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId }),
+      });
+      abortRes = await r.json();
+    } catch (e) { abortErr = e; }
+  })();
+
+  // 老老实实读到流结束：被终止的那条流也必须是「正常收尾」，不是吊死到超时
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += dec.decode(value, { stream: true });
+  }
+  await abortP;
+
+  const events = text.split('\n\n').filter(Boolean).map((l) => {
+    try { return JSON.parse(l.replace(/^data:\s*/, '')); } catch { return { type: 'parse-error' }; }
+  });
+  return { events, abortRes, abortErr, runId };
+}
+
+const readSessions = async () =>
+  (await (await fetch(`${srv.base}/api/memory/${botId}/sessions`)).json()).sessions || [];
+
+test('运行中的那一轮可以终止：流以 aborted 收尾（不是 done），半截正文不落库', async () => {
+  const before = await readSessions();
+  const nAsst = before.filter((s) => s.role === 'assistant').length;
+  const nUser = before.filter((s) => s.role === 'user').length;
+
+  const { events, abortRes, abortErr } = await streamThenAbort('终止链路测试');
+  assert.equal(abortErr, null, '终止请求本身不该失败：' + (abortErr && abortErr.message));
+  assert.equal(abortRes.ok, true);
+  assert.equal(abortRes.stopped, true, '终止接口应报告确实停掉了一轮');
+
+  assert.equal(events[0].type, 'start', '首帧仍是 start（user 消息已落库）');
+  assert.equal(events[events.length - 1].type, 'aborted', '被终止的流应以 aborted 收尾');
+  assert.ok(!events.some((e) => e.type === 'done'), '被终止的流不该再下发 done');
+
+  // ★ 关键：证明它是「被掐断」而不是「恰好跑完了」。
+  //   光看末帧是 aborted 还不够 —— 若 abort 只改了事件的类型而没真断连接，
+  //   这里会收到全部 23 片。
+  const texts = events.filter((e) => e.type === 'text').map((e) => e.d);
+  assert.ok(texts.length > 0, '终止之前应当已经收到若干片');
+  assert.ok(texts.length < CHUNKS.length, `420ms 就终止了，却收到全部 ${texts.length} 片 —— 模型连接没被真正掐断`);
+  assert.equal(texts[texts.length - 1], CHUNKS.slice(0, texts.length).join(''), '已收到的正文应是全文前缀');
+
+  await sleep(300);
+  const after = await readSessions();
+  assert.equal(after.filter((s) => s.role === 'assistant').length, nAsst, '半截正文不该写进记录');
+  assert.equal(after.filter((s) => s.role === 'user').length, nUser + 1, '用户那句话仍应留在记录里（它确实发过）');
+  // ★ 判据必须**只看本轮新增的那几条**：同一个文件里前面的用例（落库一致性 / 降级回落）
+  //   已经正常写入过 FULL 正文，拿「记录里存不存在 FULL」当判据会命中那些旧记录，
+  //   变成一条永远失败的假断言 —— 而且恰恰在功能正确时失败。
+  const added = after.slice(before.length);
+  assert.equal(added.length, 1, `本轮应只新增 1 条记录（user），实际 ${added.length} 条：${added.map((s) => s.role).join(',')}`);
+  assert.equal(added[0].role, 'user');
+  assert.equal(added[0].content, '终止链路测试');
+});
+
+test('终止一个已经结束（或压根不存在）的 runId 是幂等的：200 + stopped:false', async () => {
+  const r = await fetch(`${srv.base}/api/bots/${botId}/chat/abort`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runId: 'run-never-existed' }),
+  });
+  assert.equal(r.status, 200, '「本来就停了」不是错误，前端不该被迫区分两种情况');
+  const j = await r.json();
+  assert.equal(j.ok, true);
+  assert.equal(j.stopped, false);
+  assert.match(j.err || '', /结束/);
+});
+
+test('缺少 runId 的终止请求直接 400，而不是静默什么都不做', async () => {
+  const r = await fetch(`${srv.base}/api/bots/${botId}/chat/abort`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).err, '缺少 runId');
+});
+
+test('面板：发送按钮在跑时变「停止」，中途点它 → 这一轮中止且半截正文从气泡里消失', async () => {
+  const nAsstBefore = (await readSessions()).filter((s) => s.role === 'assistant').length;
+
+  await page.click(`#bot-list .side-item[onclick*="selectBot('${botId}')"]`);
+  await page.waitForSelector('#f-chat', { timeout: 10000 });
+  await page.fill('#f-chat', '面板终止测试');
+  await page.click('.chat-input .primary');
+
+  // 「停止」是用户唯一能停下来的入口 —— 它没出现，就等于这个功能不存在
+  const labelNow = () => page.evaluate(() => {
+    const b = document.querySelector('.chat-input .primary');
+    return b ? b.textContent.trim() : '(没有按钮)';
+  });
+  let running = '';
+  for (let i = 0; i < 40 && running !== '停止'; i++) { running = await labelNow(); await sleep(50); }
+  assert.equal(running, '停止', '这一轮在跑时发送按钮应变成「停止」');
+
+  await sleep(420);                       // 让它吐几片，确保是「中途」停的
+  await page.click('.chat-input .primary');   // 同一个按钮：再点一次 = 停止
+
+  let back = '';
+  for (let i = 0; i < 60 && back !== '发送'; i++) { back = await labelNow(); await sleep(100); }
+  assert.equal(back, '发送', '终止后按钮应恢复成「发送」，否则下一句就发不出去了');
+
+  await sleep(600);
+  const after = await readSessions();
+  assert.equal(after.filter((s) => s.role === 'assistant').length, nAsstBefore, '被终止的那一轮不该写进记录');
+
+  // 以服务端记录为准重绘后，剩下的应只有用户那句；半截正文不该继续挂在气泡上
+  const last = await lastBubbleText();
+  assert.ok(last.includes('面板终止测试'), `最后一条气泡应是用户那句，实际：${JSON.stringify(last.slice(0, 60))}`);
+  assert.ok(!last.includes(CHUNKS[0]), '被终止的半截正文仍留在气泡里');
+});

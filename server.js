@@ -44,9 +44,12 @@ const { applyCors, handlePreflight, serveStatic } = require('./lib/http/static')
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const AVATAR_DIR = path.join(ROOT, 'avatars');
+// 图床目录：角色图与「其他图」都存这里，config.json 里只留 /images/xxx.png 这类相对 URL
+const IMAGE_DIR = path.join(ROOT, 'images');
 // 记忆根目录：迁移时要按 botId 找到 memory/<botId>/persona.md
 const MEMORY_DIR_OF_APP = path.join(ROOT, 'memory');
 fs.mkdirSync(AVATAR_DIR, { recursive: true });
+fs.mkdirSync(IMAGE_DIR, { recursive: true });
 
 // MIME 表与 CORS 放行（含桌面壳跨域白名单）已搬到 lib/http/static.js
 
@@ -686,7 +689,7 @@ async function chatWithBot(botId, content, opts = {}) {
       const pr = await models.chat(
         model,
         [...messages, { role: 'user', content: longreply.planPrompt(eff.target, want) }],
-        { apiKey, maxTokens: 800 },
+        { apiKey, maxTokens: 800, signal: opts.signal },
       );
       memory.recordUsage(botId, model.id, { usage: pr.usage, promptTokens: pr.promptTokens, ok: true });
       const parsed = longreply.parsePlan(pr.content);
@@ -699,6 +702,8 @@ async function chatWithBot(botId, content, opts = {}) {
         console.log(`[bot:${botId}] 长文规划未拿到有效大纲（只解析出 ${parsed.length} 段），降级为按目标续写`);
       }
     } catch (err) {
+      // 被用户停掉 ≠ 规划失败：不能降级继续写，那是「停了还在写」
+      if (models.isAbort(err)) throw models.abortError();
       // 规划失败不能毁掉这次回复 —— 降级到「无大纲，按目标续写」继续走
       memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
       console.log(`[bot:${botId}] 长文规划失败，降级为按目标续写：${err.message}`);
@@ -722,32 +727,39 @@ async function chatWithBot(botId, content, opts = {}) {
   let modelWantedLen = 0;  // 模型通过 set_reply_length 自定的字数（0 = 没声明）
   let streamedAll = '';   // 跨轮累积的已流式文本（replace 前缀约束）
   const MAX_ROUNDS = 3;
+  // ★ 主动中断（2026-10-09）：用户在面板点「停止」→ 路由层 abort 这个 signal。
+  //   一路透传到 models 里的 fetch（断开模型连接），并在每个回合开头自查一次 ——
+  //   断了就不再发起新一轮，省得「停了之后又去搜一次网」。
+  const signal = opts.signal;
   // 流式推送前剥离【记录】元标记：模型按规则把它写在回复末尾，若随流式下发，
   // 既会把内部指令暴露给用户，又会让结尾「replace 前缀」与剥离后的最终文本不一致导致结束片失败。
   const streamClean = (t) => String(t || '').replace(/【记录】[\s\S]*$/, '').replace(/\s+$/, '');
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    if (signal && signal.aborted) throw models.abortError();
     try {
       if (opts.onDelta) {
         // 流式：SSE 收集，onDelta(本轮累积 + 之前各轮) 保持 replace 前缀连续
         const prev = streamedAll;
-        res = await models.chatStreamCollect(model, messages, { apiKey, tools }, (accum) => {
+        res = await models.chatStreamCollect(model, messages, { apiKey, tools, signal }, (accum) => {
           try { opts.onDelta(streamClean(prev + accum)); } catch {}
         });
       } else {
-        res = await models.chat(model, messages, { apiKey, tools });
+        res = await models.chat(model, messages, { apiKey, tools, signal });
       }
     } catch (err) {
+      // 被用户停掉 → 直接终止，别再去掉 tools 重试一次（那是「替用户反悔」）
+      if (models.isAbort(err)) throw models.abortError();
       // 模型不支持 tools 时报错 → 去掉 tools 按普通对话重试一次
       if (tools && /tool|function/i.test(err.message)) {
         tools = undefined;
         try {
           if (opts.onDelta) {
             const prev = streamedAll;
-            res = await models.chatStreamCollect(model, messages, { apiKey, tools }, (accum) => {
+            res = await models.chatStreamCollect(model, messages, { apiKey, tools, signal }, (accum) => {
               try { opts.onDelta(streamClean(prev + accum)); } catch {}
             });
           } else {
-            res = await models.chat(model, messages, { apiKey, tools });
+            res = await models.chat(model, messages, { apiKey, tools, signal });
           }
         } catch (err2) {
           memory.recordUsage(botId, model.id, { promptTokens: err2.promptTokens, ok: false });
@@ -995,7 +1007,7 @@ async function chatWithBot(botId, content, opts = {}) {
       const pr = await models.chat(
         model,
         [...messages, { role: 'user', content: longreply.planPrompt(eff.target, want) }],
-        { apiKey, maxTokens: 800 },
+        { apiKey, maxTokens: 800, signal: opts.signal },
       );
       memory.recordUsage(botId, model.id, { usage: pr.usage, promptTokens: pr.promptTokens, ok: true });
       const parsed = longreply.parsePlan(pr.content);
@@ -1008,6 +1020,8 @@ async function chatWithBot(botId, content, opts = {}) {
         messages.push({ role: 'user', content: longreply.segPromptFirst(plan, eff.target) });
       }
     } catch (err) {
+      // 同前一处理由：被停掉不能退化续写
+      if (models.isAbort(err)) throw models.abortError();
       // 补规划失败不影响已写正文 —— 退化成「按目标续写」，与之前一致
       memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
       console.log(`[bot:${botId}] 模型自定长度的补充规划失败，按目标续写：${err.message}`);
@@ -1076,14 +1090,17 @@ async function chatWithBot(botId, content, opts = {}) {
     try {
       if (opts.onDelta) {
         const prev = reply;
-        segRes = await models.chatStreamCollect(model, msgs, { apiKey }, (accum) => {
+        segRes = await models.chatStreamCollect(model, msgs, { apiKey, signal }, (accum) => {
           try { opts.onDelta(streamClean(prev + accum)); } catch {}
         });
       } else {
-        segRes = await models.chat(model, msgs, { apiKey });
+        segRes = await models.chat(model, msgs, { apiKey, signal });
       }
       memory.recordUsage(botId, model.id, { usage: segRes.usage, promptTokens: segRes.promptTokens, ok: true });
     } catch (err) {
+      // ★ 被用户停掉：与「续写失败」区分开 —— 失败是「已写的照返回」，停止是「整轮都不要了」。
+      //   返回已写内容会让前端以为这是完成的回复（还会写进记忆、推给 QQ）。
+      if (models.isAbort(err)) throw models.abortError();
       // 续写失败**不能**毁掉已经写出来的正文：回复已经有了，把已写的返回去就行
       // （失败请求同样计费，所以用量还是要记一笔）
       memory.recordUsage(botId, model.id, { promptTokens: err.promptTokens, ok: false });
@@ -1398,6 +1415,7 @@ setInterval(hbTick, 10000);
 const routeDeps = {
   app, memory, models, fs, path, spawn,
   AVATAR_DIR,
+  IMAGE_DIR,
   ID_RE, ADMIN_ID_RE,
   workspace,
   // 以下目前仍住在 server.js，批 2 迁移
@@ -1407,7 +1425,7 @@ const routeDeps = {
   hbConfigs, hbState: _hb, seedHeart,
 };
 const api = createRouter(routeDeps);
-const STATIC_DIRS = { PUBLIC_DIR, AVATAR_DIR };
+const STATIC_DIRS = { PUBLIC_DIR, AVATAR_DIR, IMAGE_DIR };
 
 const server = http.createServer((req, res) => {
   // WHATWG URL（url.parse 已弃用），pathname 为解码后的路径

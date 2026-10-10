@@ -45,6 +45,10 @@ const IC_SETTINGS = ICON('<circle cx="8" cy="8" r="2.1"/><path d="M8 1.8v1.5M8 1
 const IC_CLOSE = ICON('<path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2"/>');
 const IC_CHECK = ICON('<path d="M3.4 8.4l3 3 6.2-6.6"/>');
 const IC_TRASH = ICON('<path d="M2.8 4.4h10.4M6 4.4V3.3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.1M4.2 4.4l.6 8.3a1 1 0 0 0 1 .9h4.4a1 1 0 0 0 1-.9l.6-8.3"/>');
+// 复制：两片叠起来的纸。刻意不画「剪贴板」—— 那个形状在 12px 下和 IC_FILE 分不清
+const IC_COPY = ICON('<rect x="5.8" y="2.6" width="7.6" height="9" rx="1.4"/><path d="M10.2 13.4H4a1.4 1.4 0 0 1-1.4-1.4V5.4"/>');
+// 停止：实心方块。空心方块在 12px 下会被看成「勾选框」，实心才有「按下去就断」的力度
+const IC_STOP = ICON('<rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.6" fill="currentColor" stroke="none"/>');
 const IC_PENCIL = ICON('<path d="M11.2 2.6l2.2 2.2L5.6 12.6l-3 .8.8-3z"/>');
 const IC_UPLOAD = ICON('<path d="M8 11V2.8M4.8 5.8 8 2.6l3.2 3.2M2.6 11v1.6a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1V11"/>');
 const IC_DOWNLOAD = ICON('<path d="M8 2.6v8.2M4.8 7.6 8 10.8l3.2-3.2M2.6 11v1.6a1 1 0 0 0 1 1h8.8a1 1 0 0 0 1-1V11"/>');
@@ -444,6 +448,7 @@ function renderSidebar() {
     const fn = btn.getAttribute('onclick') || '';
     const active = (fn.includes('openSettings') && view.type === 'settings')
       || (fn.includes('openModels') && (view.type === 'models' || view.type === 'model' || view.type === 'model-form'))
+      || (fn.includes('openImages') && view.type === 'images')
       || (fn.includes('openWorkspace') && view.type === 'workspace');
     btn.classList.toggle('active', active);
   });
@@ -597,6 +602,7 @@ function renderMain() {
   if (view.type === 'model-form') return renderModelForm(view.id);
   if (view.type === 'model') return renderModelDetail(view.id);
   if (view.type === 'settings') return renderSettings();
+  if (view.type === 'images') return renderImagesPage();
   if (view.type === 'workspace') return renderWorkspace();
   if (view.type === 'chars') return renderCharacterPool();
   return renderBotDetail(view.id);
@@ -676,22 +682,28 @@ function renderChatTabHtml(b) {
           <button class="danger sm" onclick="clearThread('${id}','${tid}')">清空</button>
         </div>
         <div class="session-list" id="session-list"><div class="empty-hint">加载中…</div></div>
+        <div class="chat-input">
+          <textarea id="f-chat" rows="1" placeholder="与 ${esc(b.name || b.id)} 说话… Enter 发送，Shift+Enter 换行" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${id}')}"></textarea>
+          <button class="ghost sm" onclick="copyInput()" title="复制输入框里正在写的内容">${IC_COPY}<span class="lb">复制</span></button>
+          <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这位写手接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
+          <button class="primary sm" onclick="directChat('${id}')">发送</button>
+        </div>
+      </div>
+      <!-- 右栏：常驻运行态（活跃世界 / 活跃角色 / 写作进度 / 待确认 / 同步状态）
+           ★ 原先进度条、待确认、同步状态三块挤在输入框上方，把正文区切掉大半；
+             搬进右栏后互不遮挡。右栏本来就是「此刻的上下文」，几块合在一处语义也更连贯。
+           ★ 三块的顺序刻意排成「正在写 → 等你点 → 刚落盘」，
+             跟用户看到它们的时间线一致：先看见在忙，再看见要确认，最后看见结果。 -->
+      <div class="chat-caps" id="chat-caps">
         <div class="chat-progress" id="chat-progress">
           <div class="cp-head"><span class="cp-text"></span></div>
           <div class="cp-bar"><div class="cp-fill"></div></div>
         </div>
         <!-- 写手提议的「待确认写操作」常驻区（见 renderPendingStrip 的说明） -->
         <div class="pending-strip" id="pending-strip"></div>
-        <!-- 文件同步状态：灰色小字一行行写「这一轮动了什么」（见 syncLine） -->
+        <!-- 文件同步状态：灰色小字一行行写「这一轮动了什么」（见 renderSyncLine 的说明） -->
         <div class="sync-line" id="sync-line"></div>
-        <div class="chat-input">
-          <textarea id="f-chat" rows="1" placeholder="与 ${esc(b.name || b.id)} 说话… Enter 发送，Shift+Enter 换行" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();directChat('${id}')}"></textarea>
-          <button class="ghost sm" onclick="openOutputSheet('${id}')" title="输出设置（影响这位写手接下来怎么回）">${IC_SLIDERS}<span class="lb">输出</span></button>
-          <button class="primary sm" onclick="directChat('${id}')">发送</button>
-        </div>
       </div>
-      <!-- 右侧胶囊列：当前活跃的世界 / 活跃的角色（点一下能换） -->
-      <div class="chat-caps" id="chat-caps"></div>
       </div>
     </div>`;
 }
@@ -1103,8 +1115,12 @@ async function openCharacterEditModal(charId, opts) {
           placeholder="这个人是谁：身份、性格、说话方式、与主人的关系……（写手改写剧情时会读它）">${esc(bodyText)}</textarea>
         <p class="empty-hint" style="margin:8px 0 0">正文就是角色卡本身 —— 分几节、叫什么由你定。计数器一行一个写在正文里：<code>##Counter：好感度[0,100]</code>，<code>[]</code> = 不限。</p>
         ${folded.folded ? `<p class="empty-hint" style="margin:8px 0 0">已把旧版分类字段（${esc(folded.keys.map((k) => CHR_LEGACY_LABEL[k] || k).join('、'))}）并入正文；保存后它们就归到正文里，不再单独存放。</p>` : ''}
-        <label class="frm">形象链接（图片 URL）</label>
-        <input id="chr-avatar" type="text" placeholder="https://…　图片不进正文，只以链接挂在卡上" value="${esc((c && c.avatar) || '')}">
+        <label class="frm">形象链接（图片 URL）<span class="frm-note">图片不进正文，只以链接挂在卡上</span></label>
+        <div class="chr-avatar-row">
+          <input id="chr-avatar" type="text" placeholder="/images/… 或 https://…" value="${esc((c && c.avatar) || '')}" oninput="previewCharAvatar(this.value)">
+          <span class="chr-avatar-pv" id="chr-avatar-pv">${(c && c.avatar) ? `<img src="${esc(c.avatar)}" alt="">` : ''}</span>
+          <button class="ghost sm" type="button" onclick="pickCharAvatar()" title="从图库里挑一张已上传的图片">${IC_PALETTE}<span class="lb">从图库选</span></button>
+        </div>
         <label class="frm">标签（逗号分隔）</label>
         <input id="chr-tags" type="text" placeholder="例：主角, 机器人, 未来" value="${esc(((c && c.tags) || []).join(', '))}">
         ${isNew ? '' : charStateAdminHtml(full)}
@@ -1831,12 +1847,15 @@ function renderBotDetail(id) {
 
   // 各标签页自己的数据加载（切 tab 即分组加载，不做无用请求）
   if (tab === 'chat') {
+    // ★ 顺序要紧：#pending-strip / #sync-line 现在住在右栏 #chat-caps 里，
+    //   得先渲染右栏把容器建出来，再往里写 —— 否则内容落在不存在的节点上被静默丢掉，
+    //   切回对话页就看不到待确认与同步状态了。
+    // 右侧胶囊：角色从 state 直接读，世界要取一次世界卡
+    renderChatCaps(id);
     // 切回对话页时把还没处理的提议重新挂上（提议是常驻状态，不随一次流式结束而消失）
     renderPendingStrip(id);
     // 同步状态同理：它是**可回看的状态**，切走再切回来该还在
     renderSyncLine(id);
-    // 右侧胶囊：角色从 state 直接读，世界要取一次世界卡
-    renderChatCaps(id);
     loadWorlds(id);
     if (_chatTid) {
       const tid = _chatTid;
@@ -3315,6 +3334,7 @@ async function loadSessions(id, tid) {
       <div class="session ${s.role === 'assistant' ? 'bot' : 'user'}" style="animation-delay:${Math.min(i * 45, 400)}ms">
         <div class="who">${s.role === 'assistant' ? botAvatar : IC_USER}</div>
         <div class="bubble md">${md(s.content)}
+          ${bubbleCopyBtn(s.content)}
           <div class="time">${new Date(s.ts).toLocaleString()}
             <span class="s-ops">
               <button class="ghost sm del" onclick="deleteSessionItem('${id}','${s.ts}','${tid || ''}')" title="删除本条（AI 将不再读到）">${IC_CLOSE}</button>
@@ -3361,20 +3381,24 @@ async function loadSessions(id, tid) {
 //                            → 绝不能重放，否则同一条 user 消息会被写两遍
 // onPending 是**第三条信道**（与 onDelta / onProgress 并列）：写手提议「沉淀经历 / 改角色卡」
 // 走 SSE 的 `pending` 事件，语义是「等用户点确认」。混进正文会让前端从文本里反解结构 —— 正是要避免的事。
-async function streamBotChat(id, content, tid, onDelta, onProgress, onPending, onSync) {
+async function streamBotChat(id, content, tid, onDelta, onProgress, onPending, onSync, runId, signal) {
   let resp;
   try {
     resp = await fetch(API_BASE + `/api/bots/${id}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-      body: JSON.stringify(tid ? { content, threadId: tid } : { content }),
+      // runId 让服务端能按它反查到这一轮的 AbortController（用户点「停止」时用）
+      body: JSON.stringify({ content, ...(tid ? { threadId: tid } : {}), ...(runId ? { runId } : {}) }),
+      signal,
     });
   } catch (e) {
+    // 被自己 abort 掉的：不是「连不上后端」，别让上层走「回落一次性 /chat」那条路
+    if (e && e.name === 'AbortError') return { ok: false, aborted: true };
     throw new Error((e && e.message) || '无法连接后端服务');
   }
   if (!resp.ok || !resp.body) throw new Error('流式接口不可用（HTTP ' + resp.status + '）');
 
-  let saw = false, done = null, srvErr = '';
+  let saw = false, done = null, srvErr = '', aborted = false;
   await readAdminSSE(resp.body, (ev) => {
     saw = true;
     if (ev.type === 'text') { if (onDelta) onDelta(String(ev.d || '')); }
@@ -3382,6 +3406,9 @@ async function streamBotChat(id, content, tid, onDelta, onProgress, onPending, o
     else if (ev.type === 'pending') { if (onPending && ev.edit) { try { onPending(ev.edit, ev.summary || ''); } catch {} } }
     // 输出后自检的「本轮同步了什么」：又一条独立信道（见 server.js runSelfCheck）
     else if (ev.type === 'sync') { if (onSync && Array.isArray(ev.items)) { try { onSync(ev.items); } catch {} } }
+    // ★ 用户终止的专属结局：不是错误、也没有 done。
+    //   server 端刻意**不落库**这一轮的半截正文，所以前端也不能拿它当回复上屏。
+    else if (ev.type === 'aborted') aborted = true;
     // ping 是服务端心跳（防中间层按空闲超时掐断长文写作），**只用于保活、不渲染** ——
     // 落到下面那几个分支之外，自然被忽略；但它已让 saw = true，
     // 所以连接真断了时的报错会准确地说「响应不完整（连接被中断）」而不是「无响应」。
@@ -3390,8 +3417,15 @@ async function streamBotChat(id, content, tid, onDelta, onProgress, onPending, o
   }, () => { /* 传输层异常：交由下面的「零事件」判定统一处理 */ });
 
   if (done) return { ok: true, reply: done.reply || '', pushed: !!done.pushed, threadId: done.threadId };
+  // 本地已经 abort 的情况：服务端的 aborted 事件多半收不到了（连接已断），按本地信号判定
+  if (aborted || (signal && signal.aborted)) return { ok: false, aborted: true };
   const e = new Error(srvErr || (saw ? '流式响应不完整（连接被中断）' : '流式连接无响应'));
-  e.noFallback = true;
+  // ★ 只有「一个事件都没收到」才允许回落一次性 /chat（= 请求压根没到服务端）。
+  //   两种情况绝不能回落，否则等于把同一句话问两遍、白烧一次 token：
+  //     · 服务端已经明确回了 err（它已经知道失败了，重发是替它重复劳动）；
+  //     · 已经收到过事件（saw）—— 那说明这轮真的跑起来了，只是没跑完，
+  //       重发会在服务端留下**第二条 user 消息**，对话记录被污染。
+  e.noFallback = !!(srvErr || saw);
   throw e;
 }
 
@@ -3432,6 +3466,21 @@ function openOutputSheet(id) {
   // 全局目标字数（给占位符用）：与角色设置弹窗同一个算法，clamp 到 [0,100000]
   const lrTarget = clampInt(state.longReplyTarget, 0, 0, 100000);
   const gPerm = { off: '关闭', limited: '建议式', full: '全权' }[state.lengthPerm || 'limited'];
+  // 模型跟长文 / 自检是同一类「下一次回复怎么产出」的设置，所以并排放在这里。
+  // ★ 它跟上面几项不一样：没有「跟随全局」这一档，空值 = 不绑定（不回复）。
+  //   所以保存时不能走 triOf（它对空值返回 undefined = 保留原值），必须直接写 b.modelId。
+  const models = state.models || [];
+  const knownIds = new Set(models.map((m) => m.id));
+  // 绑到一个已被删掉的模型时，原样留一个「幽灵选项」并选中 —— 否则下拉会静默跳到第一项，
+  // 用户一点保存就把模型悄悄换了，而他自己完全没动过这一栏。
+  const ghost = b.modelId && !knownIds.has(b.modelId)
+    ? `<option value="${esc(b.modelId)}" selected>${esc(b.modelId)}（模型已不存在）</option>`
+    : '';
+  const modelOpts = ghost + models.map((m) => {
+    const noKey = m.hasKey === false ? '（缺 Key，不会回复）' : '';
+    return `<option value="${esc(m.id)}" ${m.id === b.modelId ? 'selected' : ''}>${esc(m.name || m.id)}${noKey}</option>`;
+  }).join('');
+  const noModel = !models.length;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'output-sheet';
@@ -3443,6 +3492,14 @@ function openOutputSheet(id) {
         <span class="os-sub">仅影响「${esc(b.name || b.id)}」的下一次回复</span>
       </div>
       <div class="modal-body">
+        <div class="os-row">
+          <div class="os-label">模型<div class="os-desc">${noModel
+            ? '还没有配置任何模型，先去左侧「模型」页添加一个'
+            : '换一个模型，下一次回复就由它来写'}</div></div>
+          <select id="os-model" ${noModel ? 'disabled' : ''}>
+            ${noModel ? '<option value="">（无可用模型）</option>' : '<option value="">不绑定（不回复）</option>' + modelOpts}
+          </select>
+        </div>
         <div class="os-row">
           <div class="os-label">长文模式<div class="os-desc">分多段续写，把长内容写完整</div></div>
           <select id="os-long">
@@ -3494,7 +3551,7 @@ function closeOutputSheet() {
   const el = $('#output-sheet');
   if (el) el.remove();
 }
-// 只改这四个字段，其余原样带过去。
+// 只改这几个字段，其余原样带过去。
 // ⚠️ 必须提交**完整** bots 数组（每个元素都是完整对象）—— PUT /api/config 是整份覆盖，
 //    只送 { id } 会把别的角色的配置全抹掉（saveBot 也是这么做的，见上）。
 async function saveOutputSheet(id) {
@@ -3507,6 +3564,9 @@ async function saveOutputSheet(id) {
     return el.value === 'true';
   };
   const tEl = $('#os-target');
+  // 模型没有「跟随全局」态：选空就是真的要解绑，所以直接赋值，不走 triOf
+  const mEl = $('#os-model');
+  if (mEl && !mEl.disabled) b.modelId = mEl.value;
   b.longReply = triOf('#os-long');
   b.longReplyTarget = tEl && tEl.value.trim() !== '' ? clampInt(tEl.value, 0, 0, 100000) : undefined;
   b.longReplyAuto = triOf('#os-auto');
@@ -3556,6 +3616,8 @@ function setProgress(p) {
   else label = `正在写 · ${chars} 字`;
   txt.textContent = label;
   box.classList.add('on');
+  // 进度条是右栏里第一个「有内容」的东西时，整栏此前是收起的，得再算一次显隐
+  updateCapsVisibility();
   // 安全网：万一服务端没发 done（连接被掐），15 秒后自己收掉，别让条子永远挂着
   clearTimeout(_progTimer);
   _progTimer = setTimeout(hideProgress, 15000);
@@ -3567,6 +3629,7 @@ function hideProgress() {
   box.classList.remove('on');
   const bar = box.querySelector('.cp-fill');
   if (bar) bar.style.width = '';
+  updateCapsVisibility();
 }
 
 // 流式气泡的绘制器：先当「思考中」占位，收到首字后原地变成逐字增长的 md 气泡。
@@ -3585,7 +3648,10 @@ function makeStreamBubble(container, bot) {
   const bubble = el.querySelector('.bubble');
   const paint = (text, streaming) => {
     bubble.className = 'bubble md' + (streaming ? ' streaming' : '');
-    bubble.innerHTML = (text ? md(text) : '<span class="lay-dim">正在生成…</span>') + (streaming ? '<span class="caret"></span>' : '');
+    bubble.innerHTML = (text ? md(text) : '<span class="lay-dim">正在生成…</span>')
+      + (streaming ? '<span class="caret"></span>' : '')
+      // 流式过程中也能复制：data-raw 每帧跟着 text 走，复制到的是**此刻已输出**的部分
+      + (text ? bubbleCopyBtn(text) : '');
     // 只在用户本就贴着底部时才跟随，不打断向上翻阅历史
     if (container && container.scrollHeight - container.scrollTop - container.clientHeight < 90) {
       container.scrollTop = container.scrollHeight;
@@ -3594,12 +3660,107 @@ function makeStreamBubble(container, bot) {
   return { paint, el };
 }
 
+// ---- 复制到剪贴板（消息 / 输入框共用）----
+// navigator.clipboard 只在安全上下文可用（https 或 localhost）；
+// 面板有时是从局域网 IP 用 http 打开的，那里拿不到权限，所以必须有 execCommand 兜底。
+async function copyText(text, okMsg) {
+  const s = String(text ?? '');
+  if (!s) return toast('没有可复制的内容', 'err');
+  try {
+    await navigator.clipboard.writeText(s);
+    toast(okMsg || `已复制（${s.length} 字）`, 'ok');
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let done = false;
+    try { done = document.execCommand('copy'); } catch { done = false; }
+    ta.remove();
+    toast(done ? (okMsg || `已复制（${s.length} 字）`) : '复制失败，请手动选中', done ? 'ok' : 'err');
+    return done;
+  }
+}
+
+// 复制一条消息。优先用 data-raw（服务端原文，Markdown 语法原样保留）——
+// 走 DOM 文本会把 Markdown 标记吃掉（**粗体** 变成 粗体），粘出去就对不上了。
+function copyBubble(btn) {
+  const raw = btn && btn.dataset ? btn.dataset.raw : '';
+  const text = (raw !== undefined && raw !== '') ? raw : stripBubbleChrome(btn);
+  const isUser = !!(btn && btn.closest('.session.user'));
+  return copyText(text, isUser ? '已复制你发的那条' : '已复制这条回复');
+}
+
+// 兜底：从气泡 DOM 取文本，但要摘掉时间、操作按钮、光标这些「不是正文」的东西
+function stripBubbleChrome(btn) {
+  const bub = btn && btn.closest('.session') && btn.closest('.session').querySelector('.bubble');
+  if (!bub) return '';
+  const c = bub.cloneNode(true);
+  c.querySelectorAll('.time, .s-ops, .bubble-copy, .caret, .lay-dim').forEach((n) => n.remove());
+  return c.innerText.trim();
+}
+
+// 复制输入框里正在写的内容（想换个地方改、或发之前先存一份）。
+// sel 可传：对话页用 #f-chat，展开弹窗里用 #m-chat（两者可能同时在 DOM 里）。
+function copyInput(sel) {
+  const ta = document.querySelector(sel || '#f-chat');
+  const v = ta ? ta.value : '';
+  if (!v.trim()) return toast('输入框是空的', 'err');
+  return copyText(v, '已复制输入框内容');
+}
+
+// 消息上的复制按钮。做成气泡右上角的浮层而不是塞进 .s-ops：
+// .s-ops 那组是「删/派生」这类**破坏性**操作，复制是纯读取，混在一起会让人不敢点。
+function bubbleCopyBtn(raw, extraCls) {
+  return `<button class="bubble-copy${extraCls || ''}" data-raw="${esc(raw)}" onclick="copyBubble(this)" title="复制原文（Markdown 原样）">${IC_COPY}</button>`;
+}
+
 // 写手提议的「待确认写操作」，按写手分组常驻：{ botId: [edit, ...] }
 // ★ 为什么常驻、而不是直接挂在会话列表尾部：
 //   那条列表每 4 秒被 loadSessions 整块重绘一次（_sessionTimer 轮询），
 //   挂进去的确认条会在用户点到之前就被抹掉——写手提议永远等不到回答。
 //   挪到独立容器里，轮询碰不到它；切走再切回来（renderBotDetail）也能重挂。
 let _pendingEdits = {};
+
+// ---- 正在跑的那一轮对话：{ botId: { runId, ctrl, aborted } } ----
+// 为什么需要它：流式回复动辄几十秒，用户中途改主意时得有个东西能把它叫停。
+// 光在浏览器侧 abort 只解决「我不看了」——模型在服务端照写、写完照落库、还照推 QQ。
+// 所以每轮带一个 runId 上去，服务端拿它登记 AbortController（见 lib/routes/bots.js 的 chatRuns），
+// 「停止」按钮同时做两件事：本地断开读取 + 叫服务端把模型连接掐掉。
+let _running = {};
+
+function newRunId() {
+  return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+// 点「停止」：本地立刻断流（用户马上看到停下），同时通知服务端终止。
+// ★ 顺序刻意如此：先本地断（零延迟的反馈），再发终止请求（一次普通 POST，不 await）。
+//   反过来的话，要等服务端往返一圈正文才停住，用户会以为按钮没生效、连点好几次。
+function abortRun(id) {
+  const run = _running[id];
+  if (!run || run.aborted) return;
+  run.aborted = true;
+  try { run.ctrl.abort(); } catch {}
+  api(`/api/bots/${id}/chat/abort`, 'POST', { runId: run.runId }).catch(() => {});
+  toast('已终止这一轮输出', '');
+}
+
+// 发送按钮在「空闲 = 发送」与「跑着 = 停止」两种形态间切换。
+// 复用同一个按钮而不是并排加一个：输入行的宽度本来就紧，多一个按钮会把输入框挤窄，
+// 而且并排两个按钮在「现在到底该点哪个」上会迟疑 —— 同一个位置、同一个按钮，语义随状态变。
+// scopeSel 必须显式传（'.chat-input' / '.modal-foot'）：两个入口可能同时在 DOM 里
+// （弹窗是盖在对话页上的），不限定作用域会改到背后那个按钮上。
+function setSendBtn(scopeSel, running) {
+  const btn = document.querySelector(scopeSel + ' .primary');
+  if (!btn) return;
+  btn.disabled = false;
+  btn.textContent = running ? '停止' : '发送';
+  btn.classList.toggle('stop', !!running);
+  btn.title = running ? '终止这次输出（已生成的内容不会写入记录）' : '';
+}
 
 // ---- 对话页右侧胶囊：活跃世界 / 活跃角色（用户决策 2026-10-05）----
 // 为什么放在右侧而不是顶部：顶部已经被「线程条 + 对话标题」占满，
@@ -3622,7 +3783,13 @@ function renderChatCaps(id) {
   const el = document.getElementById('chat-caps');
   if (!el) return;
   const b = (state.bots || []).find(x => x.id === id);
-  if (!b) { el.innerHTML = ''; return; }
+  // ★ 不能 el.innerHTML = '' —— 那会把住在里面的写作进度 / 待确认 / 同步状态三块一起抹掉，
+  //   之后 renderPendingStrip / renderSyncLine 就再也找不到容器了。只清自己画的这几类。
+  if (!b) {
+    el.querySelectorAll('.cap-head, .cap-pill, .cap-more, .cap-empty').forEach((n) => n.remove());
+    updateCapsVisibility();
+    return;
+  }
 
   const w = _worlds[id] || { worlds: [], effective: '' };
   const worldPill = w.effective
@@ -3642,11 +3809,37 @@ function renderChatCaps(id) {
     </button>`).join('');
 
   const head = (ic, t) => `<div class="cap-head">${ic}<span>${t}</span></div>`;
-  el.innerHTML = `
-    ${w.effective ? head(IC_GLOBE, '活跃世界') + worldPill : ''}
-    ${chars.length ? head(IC_USERS, `活跃角色 ${chars.length}`) + charPills
-      + (chars.length > MAXC ? `<div class="cap-more">还有 ${chars.length - MAXC} 位（在角色页看全部）</div>` : '')
-      : (w.effective ? '' : '<div class="cap-empty">这位写手还没选角色，也没有多世界</div>')}`;
+
+  // ★ 动态三块（写作进度 / 待确认 / 同步状态）不在这里重建 —— 它们各自有 render 函数，
+  //   由 setProgress / renderPendingStrip / renderSyncLine 就地写自身节点。
+  //   这里只做两件事：重算「活跃世界 / 活跃角色」这些每次都要刷新的内容，
+  //   再把三块动态内容**移到末尾**——appendChild 对已在文档里的节点是「移动」不是复制，
+  //   所以进度条当前宽度、已经确认过的条都原样保住，也不会因为重绘跳回角色列表上面去。
+  el.querySelectorAll('.cap-head, .cap-pill, .cap-more, .cap-empty').forEach((n) => n.remove());
+  // 逐块插到最前面：倒序插入，最终顺序才是「世界 → 角色」（与改动前一致）
+  if (chars.length) {
+    el.insertAdjacentHTML('afterbegin', head(IC_USERS, `活跃角色 ${chars.length}`) + charPills
+      + (chars.length > MAXC ? `<div class="cap-more">还有 ${chars.length - MAXC} 位（在角色页看全部）</div>` : ''));
+  }
+  if (w.effective) el.insertAdjacentHTML('afterbegin', head(IC_GLOBE, '活跃世界') + worldPill);
+  if (!w.effective && !chars.length) {
+    el.insertAdjacentHTML('afterbegin', '<div class="cap-empty">这位写手还没选角色，也没有多世界</div>');
+  }
+  for (const sel of ['.chat-progress', '.pending-strip', '.sync-line']) {
+    const n = el.querySelector(sel);
+    if (n) el.appendChild(n);
+  }
+  updateCapsVisibility();
+}
+
+// 右栏整体的显隐：三块动态内容是常驻节点，:empty 永远不成立，
+// 得自己判断「有没有任何可见内容」，否则会一直留一条 132px 的空白栏。
+function updateCapsVisibility() {
+  const el = document.getElementById('chat-caps');
+  if (!el) return;
+  const fixed = !!el.querySelector('.cap-head, .cap-pill, .cap-more, .cap-empty');
+  const dyn = !!el.querySelector('.pending-strip:not(:empty), .sync-line:not(:empty), .chat-progress.on');
+  el.style.display = (fixed || dyn) ? '' : 'none';
 }
 
 // 切换活跃世界：弹出世界卡里的世界列表（只有一个小节也允许，用于确认当前状态）
@@ -3718,6 +3911,7 @@ function renderSyncLine(botId) {
   el.innerHTML = list.length
     ? list.map((x) => `<div class="sl-row k-${esc(x.kind)}">${IC_FILE}<span>${esc(x.text)}</span></div>`).join('')
     : '';
+  updateCapsVisibility();
 }
 
 function renderPendingStrip(botId) {
@@ -3728,6 +3922,7 @@ function renderPendingStrip(botId) {
     ? `<div class="ps-head">${IC_CLOCK}<span class="lb">写手提议把这些沉淀到角色卡上，等你确认</span></div>`
       + list.map((ed) => renderEditBar(ed)).join('')
     : '';
+  updateCapsVisibility();
 }
 
 // 处理完（确认 / 忽略）就从常驻列表里摘掉，否则下次重绘它会阴魂不散地回来
@@ -3741,13 +3936,20 @@ function dropPending(edit) {
 
 // ---- 面板直接对话（在对话页的当前线程里说话）----
 async function directChat(id) {
+  // ★ 这一轮还在跑 → 同一个按钮此刻是「停止」。放在最前面，
+  //   否则用户想停却把输入框里的半句话又发了一遍。
+  if (_running[id] && !_running[id].aborted) return abortRun(id);
   const ta = $('#f-chat');
   const content = ta ? ta.value.trim() : '';
   if (!content) return toast('请输入内容', 'err');
   // 定位当前线程：在对话标签页时用 _chatTid；否则不传，由后端回退到默认线程
   const tid = inChatTab(id) ? _chatTid : null;
-  const btn = document.querySelector('.chat-input .primary');
-  if (btn) { btn.disabled = true; btn.textContent = '思考中…'; }
+
+  // 起点就登记这一轮的 runId + AbortController：服务端按 runId 能找到它并掐断模型连接
+  const runId = newRunId();
+  const ctrl = new AbortController();
+  _running[id] = { runId, ctrl, aborted: false };
+  setSendBtn('.chat-input', true);
 
   // 标记该角色「正在对话」→ 侧栏黄点；并暂停当前线程轮询，避免重绘抹掉流式气泡
   _chatting.add(id);
@@ -3774,8 +3976,12 @@ async function directChat(id) {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    }, (p) => setProgress(p), (edit) => pendings.push(edit), (items) => pushSync(id, items));
-    if (r && r.ok) {
+    }, (p) => setProgress(p), (edit) => pendings.push(edit), (items) => pushSync(id, items), runId, ctrl.signal);
+    if (r && r.aborted) {
+      // 用户自己停的：不需要报错，但要说清后果 —— 半截正文**没有**写进记录，
+      // 所以下面 finally 里的重绘会让它消失（这是刻意的，不是丢数据）。
+      toast('已终止，这一段没有写入记录', '');
+    } else if (r && r.ok) {
       paint(r.reply, false);
       toast(r.pushed ? '已回复，并自动推送给主 ID' : '已回复（未设置主 ID）', 'ok');
     }
@@ -3795,13 +4001,15 @@ async function directChat(id) {
     hideProgress();
     _chatting.delete(id);
     _streaming.delete(id);
+    delete _running[id];
     renderSidebar();
     // 无论成败都以服务端记录为准重绘：流式气泡只是预览，落库的那份才是真相
     await loadSessions(id, tid);
     // 消息数与活跃时间变了 → 局部刷新线程条与侧栏（不重建视图，保住输入焦点）
     if (tid) await refreshThreadsUI(id, tid);
     renderPendingStrip(id);
-    if (btn) { btn.disabled = false; btn.textContent = '发送'; }
+    // 按钮回到「发送」：这一轮不管怎么结束的，都该能再发下一条
+    setSendBtn('.chat-input', false);
   }
 }
 
@@ -3820,7 +4028,7 @@ function expandSessions(id, tid) {
     ? list.map(s => `
       <div class="session ${s.role === 'assistant' ? 'bot' : 'user'}">
         <div class="who">${s.role === 'assistant' ? botAvatar : IC_USER}</div>
-        <div class="bubble md">${md(s.content)}<div class="time">${new Date(s.ts).toLocaleString()}</div></div>
+        <div class="bubble md">${md(s.content)}${bubbleCopyBtn(s.content)}<div class="time">${new Date(s.ts).toLocaleString()}</div></div>
       </div>`).join('')
     : '<div class="empty-hint">暂无会话记录</div>';
   overlay.innerHTML = `
@@ -3834,6 +4042,7 @@ function expandSessions(id, tid) {
       <div class="modal-body">${html}</div>
       <div class="modal-foot">
         <textarea id="m-chat" rows="1" placeholder="在弹窗中直接对 ${esc(bot?.name || id)} 说话，Enter 发送…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();modalChat('${id}','${tid || ''}')}"></textarea>
+        <button class="ghost sm" onclick="copyInput('#m-chat')" title="复制输入框里正在写的内容">${IC_COPY}<span class="lb">复制</span></button>
         <button class="primary sm" onclick="modalChat('${id}','${tid || ''}')">发送</button>
       </div>
     </div>`;
@@ -3843,11 +4052,15 @@ function expandSessions(id, tid) {
 
 // 弹窗内直接对话：流式逐字输出，结束后用服务端记录刷新弹窗内容
 async function modalChat(id, tid) {
+  // 同 directChat：跑着的时候这个按钮是「停止」
+  if (_running[id] && !_running[id].aborted) return abortRun(id);
   const ta = $('#m-chat');
   const content = ta && ta.value.trim();
   if (!content) return toast('请输入内容', 'err');
-  const btnEl = document.querySelector('.modal-foot .primary');
-  if (btnEl) { btnEl.disabled = true; btnEl.textContent = '思考中…'; }
+  const runId = newRunId();
+  const ctrl = new AbortController();
+  _running[id] = { runId, ctrl, aborted: false };
+  setSendBtn('.modal-foot', true);
   _chatting.add(id);
   _streaming.add(id);
   renderSidebar();
@@ -3870,8 +4083,9 @@ async function modalChat(id, tid) {
     const r = await streamBotChat(id, content, tid, (t) => {
       acc = t;
       paint(acc, true);
-    }, (p) => setProgress(p), (edit) => pendings.push(edit), (items) => pushSync(id, items));
-    if (r && r.ok) paint(r.reply, false);
+    }, (p) => setProgress(p), (edit) => pendings.push(edit), (items) => pushSync(id, items), runId, ctrl.signal);
+    if (r && r.aborted) toast('已终止，这一段没有写入记录', '');
+    else if (r && r.ok) paint(r.reply, false);
   } catch (err) {
     if (!err.noFallback) {
       // 请求没打到服务端 → 安全回落一次性 /chat
@@ -3886,7 +4100,9 @@ async function modalChat(id, tid) {
     hideProgress();
     _chatting.delete(id);
     _streaming.delete(id);
+    delete _running[id];
     renderSidebar();
+    setSendBtn('.modal-foot', false);
     if (tid) {
       const x = await api(`/api/memory/${id}/threads/${tid}`);
       _sessionsCache[cacheKey(id, tid)] = (x && x.messages) || [];
@@ -5541,6 +5757,325 @@ function backToModels() { view = { type: 'models' }; renderSidebar(); renderMain
 // ---------- 底部入口 / 模型管理页 ----------
 function openModels() { view = { type: 'models' }; renderSidebar(); renderMain(); }
 
+// ================= 图床 / 图库 =================
+// 所有图片（角色形象、场景、素材）统一存在磁盘 images/ 目录，
+// config.json 里只留 /images/xxx.png 这样的相对 URL —— 详见 lib/routes/images.js 的说明。
+//
+// 页面本身只做四件事：传上来、看得见、拿得到链接、删得掉。
+// 「用到哪张图上」由引用方决定（角色卡的「从图库选」就是其中一个引用方），
+// 图库不替用户做决定 —— 所以删除时发现有引用，只提示不自动解绑。
+let _images = [];          // GET /api/images 的缓存
+let _imgQuery = '';        // 搜索关键字（按文件名过滤）
+let _imgUploading = false; // 上传中（防重复提交）
+
+function openImages() { view = { type: 'images' }; renderSidebar(); renderMain(); }
+
+// 角色卡编辑里的「从图库选」：选完只是**填进输入框**，不改数据 ——
+// 还得用户自己点「保存修改」才落盘，跟手填 URL 的行为一致。
+function pickCharAvatar() {
+  openImagePicker((url) => {
+    const el = document.getElementById('chr-avatar');
+    if (el) el.value = url;
+    previewCharAvatar(url);
+    toast('已填好形象链接，记得点「保存修改」', 'ok');
+  });
+}
+function previewCharAvatar(url) {
+  const box = document.getElementById('chr-avatar-pv');
+  if (!box) return;
+  const v = String(url || '').trim();
+  box.innerHTML = v ? `<img src="${esc(v)}" alt="">` : '';
+}
+
+async function refreshImages() {
+  const r = await api('/api/images').catch(() => ({ ok: false }));
+  _images = (r && r.ok && r.items) || [];
+  renderMain();
+}
+
+// 大小的可读形式：图库里关心的是「占多少」，精确到 KB 就够，字节数太吵
+function imgSize(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(0) + ' KB';
+  return (b / 1048576).toFixed(1) + ' MB';
+}
+function imgDims(it) { return (it.w && it.h) ? `${it.w}×${it.h}` : '尺寸未知'; }
+function imgTime(ts) {
+  if (!ts) return '';
+  const d = new Date(Number(ts));
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+// 引用提示：「角色「银」」「写手「归云」」
+function imgRefsText(refs) {
+  return (refs || []).map((x) => (x.kind === 'bot' ? `写手「${x.name}」` : `角色「${x.name}」`)).join('、');
+}
+
+// 网格渲染 —— 图库页与「选图弹窗」共用同一份，避免两处画得不一样
+function imageGridHtml(items, pickMode) {
+  if (!items.length) {
+    return `<div class="empty-hint">${_imgQuery ? '没有匹配「' + esc(_imgQuery) + '」的图片' : '图库还是空的 —— 点「上传图片」，或把图片拖进来、直接 Ctrl+V 粘贴'}</div>`;
+  }
+  return `<div class="img-grid">${items.map((it) => {
+    const refs = it.refs || [];
+    const refTxt = imgRefsText(refs);
+    // 选图模式下点整卡即选中；浏览模式下点缩略图是放大看
+    return `
+      <div class="img-card${refs.length ? ' in-use' : ''}">
+        <div class="img-thumb" ${pickMode ? `onclick="pickImage('${esc(it.name)}')"` : `onclick="previewImage('${esc(it.name)}')"`} title="${pickMode ? '用这张' : '点击放大'}">
+          <img src="${esc(it.url)}" alt="${esc(it.name)}" loading="lazy">
+        </div>
+        <div class="img-meta">
+          <span class="img-name" title="${esc(it.name)}">${esc(it.name)}</span>
+          <span class="img-sub">${imgDims(it)} · ${imgSize(it.size)} · ${esc(it.ext)}</span>
+          <span class="img-sub">${imgTime(it.mtime)}</span>
+          ${refs.length
+            ? // ★ 只有 1 处引用时直接写出是谁（这最常见，也是用户真正想知道的）；
+              //   多处才退化成计数，名字塞进 title 里悬停看
+              `<span class="img-refs" title="正在用它：${esc(refTxt)}">${IC_LINK}${refs.length === 1 ? `${esc(refTxt)}在用` : `被 ${refs.length} 处使用`}</span>`
+            : ''}
+        </div>
+        <div class="img-acts">
+          ${pickMode
+            ? `<button class="primary sm" onclick="pickImage('${esc(it.name)}')">用这张</button>`
+            : `<button class="ghost sm" onclick="copyImageUrl('${esc(it.url)}')" title="复制 /images/… 链接，可直接填进角色卡的「形象链接」">${IC_LINK}<span class="lb">复制链接</span></button>
+               <button class="ghost sm ghost-del" onclick="delImage('${esc(it.name)}')" title="删除这张图">${IC_TRASH}<span class="lb">删除</span></button>`}
+        </div>
+      </div>`;
+  }).join('')}</div>`;
+}
+
+async function renderImagesPage() {
+  const main = $('#main');
+  const r = await api('/api/images').catch(() => ({ ok: false }));
+  if (!r || !r.ok) {
+    main.innerHTML = `<div class="card"><div class="empty-hint">图库加载失败：${esc((r && r.err) || '未知错误')}</div></div>`;
+    return;
+  }
+  _images = r.items || [];
+  const q = _imgQuery.trim().toLowerCase();
+  const shown = q ? _images.filter((x) => x.name.toLowerCase().includes(q)) : _images;
+  const used = _images.filter((x) => (x.refs || []).length).length;
+  main.innerHTML = `
+    <div class="page-head">
+      <h2><span class="ph-t">${IC_PALETTE}<span class="lb">图库</span></span></h2>
+      <span class="page-sub">角色形象、场景、素材都存这里 · 共 ${_images.length} 张${used ? `（${used} 张正在被使用）` : ''} · 单张上限 5MB</span>
+      <span class="spacer"></span>
+      <input id="img-search" class="img-search" type="text" placeholder="搜文件名…" value="${esc(_imgQuery)}" oninput="setImageQuery(this.value)">
+      <button class="primary sm" onclick="pickImageFile()">${IC_UPLOAD}<span class="lb">上传图片</span></button>
+      <button class="ghost sm" onclick="refreshImages()">${IC_REFRESH}<span class="lb">刷新</span></button>
+    </div>
+    <div class="card">
+      <div class="img-drop" id="img-drop">
+        ${imageGridHtml(shown, false)}
+      </div>
+    </div>
+    <input type="file" id="img-file" accept="image/png,image/jpeg,image/gif,image/webp,image/avif" multiple style="display:none" onchange="onImageFilePicked(this)">
+    <p class="empty-hint" style="margin:8px 2px 0">
+      图片存在项目目录下（<code>images/</code>），配置里只记链接。支持 png / jpg / gif / webp / avif，
+      可直接把文件拖进上面那块区域，或 Ctrl+V 粘贴剪贴板里的图。
+    </p>`;
+  bindImageDropzone(document.getElementById('img-drop'));
+}
+
+// 搜索：不整页重拉，只按名字过滤后重画网格（输入时手感更跟手）
+function setImageQuery(v) {
+  _imgQuery = String(v || '');
+  const q = _imgQuery.trim().toLowerCase();
+  const shown = q ? _images.filter((x) => x.name.toLowerCase().includes(q)) : _images;
+  const box = document.getElementById('img-drop');
+  if (box) { box.innerHTML = imageGridHtml(shown, false); bindImageDropzone(box); }
+}
+
+function pickImageFile() {
+  const el = document.getElementById('img-file');
+  if (el) el.click();
+}
+function onImageFilePicked(input) {
+  const files = Array.from(input.files || []);
+  input.value = '';   // 清空：否则连着选同一个文件不会触发 change
+  uploadImageFiles(files);
+}
+
+// 拖拽上传：只在图库页的网格区生效
+function bindImageDropzone(el) {
+  if (!el || el.dataset.dzBound === '1') return;
+  el.dataset.dzBound = '1';
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  el.addEventListener('dragover', (e) => { stop(e); el.classList.add('dz-on'); });
+  el.addEventListener('dragleave', (e) => { stop(e); el.classList.remove('dz-on'); });
+  el.addEventListener('drop', (e) => {
+    stop(e);
+    el.classList.remove('dz-on');
+    uploadImageFiles(Array.from((e.dataTransfer && e.dataTransfer.files) || []));
+  });
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result));
+    fr.onerror = () => reject(fr.error || new Error('读取文件失败'));
+    fr.readAsDataURL(file);
+  });
+}
+
+// 逐张上传（不做并发：一次批量粘贴十几张时，并发会把 8MB 请求体上限撞出随机的 413）
+async function uploadImageFiles(files) {
+  const list = Array.from(files || []).filter((f) => /^image\//.test(f.type || '') || /\.(png|jpe?g|gif|webp|avif)$/i.test(f.name || ''));
+  if (!list.length) return toast('没有可用的图片文件', 'err');
+  if (_imgUploading) return toast('还有图片正在上传，稍等一下', 'err');
+  _imgUploading = true;
+  let done = 0;
+  const failed = [];
+  for (const f of list) {
+    try {
+      const dataUrl = await readFileAsDataURL(f);
+      const b64 = String(dataUrl).split(',')[1] || '';
+      const r = await api('/api/images', 'POST', { name: f.name, data: b64 });
+      if (r && r.ok) done++;
+      else failed.push(`${f.name}：${(r && r.err) || '上传失败'}`);
+    } catch (e) { failed.push(`${f.name}：${e.message}`); }
+  }
+  _imgUploading = false;
+  if (done) toast(`已上传 ${done} 张`, 'ok');
+  if (failed.length) toast(failed.join('；'), 'err');
+  // 上传完要把新图显示出来：在图库页就重画本页，在选图弹窗里就重画弹窗
+  if (document.getElementById('image-picker')) await renderImagePickerGrid();
+  else if (view.type === 'images') await refreshImages();
+}
+
+async function copyImageUrl(url) {
+  // 复制的是**相对**链接（/images/xxx.png）：这正是角色卡「形象链接」要填的形式，
+  // 换机器、换端口都不用改。
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('链接已复制：' + url, 'ok');
+  } catch {
+    // 非安全上下文（http:// 非 localhost）拿不到剪贴板权限：退回旧办法
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let okDone = false;
+    try { okDone = document.execCommand('copy'); } catch { okDone = false; }
+    ta.remove();
+    toast(okDone ? '链接已复制：' + url : '复制失败，请手动记下：' + url, okDone ? 'ok' : 'err');
+  }
+}
+
+async function previewImage(name) {
+  const it = (_images || []).find((x) => x.name === name);
+  if (!it) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'image-preview';
+  overlay.innerHTML = `
+    <div class="modal-card image-preview-card">
+      <div class="modal-head">
+        <span>${IC_PALETTE}<span class="lb">${esc(it.name)}</span></span>
+        <span class="spacer"></span>
+        <button class="ghost sm" onclick="document.getElementById('image-preview').remove()">${IC_CLOSE}<span class="lb">关闭</span></button>
+      </div>
+      <div class="modal-body">
+        <div class="ip-stage"><img src="${esc(it.url)}" alt="${esc(it.name)}"></div>
+        <div class="ip-meta">${imgDims(it)} · ${imgSize(it.size)} · ${esc(it.ext)} · ${imgTime(it.mtime)}${(it.refs || []).length ? ` · 正在被 ${imgRefsText(it.refs)} 使用` : ''}</div>
+      </div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+// ★ 删除：被引用时先说清楚谁在用，让用户自己决定。
+//   不做「自动从角色卡摘掉」——那等于替用户改数据，形象会莫名消失。
+async function delImage(name) {
+  const r = await api(`/api/images/${encodeURIComponent(name)}`, 'DELETE').catch(() => null);
+  if (r && r.ok) { toast('已删除', 'ok'); return afterImageChange(); }
+  const refs = (r && r.refs) || [];
+  if (refs.length) {
+    const yes = await uiConfirm({
+      title: '这张图还在用',
+      message: `${imgRefsText(refs)} 正在用它。\n删除后这些地方会变成死链（图片显示不出来）。\n\n确定仍然删除吗？`,
+      okText: '仍然删除',
+      danger: true,
+    });
+    if (!yes) return;
+    const r2 = await api(`/api/images/${encodeURIComponent(name)}?force=1`, 'DELETE').catch(() => null);
+    if (r2 && r2.ok) { toast('已删除（相关引用现在是死链）', 'ok'); return afterImageChange(); }
+    return toast((r2 && r2.err) || '删除失败', 'err');
+  }
+  toast((r && r.err) || '删除失败', 'err');
+}
+
+function afterImageChange() {
+  if (view.type === 'images') return refreshImages();
+  if (document.getElementById('image-picker')) return renderImagePickerGrid();
+}
+
+// ---- 通用选图弹窗 ----
+// 做成「回调式」而不是写死给某个表单：角色卡的「从图库选」用它，
+// 以后剧情影集要选图也能直接用，不必再写第二套网格。
+let _imgPickCb = null;
+async function openImagePicker(cb) {
+  _imgPickCb = typeof cb === 'function' ? cb : null;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'image-picker';
+  overlay.innerHTML = `
+    <div class="modal-card image-picker-card">
+      <div class="modal-head">
+        <span>${IC_PALETTE}<span class="lb">从图库选一张</span></span>
+        <span class="spacer"></span>
+        <button class="primary sm" onclick="pickImageFile()">${IC_UPLOAD}<span class="lb">上传新图</span></button>
+        <button class="ghost sm" onclick="closeImagePicker()">${IC_CLOSE}<span class="lb">关闭</span></button>
+      </div>
+      <div class="modal-body"><div class="img-drop" id="img-pick-drop">加载中…</div></div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeImagePicker(); });
+  document.body.appendChild(overlay);
+  // ★ 选图弹窗里也要能上传（隐藏的 file input 挂到页面上，openImages 页那份不在DOM里时也能用）
+  let inp = document.getElementById('img-file');
+  if (!inp) {
+    inp = document.createElement('input');
+    inp.type = 'file';
+    inp.id = 'img-file';
+    inp.accept = 'image/png,image/jpeg,image/gif,image/webp,image/avif';
+    inp.multiple = true;
+    inp.style.display = 'none';
+    inp.addEventListener('change', () => onImageFilePicked(inp));
+    document.body.appendChild(inp);
+  }
+  await renderImagePickerGrid();
+}
+
+async function renderImagePickerGrid() {
+  const box = document.getElementById('img-pick-drop');
+  if (!box) return;
+  const r = await api('/api/images').catch(() => ({ ok: false }));
+  const items = (r && r.ok && r.items) || [];
+  _images = items;   // pickImage 按名字查 url 用的就是这份缓存，弹窗里也要同步
+  box.innerHTML = items.length
+    ? imageGridHtml(items, true)
+    : '<div class="empty-hint">图库还是空的 —— 点右上角「上传新图」，或把图片拖进来</div>';
+  bindImageDropzone(box);
+  box.dataset.dzBound = '1';
+}
+
+function pickImage(name) {
+  const it = (_images || []).find((x) => x.name === name) || null;
+  const url = it ? it.url : '/images/' + name;
+  const cb = _imgPickCb;
+  closeImagePicker();
+  if (cb) cb(url, it);
+}
+function closeImagePicker() {
+  _imgPickCb = null;
+  const el = document.getElementById('image-picker');
+  if (el) el.remove();
+}
+
 // ================= 工作区（管理员 AI 的草稿台） =================
 // 管理员 AI 产出的长文先落到这里，用户在面板审阅后决定注入给哪个角色 / 全局。
 // 同一份草稿可复用到多个目标 —— 这是它存在的意义（二创/复用）。
@@ -6415,6 +6950,20 @@ $('#btn-add-char').addEventListener('click', () => openCharacterEditModal());
 const _addPoolBtn = $('#btn-add-pool');
 if (_addPoolBtn) _addPoolBtn.addEventListener('click', () => poolCreate());
 
+// Ctrl+V 直接粘贴剪贴板里的图片：在图库页或选图弹窗打开时才接管，
+// 否则用户想在别处粘贴文字会被我们半路截走。
+document.addEventListener('paste', (e) => {
+  if (view.type !== 'images' && !document.getElementById('image-picker')) return;
+  const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+  const files = items
+    .filter((it) => it.kind === 'file' && /^image\//.test(it.type || ''))
+    .map((it) => it.getAsFile())
+    .filter(Boolean);
+  if (!files.length) return;
+  e.preventDefault();
+  uploadImageFiles(files);
+});
+
 // ---------- 内联 onclick 依赖的角色工作区函数 ----------
 // 顶层 function 声明在当前（非模块）脚本里本就在全局作用域，内联 onclick 可以直接调到；
 // 这里显式挂一次有两个作用：
@@ -6446,6 +6995,13 @@ Object.assign(window, {
   switchWorld, pickWorld,
   // 仅被模板字符串调用（eslint 认不出）→ 显式挂一次消除 no-unused-vars
   snippet, characterAvatarInner,
+  // 图床 / 图库（侧栏入口 + 网格里的内联 onclick）
+  openImages, refreshImages, setImageQuery, pickImageFile, onImageFilePicked,
+  delImage, copyImageUrl, previewImage, pickImage, closeImagePicker,
+  // 角色卡编辑里的「从图库选」（内联 onclick + oninput 引用）
+  pickCharAvatar, previewCharAvatar,
+  // 复制按钮（气泡右上角 / 输入框旁）与「停止」（发送按钮在流式期间变成它）
+  copyBubble, copyInput, abortRun,
   // 挂在 oncontextmenu 上：lint 的 no-unused-vars 只认 onclick 里的引用
   sideCtx,
 });

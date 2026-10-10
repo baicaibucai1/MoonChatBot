@@ -375,9 +375,10 @@ body::after {
 .foot-btn:hover { background: var(--accent-soft); border-color: var(--accent); color: color-mix(in srgb, var(--accent) 60%, #000); transform: translateY(-1px); box-shadow: var(--ctl-inset), 0 4px 10px -5px var(--accent-glow); }
 .foot-btn:active { transform: translateY(0) scale(.94); }
 
-/* 底部功能入口：设置 / 模型（一排两个） */
+/* 底部功能入口：设置 / 模型 / 图库 / 工作区（2×2 网格 —— 一行四个时每个只有 52px 宽，
+   「工作区」三个字挤得贴住图标。排布细节见 design.css 的 .side-btns） */
 .side-btns {
-  display: flex; gap: 8px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
   margin: auto 14px 8px;   /* auto 顶部：整组贴底，紧邻管理员入口 */
 }
 .settings-btn {
@@ -753,6 +754,25 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   border-top-left-radius: 12px;
   border-top-right-radius: 4px;  /* 右上收角，指向右侧头像 */
 }
+/* ─── 写手的输出不是聊天气泡，是正文（2026-10-10）────────────────────────────
+   这个面板是写作工具：写手在写稿，用户是在旁边下指令的人。
+   气泡的 max-width（70%）会把长文压在半栏里反复折行，灰底 + 圆角 + 头像列
+   又把正文衬成了附件。所以写手的输出去掉全部气泡形态，改通栏正文。
+   用户自己的输入**保留气泡**（右对齐 + 主题色）—— 去掉的是「正文被框住」，
+   不是「谁在说话」。权威样式在 design.css（后加载、覆盖此处），这里是同源备份，
+   免得将来调整样式表顺序时这条规则失效。 */
+.session.bot .bubble {
+  flex: 1 1 auto; max-width: none;
+  padding: 0; background: none; border: none; border-radius: 0;
+  padding-left: 10px; border-left: 2px solid transparent;  /* 左边 gutter（流式时才上色） */
+  padding-right: 30px;                                     /* 给右上角的复制按钮留位，否则正文被盖住 */
+}
+.session.bot .bubble:hover { border-color: transparent; border-left-color: transparent; box-shadow: none; }
+.session.bot .who { display: none; }           /* 头像列属于「对话」形态，一并去掉 */
+.session.bot .bubble.streaming { border-color: transparent; border-left-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
+.session.bot + .session { margin-top: 18px; }  /* 两条稿子之间要留段间距 */
+[data-theme="dark"] .session.bot .bubble { background: none; border-color: transparent; border-left-color: transparent; }
+[data-theme="dark"] .session.bot .bubble.streaming { border-left-color: color-mix(in srgb, var(--accent) 34%, var(--line)); }
 .session .time { font-family: var(--font); font-size: 10px; color: var(--text-faint); margin-top: 5px; }
 /* 气泡内小操作按钮（删除/分支）：默认隐藏，悬停本条时浮现，降低视觉噪音 */
 .session .time .s-ops { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: middle; opacity: 0; transition: opacity .16s; }
@@ -2196,40 +2216,52 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 }
 
 /* =========================================================
-   长文写作进度条（composer 上方）
+   长文写作进度条（对话页右栏）
    —— 只在长文多段写作时出现；写完淡出，不占位（height 0 → auto 的过渡用 max-height 做）
+   ★ 原本挂在输入框上方，现已搬进 132px 宽的右栏：左右 padding 必须去掉，
+     否则一条 14px 内缩就把本来就窄的栏子吃掉近四分之一。
    ========================================================= */
 .chat-progress {
   max-height: 0;
   opacity: 0;
   overflow: hidden;
-  padding: 0 14px;
+  padding: 0;
   transition: max-height .22s ease, opacity .22s ease, padding .22s ease;
 }
 
-/* 写手提议的「待确认写操作」常驻区（在输入框上方，不受会话列表 4s 轮询重绘影响） */
+/* 写手提议的「待确认写操作」常驻区（右栏；不受会话列表 4s 轮询重绘影响） */
 .pending-strip:empty { display: none; }
 .pending-strip {
-  padding: 8px 0 0;
+  padding: 0;
   display: flex; flex-direction: column; gap: 6px;
 }
 .pending-strip .ps-head {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11.5px; color: var(--on-surface-faint);
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: 10.5px; color: var(--on-surface-faint);
 }
-.pending-strip .ps-head .ic { width: 12px; height: 12px; }
-/* 挤在对话页里比在管理员面板里窄，让按钮换行不至于被挤出视野 */
-.pending-strip .admin-action { flex-wrap: wrap; }
+.pending-strip .ps-head .ic { width: 11px; height: 11px; flex-shrink: 0; position: relative; top: 2px; }
+/* 右栏只有 132px：让按钮换行、并给出内边距和圆角，否则确认条会贴着栏边糊成一团 */
+.pending-strip .admin-action { flex-wrap: wrap; padding: 9px 10px; border-radius: 10px; font-size: 11.5px; }
+.pending-strip .admin-action-label { font-size: 11.5px; }
+.pending-strip .admin-action-sub { font-size: 11px; }
+.pending-strip .admin-action .sm { font-size: 11px; padding: 4px 9px; }
 
-/* ---- 对话页右侧胶囊列（活跃世界 / 活跃角色）---- */
+/* ---- 对话页右侧胶囊列（活跃世界 / 活跃角色 / 写作进度 / 待确认 / 同步状态）---- */
 /* 与 chat-main 并排：正文占满剩余宽度，胶囊列固定窄栏。
-   窄屏（<1180px）直接收起 —— 它不是必须品，不能挤压正文。 */
+   ★ 窄屏（<1180px）不再整栏 display:none —— 那会把「待确认」和同步状态一起藏掉，
+     写手的提议就永远等不到用户点。改成折到正文下方、横向铺开（见下方 media query）。 */
 .chat-split { display: flex; gap: 10px; align-items: stretch; }
 .chat-split > .chat-main { flex: 1; min-width: 0; }
+/* ★ 宽度从 132px 提到 ~240px（2026-10-09）：132px 时「待确认」那张卡被压成 99×265 的竖条 ——
+   一行只塞得下 6~7 个字，「写手建议为「小星」沉淀一段经历，计数器 好感度 +5（3 → 8）…」
+   读起来是一列断字，用户根本没法判断要不要点「确认应用」。
+   它里面住的是**需要用户做决定**的内容（确认/忽略），不是装饰性状态点，
+   所以宽度要按「能读懂一句话」来定，而不是按「点缀一下」。
+   用 clamp 让它随窗口伸缩：窄屏收到 196px，宽屏最多 264px，中间按 17vw。 */
 .chat-caps {
-  flex: 0 0 132px; width: 132px;
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 10px 0 0;
+  flex: 0 0 clamp(196px, 17vw, 264px);
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 2px 0;
   overflow-y: auto;
   scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
 }
@@ -2274,7 +2306,19 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   font-size: 10.5px; line-height: 1.6;
   color: var(--on-surface-faint); padding: 2px 4px;
 }
-@media (max-width: 1180px) { .chat-caps { display: none; } }
+/* 窄屏：右栏不再并排（clamp 下沿 196px 仍会挤掉太多正文），而是折到正文下方横向铺开。
+   ★ 不能像以前那样 display:none —— 里面住着「待确认」和同步状态，藏掉等于让用户看不见写手的提议。
+   ★ 断点定在 1160：右栏最窄 196px，加上 280px 侧栏，1160 时正文还剩 ~660px —— 再窄正文就难受了。
+     在此之前（1280 / 1440 / 1920 这些常见宽度）右栏都稳稳待在正文右侧。 */
+@media (max-width: 1160px) {
+  .chat-split { flex-wrap: wrap; }
+  .chat-caps {
+    flex: 1 1 100%; width: auto;
+    flex-direction: row; flex-wrap: wrap; align-items: center;
+    padding: 8px 0 0;
+  }
+  .chat-caps > .chat-progress, .chat-caps > .pending-strip, .chat-caps > .sync-line { flex: 1 1 100%; }
+}
 
 /* 世界切换弹窗 */
 .world-pick-card { width: min(520px, 92vw); }
@@ -2301,12 +2345,14 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
      不能跟正文抢视线。 */
 .sync-line:empty { display: none; }
 .sync-line {
-  padding: 6px 0 0;
-  display: flex; flex-direction: column; gap: 2px;
+  padding: 0;
+  display: flex; flex-direction: column; gap: 3px;
 }
+/* ★ 用 flex-start 而不是 baseline：右栏窄，文字几乎必换行，
+     baseline 会把文件图标对到**最后一行**去，看起来像图标掉队了。 */
 .sync-line .sl-row {
-  display: flex; align-items: baseline; gap: 6px;
-  font-size: 11px; line-height: 1.6;
+  display: flex; align-items: flex-start; gap: 5px;
+  font-size: 10.5px; line-height: 1.6;
   color: var(--on-surface-faint);
 }
 .sync-line .sl-row .ic { width: 11px; height: 11px; flex-shrink: 0; position: relative; top: 1px; }
@@ -2317,16 +2363,16 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
 .chat-progress.on {
   max-height: 56px;
   opacity: 1;
-  padding: 10px 14px 2px;
+  padding: 2px 0 0;
 }
 .chat-progress .cp-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
 }
 .chat-progress .cp-text {
-  font-size: 12px;
+  font-size: 11px;
   /* 次级信息：用 on-surface-variant 而不是正文色，避免和气泡抢注意力 */
   color: var(--on-surface-variant);
   font-variant-numeric: tabular-nums;   /* 段数/字数跳动时宽度不抖 */
@@ -2702,3 +2748,69 @@ label.frm { display: block; font-size: 11px; color: var(--text-faint); margin-bo
   color: var(--on-surface-variant); background: var(--surface-2);
 }
 .side-avatar-ic .ic { width: 16px; height: 16px; }
+
+/* =========================================================
+   图床 / 图库（左侧「图库」页 + 角色卡里的选图弹窗）
+   —— 图片实体存在 images/ 目录，这里只负责「看得见、拿得到、删得掉」
+   ========================================================= */
+.img-search {
+  width: 168px; height: 30px; padding: 0 12px;
+  border: 1px solid var(--outline); border-radius: var(--r-full);
+  background: var(--surface); color: var(--on-surface);
+  font-family: var(--font-ui); font-size: 12px;
+}
+/* 拖拽落点：平时不显形，拖进来才亮边 —— 一直画虚线框会让整页显得没做完 */
+.img-drop { min-height: 120px; border-radius: var(--r-m); transition: background .15s var(--ease), outline-color .15s var(--ease); outline: 2px dashed transparent; outline-offset: 4px; }
+.img-drop.dz-on { outline-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+
+.img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.img-card {
+  border: 1px solid var(--outline); border-radius: var(--r-m);
+  background: var(--surface); overflow: hidden;
+  display: flex; flex-direction: column;
+}
+/* 正在被角色/写手使用的图：给一圈绿边，删它之前先看见「这张不是没主的」 */
+.img-card.in-use { border-color: color-mix(in srgb, var(--success) 45%, var(--outline)); }
+.img-thumb {
+  aspect-ratio: 1 / 1; background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; cursor: pointer;
+}
+.img-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.img-thumb:hover img { opacity: .88; }
+.img-meta { padding: 8px 10px 2px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.img-name {
+  font-size: 11.5px; color: var(--on-surface);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.img-sub { font-size: 10.5px; color: var(--on-surface-faint); }
+.img-refs {
+  display: inline-flex; align-items: center; gap: 4px; margin-top: 3px;
+  font-size: 10.5px; color: color-mix(in srgb, var(--success) 78%, var(--on-surface-faint));
+}
+.img-refs .ic { width: 11px; height: 11px; }
+.img-acts { display: flex; gap: 6px; padding: 6px 8px 8px; }
+.img-acts .sm { flex: 1; justify-content: center; }
+
+/* 角色卡编辑：形象链接那一行 = 输入框 + 缩略预览 + 「从图库选」 */
+.chr-avatar-row { display: flex; align-items: center; gap: 8px; }
+.chr-avatar-row input { flex: 1; min-width: 0; }
+.chr-avatar-pv {
+  flex: 0 0 34px; width: 34px; height: 34px;
+  border-radius: var(--r-s); overflow: hidden;
+  background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center;
+}
+.chr-avatar-pv img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* 放大预览 / 选图弹窗 */
+.image-preview-card { width: min(760px, 92vw); }
+.ip-stage {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--surface-2); border-radius: var(--r-s);
+  padding: 12px; overflow: auto;
+}
+.ip-stage img { max-width: 100%; max-height: 56vh; object-fit: contain; display: block; }
+.ip-meta { margin-top: 8px; font-size: 11px; color: var(--on-surface-faint); }
+.image-picker-card { width: min(900px, 94vw); }
+.image-picker-card .modal-body { max-height: 68vh; overflow-y: auto; }
