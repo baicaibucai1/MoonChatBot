@@ -2,7 +2,7 @@
   <img src="public/logo.svg" width="86" alt="MoonChatBot">
 </p>
 
-# MoonChatBot — QQ 机器人管理面板
+# MoonChatBot — QQ 机器人管理面板（别用，一堆小问题没修）
 
 > **[English](README.en.md) · 中文**
 
